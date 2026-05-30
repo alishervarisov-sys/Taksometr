@@ -1,0 +1,30 @@
+# Android
+android/.gradle/
+android/app/build/
+android/build/
+android/local.properties
+
+# Firebase
+firebase/node_modules/
+firebase/functions/node_modules/
+firebase/functions/lib/
+firebase/functions/.env
+
+# Admin panel
+admin-panel/node_modules/
+admin-panel/dist/
+admin-panel/build/
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets
+*.keystore
+serviceAccountKey.json
+auva-70253-firebase-adminsdk-fbsvc-ab3de45e52.json

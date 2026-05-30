@@ -1,0 +1,41 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Users collection - allow read for login verification
+    match /users/{userId} {
+      allow read: if true;
+      allow create: if false; // Only via Cloud Functions
+      allow update: if true; // Validated in Cloud Functions
+      allow delete: if false; // Only via Cloud Functions
+    }
+
+    // Deliveries collection
+    match /deliveries/{deliveryId} {
+      allow read: if true;
+      allow create: if true; // Created via Cloud Functions
+      allow update: if true; // Validated in Cloud Functions
+      allow delete: if false; // Never delete completed deliveries from client
+    }
+
+    // Tariffs collection
+    match /tariffs/{tariffId} {
+      allow read: if true;
+      allow write: if false; // Only via Cloud Functions (updateTariff)
+    }
+
+    // Settings collection
+    match /settings/{settingId} {
+      allow read: if true;
+      allow write: if false; // Only via admin Cloud Functions
+    }
+
+    // Notifications collection
+    match /notifications/{notificationId} {
+      allow read: if true;
+      allow create: if true;
+      allow update: if true;
+      allow delete: if false;
+    }
+  }
+}

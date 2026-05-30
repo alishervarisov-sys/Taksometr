@@ -1,0 +1,98 @@
+{
+  "project_info": {
+    "project_number": "286896671827",
+    "project_id": "auva-70253",
+    "storage_bucket": "auva-70253.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:286896671827:android:d9d2f600f9c08235dc0aa6",
+        "android_client_info": {
+          "package_name": "com.example.agent_ayva"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCPRo5_sfkPMOIDdAP1MWFCSLbCO7HqHA0"
+        },
+        {
+          "current_key": "AIzaSyAk3WuUNwz0PNu73HAFPW7knrzPmxrjXzo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:286896671827:android:fc3795313e51c324dc0aa6",
+        "android_client_info": {
+          "package_name": "com.example.jaloba"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCPRo5_sfkPMOIDdAP1MWFCSLbCO7HqHA0"
+        },
+        {
+          "current_key": "AIzaSyAk3WuUNwz0PNu73HAFPW7knrzPmxrjXzo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:286896671827:android:8ef70dcf8e82063cdc0aa6",
+        "android_client_info": {
+          "package_name": "com.zaki.taksometr"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCPRo5_sfkPMOIDdAP1MWFCSLbCO7HqHA0"
+        },
+        {
+          "current_key": "AIzaSyAk3WuUNwz0PNu73HAFPW7knrzPmxrjXzo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:286896671827:android:cabd1417d7b51718dc0aa6",
+        "android_client_info": {
+          "package_name": "com.zakiauto.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCPRo5_sfkPMOIDdAP1MWFCSLbCO7HqHA0"
+        },
+        {
+          "current_key": "AIzaSyAk3WuUNwz0PNu73HAFPW7knrzPmxrjXzo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

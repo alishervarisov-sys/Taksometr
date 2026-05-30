@@ -1,0 +1,11 @@
+{
+  "name": "zaki-firebase-init",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "init-db": "node init-firestore.js"
+  },
+  "dependencies": {
+    "firebase-admin": "^11.11.0"
+  }
+}
