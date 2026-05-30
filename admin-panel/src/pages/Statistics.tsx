@@ -4,9 +4,8 @@ import {
   TableCell, TableContainer, TableHead, TableRow, ToggleButton,
   ToggleButtonGroup, TextField, Button, Stack
 } from '@mui/material';
-import { httpsCallable } from 'firebase/functions';
-import { collection, query, where, getDocs, orderBy } from 'firebase/firestore';
-import { db, functions } from '../firebase';
+import { collection, query, where, getDocs } from 'firebase/firestore';
+import { db } from '../firebase';
 
 interface StatisticsProps {
   adminId: string;
@@ -26,7 +25,7 @@ interface StatsData {
 
 type Period = 'today' | 'yesterday' | 'week' | 'month' | 'year' | 'custom';
 
-const Statistics: React.FC<StatisticsProps> = ({ adminId }) => {
+const Statistics: React.FC<StatisticsProps> = ({ }) => {
   const [stats, setStats] = useState<StatsData | null>(null);
   const [loading, setLoading] = useState(true);
   const [period, setPeriod] = useState<Period>('today');

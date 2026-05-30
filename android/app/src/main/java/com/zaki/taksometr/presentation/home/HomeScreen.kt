@@ -44,6 +44,13 @@ fun HomeScreen(
         )
     )
 
+    // If user is blocked or deleted, force logout
+    LaunchedEffect(state.isBlocked) {
+        if (state.isBlocked) {
+            onLogout()
+        }
+    }
+
     // If there's an active delivery, navigate to it
     LaunchedEffect(state.activeDelivery) {
         if (state.activeDelivery != null) {

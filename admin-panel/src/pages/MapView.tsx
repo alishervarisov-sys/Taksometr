@@ -4,8 +4,8 @@ import {
   ListItemText, ListItemButton, IconButton, Tooltip, CircularProgress,
   Snackbar, Alert
 } from '@mui/material';
-import { MyLocation, Refresh } from '@mui/icons-material';
-import { collection, query, where, onSnapshot, doc, onSnapshot as onDocSnapshot } from 'firebase/firestore';
+import { MyLocation } from '@mui/icons-material';
+import { collection, query, where, onSnapshot } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { GoogleMap, useJsApiLoader, MarkerF, InfoWindowF } from '@react-google-maps/api';
 import { db, functions, GOOGLE_MAPS_API_KEY } from '../firebase';

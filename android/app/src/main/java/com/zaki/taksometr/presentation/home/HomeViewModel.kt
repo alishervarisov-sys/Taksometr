@@ -22,6 +22,7 @@ data class HomeState(
     val clientPhone: String = "",
     val isStartingDelivery: Boolean = false,
     val showStartDialog: Boolean = false,
+    val isBlocked: Boolean = false,
     val error: String? = null
 )
 
@@ -44,10 +45,22 @@ class HomeViewModel @Inject constructor(
         observeActiveDelivery()
     }
 
+    private var userLoaded = false
+
     private fun loadUserData() {
         viewModelScope.launch {
             authRepository.getCurrentUser().collect { user ->
-                _state.value = _state.value.copy(user = user)
+                if (user == null && userLoaded) {
+                    // User was deleted from Firestore — force logout
+                    _state.value = _state.value.copy(user = null, isBlocked = true)
+                } else if (user?.isBlocked == true) {
+                    // User was blocked — force logout
+                    _state.value = _state.value.copy(user = user, isBlocked = true)
+                    authRepository.logout()
+                } else {
+                    _state.value = _state.value.copy(user = user, isBlocked = false)
+                }
+                if (user != null) userLoaded = true
             }
         }
     }

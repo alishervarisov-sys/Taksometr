@@ -10,7 +10,8 @@
     ]
   },
   "hosting": {
-    "public": "admin-panel/build",
+    "site": "zakitaksometr",
+    "public": "hosting",
     "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
     "rewrites": [
       {

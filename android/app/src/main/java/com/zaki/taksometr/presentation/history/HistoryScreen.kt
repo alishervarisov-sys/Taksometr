@@ -1,9 +1,11 @@
 package com.zaki.taksometr.presentation.history
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -21,6 +23,15 @@ import com.zaki.taksometr.util.LocationUtils
 import java.text.SimpleDateFormat
 import java.util.*
 
+enum class DateFilter(val label: String) {
+    ALL("Все"),
+    TODAY("Сегодня"),
+    YESTERDAY("Вчера"),
+    WEEK("Неделя"),
+    MONTH("Месяц"),
+    YEAR("Год")
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HistoryScreen(
@@ -29,6 +40,7 @@ fun HistoryScreen(
     viewModel: HistoryViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsState()
+    var selectedFilter by remember { mutableStateOf(DateFilter.ALL) }
 
     Scaffold(
         topBar = {
@@ -55,17 +67,23 @@ fun HistoryScreen(
             // Search bar
             OutlinedTextField(
                 value = state.searchQuery,
-                onValueChange = viewModel::onSearchQueryChange,
+                onValueChange = {
+                    selectedFilter = DateFilter.ALL
+                    viewModel.onSearchQueryChange(it)
+                },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(16.dp),
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
                 placeholder = { Text("Поиск по номеру телефона") },
                 leadingIcon = {
                     Icon(Icons.Default.Search, contentDescription = null)
                 },
                 trailingIcon = {
                     if (state.searchQuery.isNotEmpty()) {
-                        IconButton(onClick = { viewModel.clearFilters() }) {
+                        IconButton(onClick = {
+                            selectedFilter = DateFilter.ALL
+                            viewModel.clearFilters()
+                        }) {
                             Icon(Icons.Default.Clear, contentDescription = "Очистить")
                         }
                     }
@@ -73,6 +91,29 @@ fun HistoryScreen(
                 singleLine = true,
                 shape = RoundedCornerShape(12.dp)
             )
+
+            // Date filter chips
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                DateFilter.values().forEach { filter ->
+                    FilterChip(
+                        selected = selectedFilter == filter,
+                        onClick = {
+                            selectedFilter = filter
+                            applyDateFilter(filter, viewModel)
+                        },
+                        label = { Text(filter.label) },
+                        shape = RoundedCornerShape(20.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
 
             // Delivery list
             if (state.isLoading) {
@@ -116,6 +157,45 @@ fun HistoryScreen(
                     }
                 }
             }
+        }
+    }
+}
+
+private fun applyDateFilter(filter: DateFilter, viewModel: HistoryViewModel) {
+    when (filter) {
+        DateFilter.ALL -> viewModel.clearFilters()
+        else -> {
+            val calendar = Calendar.getInstance()
+            val endDate = calendar.timeInMillis
+
+            // Set start of day
+            calendar.set(Calendar.HOUR_OF_DAY, 0)
+            calendar.set(Calendar.MINUTE, 0)
+            calendar.set(Calendar.SECOND, 0)
+            calendar.set(Calendar.MILLISECOND, 0)
+
+            val startDate = when (filter) {
+                DateFilter.TODAY -> calendar.timeInMillis
+                DateFilter.YESTERDAY -> {
+                    calendar.add(Calendar.DAY_OF_YEAR, -1)
+                    calendar.timeInMillis
+                }
+                DateFilter.WEEK -> {
+                    calendar.add(Calendar.DAY_OF_YEAR, -7)
+                    calendar.timeInMillis
+                }
+                DateFilter.MONTH -> {
+                    calendar.add(Calendar.MONTH, -1)
+                    calendar.timeInMillis
+                }
+                DateFilter.YEAR -> {
+                    calendar.add(Calendar.YEAR, -1)
+                    calendar.timeInMillis
+                }
+                else -> calendar.timeInMillis
+            }
+
+            viewModel.filterByDateRange(startDate, endDate)
         }
     }
 }

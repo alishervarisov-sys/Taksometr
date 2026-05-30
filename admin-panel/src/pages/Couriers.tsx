@@ -4,7 +4,7 @@ import {
   TableHead, TableRow, Button, Dialog, DialogTitle, DialogContent,
   DialogActions, TextField, IconButton, Chip, Alert
 } from '@mui/material';
-import { Add, Edit, Block, Delete, History } from '@mui/icons-material';
+import { Add, Block, Delete, History } from '@mui/icons-material';
 import { collection, getDocs, doc, updateDoc, deleteDoc, query, where, orderBy } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../firebase';
