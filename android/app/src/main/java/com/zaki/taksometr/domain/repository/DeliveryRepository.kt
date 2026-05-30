@@ -7,7 +7,7 @@ import kotlinx.coroutines.flow.Flow
 
 interface DeliveryRepository {
     suspend fun createDelivery(clientPhone: String): Resource<Delivery>
-    suspend fun completeDelivery(deliveryId: String): Resource<Delivery>
+    suspend fun completeDelivery(deliveryId: String, waitingMinutes: Double = 0.0): Resource<Delivery>
     suspend fun cancelDelivery(deliveryId: String): Resource<Unit>
     fun getActiveDelivery(): Flow<Delivery?>
     fun getDeliveryHistory(courierId: String): Flow<List<Delivery>>

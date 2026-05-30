@@ -13,7 +13,8 @@ import {
   BarChart as StatsIcon,
   Menu as MenuIcon,
   Logout as LogoutIcon,
-  AccountBalanceWallet as WalletIcon
+  AccountBalanceWallet as WalletIcon,
+  VpnKey as KeyIcon
 } from '@mui/icons-material';
 
 const drawerWidth = 260;
@@ -28,6 +29,7 @@ const menuItems = [
   { text: 'Доставки', icon: <DeliveryIcon />, path: '/deliveries' },
   { text: 'Тарифы', icon: <TariffIcon />, path: '/tariffs' },
   { text: 'Комиссия', icon: <WalletIcon />, path: '/commission' },
+  { text: 'Логины', icon: <KeyIcon />, path: '/credentials' },
   { text: 'Карта', icon: <MapIcon />, path: '/map' },
   { text: 'Статистика', icon: <StatsIcon />, path: '/statistics' },
 ];

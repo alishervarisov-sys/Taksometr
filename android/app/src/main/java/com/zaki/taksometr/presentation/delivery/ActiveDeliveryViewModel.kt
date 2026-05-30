@@ -25,6 +25,8 @@ data class ActiveDeliveryState(
     val distanceMeters: Double = 0.0,
     val elapsedTime: Long = 0L,
     val currentCost: Double = 0.0,
+    val isWaiting: Boolean = false,
+    val totalWaitingMs: Long = 0L,
     val isCompleting: Boolean = false,
     val error: String? = null
 )
@@ -43,6 +45,10 @@ class ActiveDeliveryViewModel @Inject constructor(
 
     private val deliveryId: String
         get() = prefs.getString(Constants.PREF_ACTIVE_DELIVERY_ID, "") ?: ""
+
+    // Waiting time tracking
+    private var waitingStartTime: Long = 0L
+    private var accumulatedWaitingMs: Long = 0L
 
     init {
         observeDelivery()
@@ -84,10 +90,37 @@ class ActiveDeliveryViewModel @Inject constructor(
                 val delivery = _state.value.delivery
                 if (delivery != null) {
                     val elapsed = System.currentTimeMillis() - delivery.startTime
-                    _state.value = _state.value.copy(elapsedTime = elapsed)
+                    // Update waiting time if currently waiting
+                    val totalWaiting = if (_state.value.isWaiting && waitingStartTime > 0) {
+                        accumulatedWaitingMs + (System.currentTimeMillis() - waitingStartTime)
+                    } else {
+                        accumulatedWaitingMs
+                    }
+                    _state.value = _state.value.copy(
+                        elapsedTime = elapsed,
+                        totalWaitingMs = totalWaiting
+                    )
                 }
                 delay(1000)
             }
+        }
+    }
+
+    fun toggleWaiting() {
+        if (_state.value.isWaiting) {
+            // Stop waiting
+            if (waitingStartTime > 0) {
+                accumulatedWaitingMs += System.currentTimeMillis() - waitingStartTime
+            }
+            waitingStartTime = 0L
+            _state.value = _state.value.copy(
+                isWaiting = false,
+                totalWaitingMs = accumulatedWaitingMs
+            )
+        } else {
+            // Start waiting
+            waitingStartTime = System.currentTimeMillis()
+            _state.value = _state.value.copy(isWaiting = true)
         }
     }
 
@@ -95,10 +128,17 @@ class ActiveDeliveryViewModel @Inject constructor(
         val currentDeliveryId = deliveryId
         if (currentDeliveryId.isEmpty()) return
 
+        // If still waiting, stop it
+        if (_state.value.isWaiting) {
+            toggleWaiting()
+        }
+
+        val waitingMinutes = (accumulatedWaitingMs / 60000.0)
+
         viewModelScope.launch {
             _state.value = _state.value.copy(isCompleting = true, error = null)
 
-            when (val result = deliveryRepository.completeDelivery(currentDeliveryId)) {
+            when (val result = deliveryRepository.completeDelivery(currentDeliveryId, waitingMinutes)) {
                 is Resource.Success -> {
                     _state.value = _state.value.copy(isCompleting = false)
                     onComplete(currentDeliveryId)

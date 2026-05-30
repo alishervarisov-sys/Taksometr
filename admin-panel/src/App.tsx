@@ -9,6 +9,7 @@ import Deliveries from './pages/Deliveries';
 import MapView from './pages/MapView';
 import Statistics from './pages/Statistics';
 import Commission from './pages/Commission';
+import Credentials from './pages/Credentials';
 import Login from './pages/Login';
 
 const theme = createTheme({
@@ -95,6 +96,7 @@ function App() {
               <Route path="map" element={<MapView adminId={adminId!} />} />
               <Route path="statistics" element={<Statistics adminId={adminId!} />} />
               <Route path="commission" element={<Commission adminId={adminId!} />} />
+              <Route path="credentials" element={<Credentials adminId={adminId!} />} />
               <Route path="*" element={<Navigate to="/" />} />
             </Route>
           )}

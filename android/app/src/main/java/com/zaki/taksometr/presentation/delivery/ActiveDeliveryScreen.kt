@@ -173,6 +173,55 @@ fun ActiveDeliveryScreen(
                         )
                     }
 
+                    // Waiting time display
+                    if (state.totalWaitingMs > 0 || state.isWaiting) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.HourglassBottom,
+                                contentDescription = null,
+                                tint = if (state.isWaiting) AccentRed else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "Ожидание: ${LocationUtils.formatDuration(state.totalWaitingMs)}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (state.isWaiting) AccentRed else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Waiting button
+                    Button(
+                        onClick = { viewModel.toggleWaiting() },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (state.isWaiting)
+                                AccentRed
+                            else
+                                MaterialTheme.colorScheme.secondary
+                        )
+                    ) {
+                        Icon(
+                            if (state.isWaiting) Icons.Default.StopCircle else Icons.Default.HourglassBottom,
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = if (state.isWaiting) "Остановить ожидание" else "Ожидание",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+
                     Spacer(modifier = Modifier.height(16.dp))
 
                     // Action buttons

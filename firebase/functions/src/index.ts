@@ -233,7 +233,7 @@ export const createDelivery = functions.https.onCall(async (data, context) => {
 
 // ============ COMPLETE DELIVERY ============
 export const completeDelivery = functions.https.onCall(async (data, context) => {
-  const {deliveryId, courierId, route, endTime} = data;
+  const {deliveryId, courierId, route, endTime, waitingMinutes} = data;
 
   if (!deliveryId || !courierId) {
     throw new functions.https.HttpsError(
@@ -286,6 +286,22 @@ export const completeDelivery = functions.https.onCall(async (data, context) => 
   // Calculate cost: base covers baseDistanceKm, then costPerKm beyond
   const roundedCost = computeCost(distanceMeters, baseCost, baseDistanceKm, costPerKm);
 
+  // Calculate waiting cost
+  const freeWaitingMinutes = tariffDoc.exists
+    ? (tariffDoc.data()!.freeWaitingMinutes ?? 5)
+    : 5;
+  const costPerWaitingMinute = tariffDoc.exists
+    ? (tariffDoc.data()!.costPerWaitingMinute ?? 500)
+    : 500;
+
+  const actualWaitingMinutes = waitingMinutes || 0;
+  let waitingCost = 0;
+  if (actualWaitingMinutes > freeWaitingMinutes) {
+    waitingCost = Math.ceil((actualWaitingMinutes - freeWaitingMinutes) * costPerWaitingMinute);
+  }
+
+  const totalCost = roundedCost + waitingCost;
+
   // ---- Commission logic ----
   // Per-courier commission takes priority over global setting
   const courierRef = db.collection("users").doc(courierId);
@@ -302,7 +318,7 @@ export const completeDelivery = functions.https.onCall(async (data, context) => 
       ? (settingsDoc.data()!.percent || 0)
       : 0;
   }
-  const commissionAmount = Math.ceil(roundedCost * commissionPercent / 100);
+  const commissionAmount = Math.ceil(totalCost * commissionPercent / 100);
 
   // Deduct commission from courier balance
   const currentBalance = courierData2.balance || 0;
@@ -329,17 +345,27 @@ export const completeDelivery = functions.https.onCall(async (data, context) => 
     status: "COMPLETED",
     endTime: endTime || Date.now(),
     distanceMeters: distanceMeters,
-    cost: roundedCost,
+    cost: totalCost,
+    waitingMinutes: actualWaitingMinutes,
+    waitingCost: waitingCost,
     commission: commissionAmount,
     route: routePoints,
   });
 
   // ---- Notify client by SMS about the final delivery total (Tajik) ----
   const distanceKmText = (distanceMeters / 1000).toFixed(1);
-  const completeSmsText =
+  let completeSmsText =
     `Фармоиши ZaKi анҷом ёфт. ` +
-    `Масофа: ${distanceKmText} км. ` +
-    `Маблағи умумӣ: ${formatCostForSms(roundedCost)} сомонӣ. ` +
+    `Масофа: ${distanceKmText} км. `;
+
+  if (waitingCost > 0) {
+    const waitingMinsRounded = Math.ceil(actualWaitingMinutes);
+    completeSmsText +=
+      `Интизорӣ: ${waitingMinsRounded} дақ. (${formatCostForSms(waitingCost)} сомонӣ). `;
+  }
+
+  completeSmsText +=
+    `Маблағи умумӣ: ${formatCostForSms(totalCost)} сомонӣ. ` +
     `Барои хариди хӯрок, дору ва дигар молҳо барномаи ZaKi-ро боргирӣ кунед: https://clck.ru/3TuGb6 ` +
     `Ташаккур!`;
 
@@ -352,7 +378,9 @@ export const completeDelivery = functions.https.onCall(async (data, context) => 
     startTime: deliveryData.startTime,
     endTime: endTime || Date.now(),
     distanceMeters: distanceMeters,
-    cost: roundedCost,
+    cost: totalCost,
+    waitingMinutes: actualWaitingMinutes,
+    waitingCost: waitingCost,
     commission: commissionAmount,
   };
 });
@@ -787,4 +815,56 @@ export const updateCourierCommission = functions.https.onCall(async (data, conte
   });
 
   return {success: true, courierId, percent};
+});
+
+
+// ============ ADMIN: UPDATE COURIER CREDENTIALS ============
+export const updateCourierCredentials = functions.https.onCall(async (data, context) => {
+  const {adminId, courierId, login, password} = data;
+
+  const adminDoc = await db.collection("users").doc(adminId).get();
+  if (!adminDoc.exists || adminDoc.data()?.role !== "ADMIN") {
+    throw new functions.https.HttpsError("permission-denied", "Only admins");
+  }
+
+  if (!courierId) {
+    throw new functions.https.HttpsError("invalid-argument", "courierId required");
+  }
+
+  const courierRef = db.collection("users").doc(courierId);
+  const courierDoc = await courierRef.get();
+  if (!courierDoc.exists) {
+    throw new functions.https.HttpsError("not-found", "Courier not found");
+  }
+
+  const updates: {[key: string]: string} = {};
+
+  // Update login if provided
+  if (login && login !== courierDoc.data()!.login) {
+    // Check if new login already exists
+    const existing = await db.collection("users")
+      .where("login", "==", login)
+      .get();
+    if (!existing.empty) {
+      throw new functions.https.HttpsError("already-exists", "Логин уже занят");
+    }
+    updates.login = login;
+  }
+
+  // Update password if provided
+  if (password) {
+    const crypto = require("crypto");
+    updates.passwordHash = crypto
+      .createHash("sha256")
+      .update(password)
+      .digest("hex");
+  }
+
+  if (Object.keys(updates).length === 0) {
+    throw new functions.https.HttpsError("invalid-argument", "Нечего обновлять");
+  }
+
+  await courierRef.update(updates);
+
+  return {success: true};
 });

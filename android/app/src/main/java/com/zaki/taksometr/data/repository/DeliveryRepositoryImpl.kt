@@ -76,7 +76,7 @@ class DeliveryRepositoryImpl @Inject constructor(
         }
     }
 
-    override suspend fun completeDelivery(deliveryId: String): Resource<Delivery> {
+    override suspend fun completeDelivery(deliveryId: String, waitingMinutes: Double): Resource<Delivery> {
         return try {
             // Get route points from local DB
             val points = routePointDao.getPointsByDeliveryIdSync(deliveryId)
@@ -94,7 +94,8 @@ class DeliveryRepositoryImpl @Inject constructor(
                 "deliveryId" to deliveryId,
                 "courierId" to userId,
                 "route" to routeData,
-                "endTime" to System.currentTimeMillis()
+                "endTime" to System.currentTimeMillis(),
+                "waitingMinutes" to waitingMinutes
             )
 
             val result = functions
