@@ -18,6 +18,7 @@ interface Courier {
   name: string;
   login: string;
   phone: string;
+  passwordPlain: string;
   isBlocked: boolean;
 }
 
@@ -44,6 +45,7 @@ const Credentials: React.FC<CredentialsProps> = ({ adminId }) => {
       name: d.data().name || '',
       login: d.data().login || '',
       phone: d.data().phone || '',
+      passwordPlain: d.data().passwordPlain || '',
       isBlocked: d.data().isBlocked || false,
     }));
     setCouriers(data);
@@ -113,8 +115,8 @@ const Credentials: React.FC<CredentialsProps> = ({ adminId }) => {
                     <Chip label={courier.login} variant="outlined" size="small" />
                   </TableCell>
                   <TableCell>
-                    <Typography variant="body2" color="text.secondary">
-                      ••••••••
+                    <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
+                      {courier.passwordPlain || '••••••••'}
                     </Typography>
                   </TableCell>
                   <TableCell>{courier.phone}</TableCell>

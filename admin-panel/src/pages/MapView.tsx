@@ -20,6 +20,7 @@ interface CourierLocation {
     longitude: number;
     timestamp: number;
   };
+  hasActiveDelivery?: boolean;
 }
 
 interface MapViewProps {
@@ -50,7 +51,7 @@ const MapView: React.FC<MapViewProps> = ({ adminId }) => {
   });
 
   useEffect(() => {
-    // Load ALL couriers (not just online) so admin can request location from anyone
+    // Load ALL couriers
     const q = query(
       collection(db, 'users'),
       where('role', '==', 'COURIER')
@@ -64,7 +65,20 @@ const MapView: React.FC<MapViewProps> = ({ adminId }) => {
       setCouriers(data);
     });
 
-    return () => unsubscribe();
+    // Listen for active deliveries to mark couriers as "busy"
+    const deliveryQ = query(
+      collection(db, 'deliveries'),
+      where('status', '==', 'IN_PROGRESS')
+    );
+    const unsubDeliveries = onSnapshot(deliveryQ, (snapshot) => {
+      const busyCourierIds = new Set(snapshot.docs.map(d => d.data().courierId));
+      setCouriers(prev => prev.map(c => ({
+        ...c,
+        hasActiveDelivery: busyCourierIds.has(c.id)
+      })));
+    });
+
+    return () => { unsubscribe(); unsubDeliveries(); };
   }, []);
 
   const handleRequestLocation = async (courierId: string) => {
@@ -167,7 +181,7 @@ const MapView: React.FC<MapViewProps> = ({ adminId }) => {
               icon={{
                 url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(
                   `<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40">
-                    <circle cx="20" cy="20" r="12" fill="${courier.isOnline ? '#1B5E20' : '#757575'}" stroke="white" stroke-width="3"/>
+                    <circle cx="20" cy="20" r="12" fill="${courier.hasActiveDelivery ? '#D32F2F' : courier.isOnline ? '#1B5E20' : '#757575'}" stroke="white" stroke-width="3"/>
                     <circle cx="20" cy="20" r="4" fill="white"/>
                   </svg>`
                 ),
@@ -250,8 +264,8 @@ const MapView: React.FC<MapViewProps> = ({ adminId }) => {
                       }
                     />
                     <Chip
-                      label={courier.isOnline ? 'Онлайн' : 'Оффлайн'}
-                      color={courier.isOnline ? 'success' : 'default'}
+                      label={courier.hasActiveDelivery ? 'Занят' : courier.isOnline ? 'Онлайн' : 'Оффлайн'}
+                      color={courier.hasActiveDelivery ? 'error' : courier.isOnline ? 'success' : 'default'}
                       size="small"
                       sx={{ mr: 1 }}
                     />

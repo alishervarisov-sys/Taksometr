@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import {
   Box, Typography, Card, CardContent, Grid, Table, TableBody,
   TableCell, TableContainer, TableHead, TableRow, ToggleButton,
-  ToggleButtonGroup, TextField, Button, Stack
+  ToggleButtonGroup, TextField, Button, Stack, Chip
 } from '@mui/material';
 import { collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -11,21 +11,25 @@ interface StatisticsProps {
   adminId: string;
 }
 
+interface CourierStat {
+  id: string;
+  name: string;
+  count: number;
+  revenue: number;
+  commission: number;
+}
+
 interface StatsData {
   totalDeliveries: number;
   totalRevenue: number;
+  totalCommission: number;
   totalDistance: number;
-  topCouriers: Array<{
-    id: string;
-    name: string;
-    count: number;
-    revenue: number;
-  }>;
+  topCouriers: CourierStat[];
 }
 
 type Period = 'today' | 'yesterday' | 'week' | 'month' | 'year' | 'custom';
 
-const Statistics: React.FC<StatisticsProps> = ({ }) => {
+const Statistics: React.FC<StatisticsProps> = () => {
   const [stats, setStats] = useState<StatsData | null>(null);
   const [loading, setLoading] = useState(true);
   const [period, setPeriod] = useState<Period>('today');
@@ -44,14 +48,16 @@ const Statistics: React.FC<StatisticsProps> = ({ }) => {
     let startDate: number;
 
     switch (period) {
-      case 'today':
+      case 'today': {
         const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
         startDate = today.getTime();
         break;
-      case 'yesterday':
+      }
+      case 'yesterday': {
         const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
         startDate = yesterday.getTime();
         break;
+      }
       case 'week':
         startDate = endDate - 7 * 24 * 60 * 60 * 1000;
         break;
@@ -75,7 +81,6 @@ const Statistics: React.FC<StatisticsProps> = ({ }) => {
     try {
       const { startDate, endDate } = getDateRange();
 
-      // Query deliveries directly from Firestore for reliability
       const q = query(
         collection(db, 'deliveries'),
         where('status', '==', 'COMPLETED'),
@@ -85,29 +90,34 @@ const Statistics: React.FC<StatisticsProps> = ({ }) => {
 
       const snapshot = await getDocs(q);
       let totalRevenue = 0;
+      let totalCommission = 0;
       let totalDistance = 0;
-      const courierStats: { [key: string]: { count: number; revenue: number; name: string } } = {};
+      const courierStats: { [key: string]: CourierStat } = {};
 
       snapshot.forEach((doc) => {
         const data = doc.data();
-        totalRevenue += data.cost || 0;
+        const cost = data.cost || 0;
+        const commission = data.commission || 0;
+        totalRevenue += cost;
+        totalCommission += commission;
         totalDistance += data.distanceMeters || 0;
+
         const cId = data.courierId || 'unknown';
         if (!courierStats[cId]) {
-          courierStats[cId] = { count: 0, revenue: 0, name: data.courierName || 'Неизвестный' };
+          courierStats[cId] = { id: cId, count: 0, revenue: 0, commission: 0, name: data.courierName || 'Неизвестный' };
         }
         courierStats[cId].count++;
-        courierStats[cId].revenue += data.cost || 0;
+        courierStats[cId].revenue += cost;
+        courierStats[cId].commission += commission;
       });
 
-      const topCouriers = Object.entries(courierStats)
-        .map(([id, s]) => ({ id, ...s }))
-        .sort((a, b) => b.revenue - a.revenue)
-        .slice(0, 10);
+      const topCouriers = Object.values(courierStats)
+        .sort((a, b) => b.commission - a.commission);
 
       setStats({
         totalDeliveries: snapshot.size,
         totalRevenue,
+        totalCommission,
         totalDistance,
         topCouriers,
       });
@@ -131,6 +141,15 @@ const Statistics: React.FC<StatisticsProps> = ({ }) => {
     month: 'Месяц',
     year: 'Год',
     custom: 'Период',
+  };
+
+  const netRevenue = (stats?.totalRevenue || 0) - (stats?.totalCommission || 0);
+
+  const formatCost = (cost: number) => {
+    const somoni = Math.floor(cost);
+    const diram = Math.round((cost - somoni) * 100);
+    if (diram > 0) return `${somoni.toLocaleString()}.${String(diram).padStart(2, '0')} сомони`;
+    return `${somoni.toLocaleString()} сомони`;
   };
 
   return (
@@ -179,7 +198,7 @@ const Statistics: React.FC<StatisticsProps> = ({ }) => {
       </Box>
 
       <Grid container spacing={3} sx={{ mb: 3 }}>
-        <Grid item xs={12} sm={4}>
+        <Grid item xs={12} sm={3}>
           <Card>
             <CardContent sx={{ textAlign: 'center', p: 3 }}>
               <Typography variant="body2" color="text.secondary">Доставки</Typography>
@@ -189,20 +208,33 @@ const Statistics: React.FC<StatisticsProps> = ({ }) => {
             </CardContent>
           </Card>
         </Grid>
-        <Grid item xs={12} sm={4}>
+        <Grid item xs={12} sm={3}>
           <Card>
             <CardContent sx={{ textAlign: 'center', p: 3 }}>
-              <Typography variant="body2" color="text.secondary">Общая выручка</Typography>
+              <Typography variant="body2" color="text.secondary">Чистая выручка</Typography>
               <Typography variant="h4" sx={{ fontWeight: 700, color: '#00C853' }}>
-                {loading ? '...' : `${(stats?.totalRevenue || 0).toLocaleString()} сомони`}
+                {loading ? '...' : `formatCost(netRevenue)`}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                (без комиссии)
               </Typography>
             </CardContent>
           </Card>
         </Grid>
-        <Grid item xs={12} sm={4}>
+        <Grid item xs={12} sm={3}>
           <Card>
             <CardContent sx={{ textAlign: 'center', p: 3 }}>
-              <Typography variant="body2" color="text.secondary">Общее расстояние</Typography>
+              <Typography variant="body2" color="text.secondary">Комиссия</Typography>
+              <Typography variant="h4" sx={{ fontWeight: 700, color: '#FF6D00' }}>
+                {loading ? '...' : `formatCost(stats?.totalCommission || 0)`}
+              </Typography>
+            </CardContent>
+          </Card>
+        </Grid>
+        <Grid item xs={12} sm={3}>
+          <Card>
+            <CardContent sx={{ textAlign: 'center', p: 3 }}>
+              <Typography variant="body2" color="text.secondary">Расстояние</Typography>
               <Typography variant="h4" sx={{ fontWeight: 700, color: '#2196F3' }}>
                 {loading ? '...' : `${((stats?.totalDistance || 0) / 1000).toFixed(1)} км`}
               </Typography>
@@ -211,10 +243,10 @@ const Statistics: React.FC<StatisticsProps> = ({ }) => {
         </Grid>
       </Grid>
 
-      {/* Top couriers */}
+      {/* Couriers table with commission */}
       <Card>
         <CardContent>
-          <Typography variant="h6" sx={{ mb: 2 }}>Топ курьеры</Typography>
+          <Typography variant="h6" sx={{ mb: 2 }}>Курьеры за период</Typography>
           <TableContainer>
             <Table>
               <TableHead>
@@ -222,21 +254,33 @@ const Statistics: React.FC<StatisticsProps> = ({ }) => {
                   <TableCell>#</TableCell>
                   <TableCell>Курьер</TableCell>
                   <TableCell>Доставки</TableCell>
-                  <TableCell>Выручка</TableCell>
+                  <TableCell>Оборот</TableCell>
+                  <TableCell>Комиссия</TableCell>
+                  <TableCell>Чистая выручка</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
                 {stats?.topCouriers?.map((courier, index) => (
                   <TableRow key={courier.id}>
                     <TableCell>{index + 1}</TableCell>
-                    <TableCell>{courier.name}</TableCell>
+                    <TableCell sx={{ fontWeight: 600 }}>{courier.name}</TableCell>
                     <TableCell>{courier.count}</TableCell>
-                    <TableCell>{courier.revenue.toLocaleString()} сомони</TableCell>
+                    <TableCell>{formatCost(courier.revenue)}</TableCell>
+                    <TableCell>
+                      <Chip
+                        label={`${formatCost(courier.commission)}`}
+                        color="warning"
+                        size="small"
+                      />
+                    </TableCell>
+                    <TableCell sx={{ fontWeight: 600, color: '#00C853' }}>
+                      {formatCost(courier.revenue - courier.commission)}
+                    </TableCell>
                   </TableRow>
                 ))}
                 {(!stats?.topCouriers || stats.topCouriers.length === 0) && (
                   <TableRow>
-                    <TableCell colSpan={4} align="center">
+                    <TableCell colSpan={6} align="center">
                       Нет данных
                     </TableCell>
                   </TableRow>

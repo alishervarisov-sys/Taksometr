@@ -101,9 +101,15 @@ object LocationUtils {
     }
 
     /**
-     * Format cost for display
+     * Format cost for display (with dirams)
      */
     fun formatCost(cost: Double): String {
-        return String.format("%,.0f сомони", cost)
+        val somoni = cost.toLong()
+        val diram = ((cost - somoni) * 100).toInt()
+        return if (diram > 0) {
+            String.format("%,d.%02d сомони", somoni, diram)
+        } else {
+            String.format("%,d сомони", somoni)
+        }
     }
 }

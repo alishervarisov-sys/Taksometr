@@ -97,9 +97,14 @@ async function sendSms(telephoneRaw: string, text: string): Promise<void> {
 }
 
 /**
- * Format a cost value (somoni) for SMS text without trailing decimals.
+ * Format a cost value (somoni) for SMS text with dirams if present.
  */
 function formatCostForSms(cost: number): string {
+  const somoni = Math.floor(cost);
+  const diram = Math.round((cost - somoni) * 100);
+  if (diram > 0) {
+    return `${new Intl.NumberFormat("ru-RU").format(somoni)}.${String(diram).padStart(2, "0")}`;
+  }
   return new Intl.NumberFormat("ru-RU", {maximumFractionDigits: 0}).format(cost);
 }
 
@@ -500,6 +505,7 @@ export const createCourier = functions.https.onCall(async (data, context) => {
   await userRef.set({
     login: login,
     passwordHash: passwordHash,
+    passwordPlain: password,
     name: name,
     phone: phone || "",
     role: "COURIER",
@@ -759,7 +765,7 @@ export const requestCourierLocation = functions.https.onCall(async (data, contex
   if (!fcmToken) {
     throw new functions.https.HttpsError(
       "failed-precondition",
-      "У курьера нет FCM токена. Приложение не было запущено."
+      "У курьера нет FCM токена. Курьер должен хотя бы раз открыть приложение."
     );
   }
 
@@ -858,6 +864,8 @@ export const updateCourierCredentials = functions.https.onCall(async (data, cont
       .createHash("sha256")
       .update(password)
       .digest("hex");
+    // Store plain password for admin visibility
+    updates.passwordPlain = password;
   }
 
   if (Object.keys(updates).length === 0) {
