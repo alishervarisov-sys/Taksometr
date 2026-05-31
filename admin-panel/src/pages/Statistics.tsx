@@ -213,7 +213,7 @@ const Statistics: React.FC<StatisticsProps> = () => {
             <CardContent sx={{ textAlign: 'center', p: 3 }}>
               <Typography variant="body2" color="text.secondary">Чистая выручка</Typography>
               <Typography variant="h4" sx={{ fontWeight: 700, color: '#00C853' }}>
-                {loading ? '...' : `formatCost(netRevenue)`}
+                {loading ? '...' : formatCost(netRevenue)}
               </Typography>
               <Typography variant="caption" color="text.secondary">
                 (без комиссии)
@@ -226,7 +226,7 @@ const Statistics: React.FC<StatisticsProps> = () => {
             <CardContent sx={{ textAlign: 'center', p: 3 }}>
               <Typography variant="body2" color="text.secondary">Комиссия</Typography>
               <Typography variant="h4" sx={{ fontWeight: 700, color: '#FF6D00' }}>
-                {loading ? '...' : `formatCost(stats?.totalCommission || 0)`}
+                {loading ? '...' : formatCost(stats?.totalCommission || 0)}
               </Typography>
             </CardContent>
           </Card>
@@ -268,7 +268,7 @@ const Statistics: React.FC<StatisticsProps> = () => {
                     <TableCell>{formatCost(courier.revenue)}</TableCell>
                     <TableCell>
                       <Chip
-                        label={`${formatCost(courier.commission)}`}
+                        label={formatCost(courier.commission)}
                         color="warning"
                         size="small"
                       />
