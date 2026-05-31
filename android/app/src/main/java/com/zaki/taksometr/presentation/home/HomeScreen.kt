@@ -1,6 +1,10 @@
 package com.zaki.taksometr.presentation.home
 
 import android.Manifest
+import android.content.Context
+import android.content.Intent
+import android.location.LocationManager
+import android.provider.Settings
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -16,10 +20,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.rememberMultiplePermissionsState
 import com.zaki.taksometr.presentation.theme.*
@@ -43,6 +51,103 @@ fun HomeScreen(
             Manifest.permission.ACCESS_COARSE_LOCATION
         )
     )
+
+    // Check if GPS is enabled
+    var isGpsEnabled by remember { mutableStateOf(isLocationEnabled(context)) }
+
+    // Re-check GPS when app resumes (user might have enabled it in settings)
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                isGpsEnabled = isLocationEnabled(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    // If permissions not granted, request them
+    LaunchedEffect(Unit) {
+        if (!locationPermissions.allPermissionsGranted) {
+            locationPermissions.launchMultiplePermissionRequest()
+        }
+    }
+
+    // BLOCK: If no permission or GPS is off — show full-screen blocker
+    if (!locationPermissions.allPermissionsGranted || !isGpsEnabled) {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = { Text("ZaKi Taksometr") },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        titleContentColor = MaterialTheme.colorScheme.onPrimary
+                    )
+                )
+            }
+        ) { paddingValues ->
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(paddingValues)
+                    .padding(32.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Icon(
+                    Icons.Default.LocationOff,
+                    contentDescription = null,
+                    modifier = Modifier.size(80.dp),
+                    tint = AccentRed
+                )
+                Spacer(modifier = Modifier.height(24.dp))
+                Text(
+                    text = "Местоположение отключено",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "Для работы приложения необходимо включить GPS и разрешить доступ к местоположению.",
+                    style = MaterialTheme.typography.bodyLarge,
+                    textAlign = TextAlign.Center,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                )
+                Spacer(modifier = Modifier.height(32.dp))
+
+                if (!locationPermissions.allPermissionsGranted) {
+                    Button(
+                        onClick = { locationPermissions.launchMultiplePermissionRequest() },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(Icons.Default.Security, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Разрешить доступ")
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+                }
+
+                if (!isGpsEnabled) {
+                    Button(
+                        onClick = {
+                            context.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = AccentGreen)
+                    ) {
+                        Icon(Icons.Default.GpsFixed, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Включить GPS")
+                    }
+                }
+            }
+        }
+        return
+    }
 
     // If user is blocked or deleted, force logout
     LaunchedEffect(state.isBlocked) {
@@ -198,11 +303,7 @@ fun HomeScreen(
             // Start delivery button
             Button(
                 onClick = {
-                    if (!locationPermissions.allPermissionsGranted) {
-                        locationPermissions.launchMultiplePermissionRequest()
-                    } else {
-                        viewModel.showStartDialog()
-                    }
+                    viewModel.showStartDialog()
                 },
                 modifier = Modifier
                     .fillMaxWidth()
@@ -324,4 +425,11 @@ fun StatCard(
             )
         }
     }
+}
+
+
+private fun isLocationEnabled(context: Context): Boolean {
+    val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+    return locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER) ||
+            locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
 }
