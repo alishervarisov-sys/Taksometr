@@ -7,7 +7,7 @@ service cloud.firestore {
       allow read: if true;
       allow create: if false; // Only via Cloud Functions
       allow update: if true; // Validated in Cloud Functions
-      allow delete: if false; // Only via Cloud Functions
+      allow delete: if true; // Admin can delete couriers
     }
 
     // Deliveries collection

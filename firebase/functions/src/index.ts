@@ -463,7 +463,8 @@ export const calculateDeliveryCost = functions.https.onCall(async (data, context
 
 // ============ ADMIN: CREATE COURIER ============
 export const createCourier = functions.https.onCall(async (data, context) => {
-  const {login, password, name, phone, adminId} = data;
+  const {login, password, name, surname, birthYear, city, phone, adminId,
+    scooterPhotoUrl, passportFrontUrl, passportBackUrl} = data;
 
   // Verify admin
   const adminDoc = await db.collection("users").doc(adminId).get();
@@ -507,6 +508,9 @@ export const createCourier = functions.https.onCall(async (data, context) => {
     passwordHash: passwordHash,
     passwordPlain: password,
     name: name,
+    surname: surname || "",
+    birthYear: birthYear || "",
+    city: city || "",
     phone: phone || "",
     role: "COURIER",
     isOnline: false,
@@ -515,6 +519,9 @@ export const createCourier = functions.https.onCall(async (data, context) => {
     createdAt: Date.now(),
     fcmToken: "",
     lastLocation: null,
+    scooterPhotoUrl: scooterPhotoUrl || "",
+    passportFrontUrl: passportFrontUrl || "",
+    passportBackUrl: passportBackUrl || "",
   });
 
   return {

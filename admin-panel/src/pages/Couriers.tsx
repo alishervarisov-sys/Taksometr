@@ -2,12 +2,14 @@ import React, { useEffect, useState } from 'react';
 import {
   Box, Typography, Card, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, Button, Dialog, DialogTitle, DialogContent,
-  DialogActions, TextField, IconButton, Chip, Alert
+  DialogActions, TextField, IconButton, Chip, Alert, MenuItem,
+  Grid, InputLabel
 } from '@mui/material';
 import { Add, Block, Delete, History } from '@mui/icons-material';
 import { collection, getDocs, doc, updateDoc, deleteDoc, query, where, orderBy } from 'firebase/firestore';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { httpsCallable } from 'firebase/functions';
-import { db, functions } from '../firebase';
+import { db, functions, storage } from '../firebase';
 
 interface CouriersProps {
   adminId: string;
@@ -17,7 +19,10 @@ interface Courier {
   id: string;
   login: string;
   name: string;
+  surname: string;
   phone: string;
+  city: string;
+  birthYear: string;
   isOnline: boolean;
   isBlocked: boolean;
   balance: number;
@@ -33,10 +38,22 @@ interface Transaction {
   createdAt: number;
 }
 
+const TAJIKISTAN_CITIES = [
+  'Душанбе', 'Худжанд', 'Бохтар (Курган-Тюбе)', 'Куляб', 'Истаравшан',
+  'Турсунзаде', 'Исфара', 'Канибадам', 'Пенджикент', 'Вахдат',
+  'Гиссар', 'Нурек', 'Рогун', 'Хорог', 'Файзабад',
+  'Левакант', 'Дангара', 'Яван', 'Сарбанд', 'Табошар'
+];
+
 const Couriers: React.FC<CouriersProps> = ({ adminId }) => {
   const [couriers, setCouriers] = useState<Courier[]>([]);
   const [openDialog, setOpenDialog] = useState(false);
-  const [newCourier, setNewCourier] = useState({ login: '', password: '', name: '', phone: '' });
+  const [newCourier, setNewCourier] = useState({
+    name: '', surname: '', birthYear: '', city: '', phone: '', login: '', password: ''
+  });
+  const [scooterPhoto, setScooterPhoto] = useState<File | null>(null);
+  const [passportFront, setPassportFront] = useState<File | null>(null);
+  const [passportBack, setPassportBack] = useState<File | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -59,17 +76,49 @@ const Couriers: React.FC<CouriersProps> = ({ adminId }) => {
     setCouriers(data);
   };
 
+  const uploadFile = async (file: File, path: string): Promise<string> => {
+    const storageRef = ref(storage, path);
+    await uploadBytes(storageRef, file);
+    return getDownloadURL(storageRef);
+  };
+
   const handleCreateCourier = async () => {
     setError('');
+    if (!newCourier.name || !newCourier.login || !newCourier.password) {
+      setError('Имя, логин и пароль обязательны');
+      return;
+    }
     setLoading(true);
     try {
+      // Upload photos if provided
+      const timestamp = Date.now();
+      let scooterPhotoUrl = '';
+      let passportFrontUrl = '';
+      let passportBackUrl = '';
+
+      if (scooterPhoto) {
+        scooterPhotoUrl = await uploadFile(scooterPhoto, `couriers/${newCourier.login}/scooter_${timestamp}.jpg`);
+      }
+      if (passportFront) {
+        passportFrontUrl = await uploadFile(passportFront, `couriers/${newCourier.login}/passport_front_${timestamp}.jpg`);
+      }
+      if (passportBack) {
+        passportBackUrl = await uploadFile(passportBack, `couriers/${newCourier.login}/passport_back_${timestamp}.jpg`);
+      }
+
       const createCourierFn = httpsCallable(functions, 'createCourier');
       await createCourierFn({
         ...newCourier,
         adminId,
+        scooterPhotoUrl,
+        passportFrontUrl,
+        passportBackUrl,
       });
       setOpenDialog(false);
-      setNewCourier({ login: '', password: '', name: '', phone: '' });
+      setNewCourier({ name: '', surname: '', birthYear: '', city: '', phone: '', login: '', password: '' });
+      setScooterPhoto(null);
+      setPassportFront(null);
+      setPassportBack(null);
       loadCouriers();
     } catch (err: any) {
       setError(err.message || 'Ошибка создания курьера');
@@ -83,12 +132,11 @@ const Couriers: React.FC<CouriersProps> = ({ adminId }) => {
       await updateDoc(doc(db, 'users', courier.id), {
         isBlocked: !courier.isBlocked,
       });
-      // Update local state immediately
-      setCouriers(prev => prev.map(c => 
+      setCouriers(prev => prev.map(c =>
         c.id === courier.id ? { ...c, isBlocked: !c.isBlocked } : c
       ));
     } catch (err: any) {
-      alert('Ошибка блокировки: ' + err.message);
+      alert('Ошибка: ' + err.message);
     }
   };
 
@@ -110,8 +158,7 @@ const Couriers: React.FC<CouriersProps> = ({ adminId }) => {
       );
       const snapshot = await getDocs(q);
       setTransactions(snapshot.docs.map(d => ({ id: d.id, ...d.data() })) as Transaction[]);
-    } catch (err) {
-      console.error(err);
+    } catch {
       setTransactions([]);
     }
   };
@@ -141,7 +188,7 @@ const Couriers: React.FC<CouriersProps> = ({ adminId }) => {
             <TableBody>
               {couriers.map((courier) => (
                 <TableRow key={courier.id}>
-                  <TableCell>{courier.name}</TableCell>
+                  <TableCell>{courier.name} {courier.surname}</TableCell>
                   <TableCell>{courier.login}</TableCell>
                   <TableCell>{courier.phone}</TableCell>
                   <TableCell>
@@ -178,35 +225,69 @@ const Couriers: React.FC<CouriersProps> = ({ adminId }) => {
         </TableContainer>
       </Card>
 
+      {/* Create courier dialog */}
       <Dialog open={openDialog} onClose={() => setOpenDialog(false)} maxWidth="sm" fullWidth>
         <DialogTitle>Новый курьер</DialogTitle>
         <DialogContent>
-          <TextField
-            fullWidth label="Имя" margin="normal"
-            value={newCourier.name}
-            onChange={(e) => setNewCourier({ ...newCourier, name: e.target.value })}
-          />
-          <TextField
-            fullWidth label="Логин" margin="normal"
-            value={newCourier.login}
-            onChange={(e) => setNewCourier({ ...newCourier, login: e.target.value })}
-          />
-          <TextField
-            fullWidth label="Пароль" type="password" margin="normal"
-            value={newCourier.password}
-            onChange={(e) => setNewCourier({ ...newCourier, password: e.target.value })}
-          />
-          <TextField
-            fullWidth label="Телефон" margin="normal"
-            value={newCourier.phone}
-            onChange={(e) => setNewCourier({ ...newCourier, phone: e.target.value })}
-          />
+          <Grid container spacing={2} sx={{ mt: 0.5 }}>
+            <Grid item xs={6}>
+              <TextField fullWidth label="Имя *" value={newCourier.name}
+                onChange={(e) => setNewCourier({ ...newCourier, name: e.target.value })} />
+            </Grid>
+            <Grid item xs={6}>
+              <TextField fullWidth label="Фамилия" value={newCourier.surname}
+                onChange={(e) => setNewCourier({ ...newCourier, surname: e.target.value })} />
+            </Grid>
+            <Grid item xs={6}>
+              <TextField fullWidth label="Год рождения" type="number" value={newCourier.birthYear}
+                onChange={(e) => setNewCourier({ ...newCourier, birthYear: e.target.value })} />
+            </Grid>
+            <Grid item xs={6}>
+              <TextField fullWidth select label="Город" value={newCourier.city}
+                onChange={(e) => setNewCourier({ ...newCourier, city: e.target.value })}>
+                {TAJIKISTAN_CITIES.map(city => (
+                  <MenuItem key={city} value={city}>{city}</MenuItem>
+                ))}
+              </TextField>
+            </Grid>
+            <Grid item xs={12}>
+              <TextField fullWidth label="Телефон" value={newCourier.phone}
+                onChange={(e) => setNewCourier({ ...newCourier, phone: e.target.value })} />
+            </Grid>
+
+            {/* Photo uploads */}
+            <Grid item xs={12}>
+              <InputLabel sx={{ mb: 0.5, fontSize: 14 }}>Фото скутера</InputLabel>
+              <input type="file" accept="image/*"
+                onChange={(e) => setScooterPhoto(e.target.files?.[0] || null)} />
+            </Grid>
+            <Grid item xs={6}>
+              <InputLabel sx={{ mb: 0.5, fontSize: 14 }}>Паспорт (лицевая)</InputLabel>
+              <input type="file" accept="image/*"
+                onChange={(e) => setPassportFront(e.target.files?.[0] || null)} />
+            </Grid>
+            <Grid item xs={6}>
+              <InputLabel sx={{ mb: 0.5, fontSize: 14 }}>Паспорт (обратная)</InputLabel>
+              <input type="file" accept="image/*"
+                onChange={(e) => setPassportBack(e.target.files?.[0] || null)} />
+            </Grid>
+
+            {/* Credentials */}
+            <Grid item xs={6}>
+              <TextField fullWidth label="Логин *" value={newCourier.login}
+                onChange={(e) => setNewCourier({ ...newCourier, login: e.target.value })} />
+            </Grid>
+            <Grid item xs={6}>
+              <TextField fullWidth label="Пароль *" type="password" value={newCourier.password}
+                onChange={(e) => setNewCourier({ ...newCourier, password: e.target.value })} />
+            </Grid>
+          </Grid>
           {error && <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>}
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setOpenDialog(false)}>Отмена</Button>
           <Button variant="contained" onClick={handleCreateCourier} disabled={loading}>
-            Создать
+            {loading ? 'Создание...' : 'Создать'}
           </Button>
         </DialogActions>
       </Dialog>

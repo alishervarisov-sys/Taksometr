@@ -2,6 +2,7 @@ import { initializeApp } from 'firebase/app';
 import { getFirestore } from 'firebase/firestore';
 import { getFunctions } from 'firebase/functions';
 import { getAuth } from 'firebase/auth';
+import { getStorage } from 'firebase/storage';
 
 const firebaseConfig = {
   apiKey: "AIzaSyCPRo5_sfkPMOIDdAP1MWFCSLbCO7HqHA0",
@@ -16,6 +17,7 @@ const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app);
 export const functions = getFunctions(app);
 export const auth = getAuth(app);
+export const storage = getStorage(app);
 
 // Google Maps JavaScript API key (must have "Maps JavaScript API" enabled)
 export const GOOGLE_MAPS_API_KEY = "AIzaSyAk3WuUNwz0PNu73HAFPW7knrzPmxrjXzo";
