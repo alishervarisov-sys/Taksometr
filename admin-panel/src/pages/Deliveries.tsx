@@ -5,7 +5,7 @@ import {
   DialogTitle, DialogContent, DialogActions, Button, Grid, Divider
 } from '@mui/material';
 import { Search, Close } from '@mui/icons-material';
-import { collection, getDocs, query, orderBy, limit, doc, getDoc } from 'firebase/firestore';
+import { collection, getDocs, query, orderBy, limit, doc, getDoc, updateDoc } from 'firebase/firestore';
 import { GoogleMap, useJsApiLoader, PolylineF, MarkerF } from '@react-google-maps/api';
 import { db, GOOGLE_MAPS_API_KEY } from '../firebase';
 
@@ -53,6 +53,19 @@ const Deliveries: React.FC = () => {
       ...d.data()
     })) as Delivery[];
     setDeliveries(data);
+  };
+
+  const handleCancelDelivery = async (deliveryId: string) => {
+    if (!window.confirm('Отменить эту доставку?')) return;
+    try {
+      await updateDoc(doc(db, 'deliveries', deliveryId), {
+        status: 'CANCELLED',
+        endTime: Date.now(),
+      });
+      loadDeliveries();
+    } catch (err) {
+      alert('Ошибка отмены');
+    }
   };
 
   const handleRowClick = async (delivery: Delivery) => {
@@ -174,7 +187,24 @@ const Deliveries: React.FC = () => {
                   <TableCell>{delivery.clientPhone}</TableCell>
                   <TableCell>{formatDistance(delivery.distanceMeters)}</TableCell>
                   <TableCell>{formatCost(delivery.cost || 0)}</TableCell>
-                  <TableCell>{getStatusChip(delivery.status)}</TableCell>
+                  <TableCell>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      {getStatusChip(delivery.status)}
+                      {delivery.status === 'IN_PROGRESS' && (
+                        <Button
+                          size="small"
+                          color="error"
+                          variant="outlined"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleCancelDelivery(delivery.id);
+                          }}
+                        >
+                          Отменить
+                        </Button>
+                      )}
+                    </Box>
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>
