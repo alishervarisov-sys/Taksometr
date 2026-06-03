@@ -47,6 +47,10 @@ const Deliveries: React.FC = () => {
   const [period, setPeriod] = useState<Period>('all');
   const [reportType, setReportType] = useState<ReportType>('earnings');
   const [reportResult, setReportResult] = useState<{ total: number; count: number } | null>(null);
+  
+  // Fix delivery not found
+  const [problemDeliveries, setProblemDeliveries] = useState<Delivery[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
 
   const { isLoaded } = useJsApiLoader({
     id: 'google-map-script',
@@ -77,6 +81,57 @@ const Deliveries: React.FC = () => {
       ...d.data()
     })) as Delivery[];
     setDeliveries(data);
+  };
+
+  const findProblemDeliveries = async () => {
+    setIsSearching(true);
+    try {
+      // Загружаем все доставки в статусе IN_PROGRESS без orderBy
+      const q = query(
+        collection(db, 'deliveries'),
+        where('status', '==', 'IN_PROGRESS'),
+        limit(100)
+      );
+      const snapshot = await getDocs(q);
+      const inProgressDeliveries = snapshot.docs.map(d => ({
+        id: d.id,
+        ...d.data()
+      })) as Delivery[];
+      
+      // Сортируем на клиенте
+      inProgressDeliveries.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+      
+      const now = Date.now();
+      
+      // Находим доставки которые:
+      // 1. В статусе IN_PROGRESS более 1 часа
+      // 2. Или в статусе IN_PROGRESS но без маршрута/данных
+      const problems = inProgressDeliveries.filter(d => {
+        // Доставка висит более 1 часа
+        if (d.startTime && (now - d.startTime) > 3600000) return true;
+        
+        // Доставка без маршрута или с пустым маршрутом
+        if (!d.route || d.route.length === 0) return true;
+        
+        // Доставка без курьера
+        if (!d.courierId || !d.courierName) return true;
+        
+        return false;
+      });
+      
+      setProblemDeliveries(problems);
+      
+      if (problems.length === 0) {
+        alert('✅ Проблемные доставки не найдены!');
+      } else {
+        alert(`⚠️ Найдено проблемных доставок: ${problems.length}`);
+      }
+    } catch (error) {
+      console.error('Ошибка поиска проблемных доставок:', error);
+      alert('Ошибка при поиске: ' + (error as Error).message);
+    } finally {
+      setIsSearching(false);
+    }
   };
 
   const getDateRange = (p: Period): { start: number; end: number } => {
@@ -126,6 +181,28 @@ const Deliveries: React.FC = () => {
       loadDeliveries();
     } catch {
       alert('Ошибка отмены');
+    }
+  };
+
+  const handleFixProblemDelivery = async (delivery: Delivery) => {
+    if (!window.confirm(`Завершить проблемную доставку?\n\nКурьер: ${delivery.courierName}\nКлиент: ${delivery.clientPhone}\nДлится: ${formatDuration(delivery.startTime, null)}`)) {
+      return;
+    }
+    
+    try {
+      await updateDoc(doc(db, 'deliveries', delivery.id), {
+        status: 'CANCELLED',
+        endTime: Date.now(),
+        note: 'Автоматически отменена через админ-панель (проблемная доставка)'
+      });
+      
+      alert('Доставка отменена. Курьер может создать новую.');
+      loadDeliveries();
+      // Обновляем список проблемных доставок
+      setProblemDeliveries(prev => prev.filter(d => d.id !== delivery.id));
+    } catch (error) {
+      console.error('Ошибка исправления доставки:', error);
+      alert('Ошибка: ' + (error as Error).message);
     }
   };
 
@@ -185,6 +262,98 @@ const Deliveries: React.FC = () => {
   return (
     <Box>
       <Typography variant="h5" sx={{ fontWeight: 700, mb: 3 }}>Доставки</Typography>
+
+      {/* Problem Deliveries Alert */}
+      {problemDeliveries.length > 0 && (
+        <Card sx={{ mb: 3, p: 2, bgcolor: '#ffebee', borderLeft: 4, borderColor: 'error.main' }}>
+          <Typography variant="subtitle1" fontWeight={600} sx={{ mb: 1.5, color: 'error.main' }}>
+            ⚠️ Найдено проблемных доставок: {problemDeliveries.length}
+          </Typography>
+          <Typography variant="body2" sx={{ mb: 2, color: 'text.secondary' }}>
+            Эти доставки находятся в статусе "В процессе" более 1 часа, или имеют неполные данные. Возможно, приложение курьера столкнулось с ошибкой.
+          </Typography>
+          
+          <TableContainer sx={{ bgcolor: 'white', borderRadius: 2 }}>
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell>Курьер</TableCell>
+                  <TableCell>Клиент</TableCell>
+                  <TableCell>Начало</TableCell>
+                  <TableCell>Длится</TableCell>
+                  <TableCell>Проблема</TableCell>
+                  <TableCell>Действие</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {problemDeliveries.map((delivery) => {
+                  const now = Date.now();
+                  let problemText = '';
+                  if (delivery.startTime && (now - delivery.startTime) > 3600000) {
+                    problemText = 'Висит > 1 часа';
+                  } else if (!delivery.route || delivery.route.length === 0) {
+                    problemText = 'Нет маршрута';
+                  } else if (!delivery.courierId) {
+                    problemText = 'Нет курьера';
+                  }
+                  
+                  return (
+                    <TableRow key={delivery.id} hover>
+                      <TableCell>{delivery.courierName || '—'}</TableCell>
+                      <TableCell>{delivery.clientPhone || '—'}</TableCell>
+                      <TableCell>{formatDate(delivery.startTime)}</TableCell>
+                      <TableCell>
+                        <Chip 
+                          label={formatDuration(delivery.startTime, null)} 
+                          size="small" 
+                          color="error" 
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <Chip label={problemText} size="small" color="warning" />
+                      </TableCell>
+                      <TableCell>
+                        <Button 
+                          size="small" 
+                          variant="contained" 
+                          color="error"
+                          onClick={() => handleFixProblemDelivery(delivery)}
+                        >
+                          Исправить
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        </Card>
+      )}
+
+      {/* Fix Delivery Not Found */}
+      <Card sx={{ mb: 3, p: 2, bgcolor: '#fff3e0', borderLeft: 4, borderColor: 'warning.main' }}>
+        <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} alignItems="center" justifyContent="space-between">
+          <Box>
+            <Typography variant="subtitle1" fontWeight={600} sx={{ mb: 0.5, color: 'warning.dark' }}>
+              🔍 Поиск проблемных доставок
+            </Typography>
+            <Typography variant="body2" sx={{ color: 'text.secondary' }}>
+              Нажмите кнопку для автоматического поиска доставок которые не завершаются
+            </Typography>
+          </Box>
+          <Button 
+            variant="contained" 
+            color="warning"
+            size="large"
+            onClick={findProblemDeliveries}
+            disabled={isSearching}
+            sx={{ minWidth: 200 }}
+          >
+            {isSearching ? 'Поиск...' : 'Обнаружить проблемы'}
+          </Button>
+        </Stack>
+      </Card>
 
       {/* Report calculator */}
       <Card sx={{ mb: 3, p: 2 }}>
