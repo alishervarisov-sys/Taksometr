@@ -10,6 +10,7 @@ import MapView from './pages/MapView';
 import Statistics from './pages/Statistics';
 import Commission from './pages/Commission';
 import Credentials from './pages/Credentials';
+import Admins from './pages/Admins';
 import Login from './pages/Login';
 
 const theme = createTheme({
@@ -56,25 +57,32 @@ const theme = createTheme({
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [adminId, setAdminId] = useState<string | null>(null);
+  const [adminRole, setAdminRole] = useState<'ADMIN' | 'SUPER_ADMIN' | null>(null);
 
   useEffect(() => {
     const savedAdminId = localStorage.getItem('adminId');
-    if (savedAdminId) {
+    const savedRole = localStorage.getItem('adminRole') as 'ADMIN' | 'SUPER_ADMIN' | null;
+    if (savedAdminId && savedRole) {
       setIsAuthenticated(true);
       setAdminId(savedAdminId);
+      setAdminRole(savedRole);
     }
   }, []);
 
-  const handleLogin = (id: string) => {
+  const handleLogin = (id: string, role: 'ADMIN' | 'SUPER_ADMIN') => {
     setIsAuthenticated(true);
     setAdminId(id);
+    setAdminRole(role);
     localStorage.setItem('adminId', id);
+    localStorage.setItem('adminRole', role);
   };
 
   const handleLogout = () => {
     setIsAuthenticated(false);
     setAdminId(null);
+    setAdminRole(null);
     localStorage.removeItem('adminId');
+    localStorage.removeItem('adminRole');
   };
 
   return (
@@ -88,7 +96,7 @@ function App() {
               <Route path="*" element={<Navigate to="/login" />} />
             </>
           ) : (
-            <Route path="/" element={<Layout onLogout={handleLogout} />}>
+            <Route path="/" element={<Layout onLogout={handleLogout} isSuperAdmin={adminRole === 'SUPER_ADMIN'} />}>
               <Route index element={<Dashboard adminId={adminId!} />} />
               <Route path="couriers" element={<Couriers adminId={adminId!} />} />
               <Route path="tariffs" element={<Tariffs adminId={adminId!} />} />
@@ -97,6 +105,9 @@ function App() {
               <Route path="statistics" element={<Statistics adminId={adminId!} />} />
               <Route path="commission" element={<Commission adminId={adminId!} />} />
               <Route path="credentials" element={<Credentials adminId={adminId!} />} />
+              {adminRole === 'SUPER_ADMIN' && (
+                <Route path="admins" element={<Admins />} />
+              )}
               <Route path="*" element={<Navigate to="/" />} />
             </Route>
           )}

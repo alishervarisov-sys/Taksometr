@@ -14,30 +14,33 @@ import {
   Menu as MenuIcon,
   Logout as LogoutIcon,
   AccountBalanceWallet as WalletIcon,
-  VpnKey as KeyIcon
+  VpnKey as KeyIcon,
+  AdminPanelSettings as AdminIcon
 } from '@mui/icons-material';
 
 const drawerWidth = 260;
 
 interface LayoutProps {
   onLogout: () => void;
+  isSuperAdmin: boolean;
 }
 
-const menuItems = [
-  { text: 'Dashboard', icon: <DashboardIcon />, path: '/' },
-  { text: 'Курьеры', icon: <PeopleIcon />, path: '/couriers' },
-  { text: 'Доставки', icon: <DeliveryIcon />, path: '/deliveries' },
-  { text: 'Тарифы', icon: <TariffIcon />, path: '/tariffs' },
-  { text: 'Комиссия', icon: <WalletIcon />, path: '/commission' },
-  { text: 'Логины', icon: <KeyIcon />, path: '/credentials' },
-  { text: 'Карта', icon: <MapIcon />, path: '/map' },
-  { text: 'Статистика', icon: <StatsIcon />, path: '/statistics' },
-];
-
-const Layout: React.FC<LayoutProps> = ({ onLogout }) => {
+const Layout: React.FC<LayoutProps> = ({ onLogout, isSuperAdmin }) => {
   const navigate = useNavigate();
   const location = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
+
+  const menuItems = [
+    { text: 'Dashboard', icon: <DashboardIcon />, path: '/' },
+    { text: 'Курьеры', icon: <PeopleIcon />, path: '/couriers' },
+    { text: 'Доставки', icon: <DeliveryIcon />, path: '/deliveries' },
+    { text: 'Тарифы', icon: <TariffIcon />, path: '/tariffs' },
+    { text: 'Комиссия', icon: <WalletIcon />, path: '/commission' },
+    { text: 'Логины', icon: <KeyIcon />, path: '/credentials' },
+    ...(isSuperAdmin ? [{ text: 'Админы', icon: <AdminIcon />, path: '/admins' }] : []),
+    { text: 'Карта', icon: <MapIcon />, path: '/map' },
+    { text: 'Статистика', icon: <StatsIcon />, path: '/statistics' },
+  ];
 
   const drawer = (
     <Box>

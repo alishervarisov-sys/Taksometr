@@ -6,8 +6,11 @@ import { collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
 
 interface LoginProps {
-  onLogin: (adminId: string) => void;
+  onLogin: (adminId: string, role: 'ADMIN' | 'SUPER_ADMIN') => void;
 }
+
+const SUPER_ADMIN_EMAIL = 'alishervarisov@gmail.com';
+const SUPER_ADMIN_PASSWORD = 'abubakr1986';
 
 const Login: React.FC<LoginProps> = ({ onLogin }) => {
   const [login, setLogin] = useState('');
@@ -21,7 +24,15 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
     setLoading(true);
 
     try {
-      // Hash password
+      // Check for super admin first (email-based)
+      if (login === SUPER_ADMIN_EMAIL && password === SUPER_ADMIN_PASSWORD) {
+        // Super admin login
+        onLogin('SUPER_ADMIN', 'SUPER_ADMIN');
+        setLoading(false);
+        return;
+      }
+
+      // Hash password for regular admins
       const encoder = new TextEncoder();
       const data = encoder.encode(password);
       const hashBuffer = await crypto.subtle.digest('SHA-256', data);
@@ -44,7 +55,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
       }
 
       const adminDoc = snapshot.docs[0];
-      onLogin(adminDoc.id);
+      onLogin(adminDoc.id, 'ADMIN');
     } catch (err: any) {
       setError('Ошибка входа: ' + err.message);
     } finally {

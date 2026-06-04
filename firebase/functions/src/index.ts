@@ -768,14 +768,29 @@ export const requestCourierLocation = functions.https.onCall(async (data, contex
 
   const courierData = courierDoc.data()!;
   const fcmToken = courierData.fcmToken;
+  const lastLocation = courierData.lastLocation;
 
+  // If no FCM token, return the last known location if available
   if (!fcmToken) {
-    throw new functions.https.HttpsError(
-      "failed-precondition",
-      "У курьера нет FCM токена. Курьер должен хотя бы раз открыть приложение."
-    );
+    if (lastLocation && lastLocation.timestamp) {
+      const locationAge = Date.now() - lastLocation.timestamp;
+      const minutesAgo = Math.floor(locationAge / 60000);
+      
+      return {
+        success: true,
+        message: `Последняя локация получена ${minutesAgo} минут назад. FCM токен отсутствует - курьер должен открыть приложение.`,
+        hasToken: false,
+        lastLocation: lastLocation,
+      };
+    } else {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "У курьера нет FCM токена и нет данных о местоположении. Курьер должен хотя бы раз открыть приложение."
+      );
+    }
   }
 
+  // Try to send FCM request
   try {
     await admin.messaging().send({
       token: fcmToken,
@@ -787,14 +802,34 @@ export const requestCourierLocation = functions.https.onCall(async (data, contex
         priority: "high",
       },
     });
+    
+    return {
+      success: true,
+      message: "Запрос отправлен. Местоположение обновится через несколько секунд.",
+      hasToken: true,
+    };
   } catch (e: any) {
+    // FCM token might be invalid/expired
+    console.error("FCM send error:", e);
+    
+    // Return last location if available
+    if (lastLocation && lastLocation.timestamp) {
+      const locationAge = Date.now() - lastLocation.timestamp;
+      const minutesAgo = Math.floor(locationAge / 60000);
+      
+      return {
+        success: true,
+        message: `FCM токен недействителен. Показана последняя локация (${minutesAgo} минут назад). Курьер должен переоткрыть приложение.`,
+        hasToken: false,
+        lastLocation: lastLocation,
+      };
+    }
+    
     throw new functions.https.HttpsError(
       "unavailable",
-      "Не удалось отправить запрос на устройство курьера"
+      "Не удалось отправить запрос на устройство курьера. FCM токен недействителен."
     );
   }
-
-  return {success: true, message: "Запрос отправлен. Местоположение обновится через несколько секунд."};
 });
 
 

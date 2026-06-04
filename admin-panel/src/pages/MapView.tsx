@@ -41,7 +41,7 @@ const MapView: React.FC<MapViewProps> = ({ adminId }) => {
   const [couriers, setCouriers] = useState<CourierLocation[]>([]);
   const [selectedCourier, setSelectedCourier] = useState<string | null>(null);
   const [requestingLocation, setRequestingLocation] = useState<string | null>(null);
-  const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'error' | 'info' }>({
+  const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'error' | 'info' | 'warning' }>({
     open: false, message: '', severity: 'info'
   });
 
@@ -86,12 +86,16 @@ const MapView: React.FC<MapViewProps> = ({ adminId }) => {
     try {
       const requestFn = httpsCallable(functions, 'requestCourierLocation');
       const result = await requestFn({ adminId, courierId });
-      const data = result.data as { message?: string };
+      const data = result.data as { message?: string; hasToken?: boolean; lastLocation?: any };
+      
       setSnackbar({
         open: true,
         message: data.message || 'Запрос отправлен',
-        severity: 'success'
+        severity: data.hasToken === false ? 'warning' : 'success'
       });
+      
+      // If we got lastLocation in response, we could update the UI immediately
+      // but since we're using real-time listeners, it will update automatically
     } catch (err: any) {
       setSnackbar({
         open: true,
