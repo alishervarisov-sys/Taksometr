@@ -883,3 +883,77 @@ export const updateCourierCredentials = functions.https.onCall(async (data, cont
 
   return {success: true};
 });
+
+// ============ ADMIN: ASSIGN COURIER TO CLIENT ============
+export const assignCourierToClient = functions.https.onCall(async (data, context) => {
+  const {adminId, courierId, clientPhone} = data;
+
+  // Verify admin
+  const adminDoc = await db.collection("users").doc(adminId).get();
+  if (!adminDoc.exists || adminDoc.data()?.role !== "ADMIN") {
+    throw new functions.https.HttpsError("permission-denied", "Only admins");
+  }
+
+  if (!courierId || !clientPhone) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "courierId and clientPhone are required"
+    );
+  }
+
+  // Get courier info
+  const courierDoc = await db.collection("users").doc(courierId).get();
+  if (!courierDoc.exists) {
+    throw new functions.https.HttpsError("not-found", "Courier not found");
+  }
+
+  const courierData = courierDoc.data()!;
+
+  // Check if courier is blocked
+  if (courierData.isBlocked) {
+    throw new functions.https.HttpsError(
+      "permission-denied",
+      "Курьер заблокирован"
+    );
+  }
+
+  // Check if courier is online
+  if (!courierData.isOnline) {
+    throw new functions.https.HttpsError(
+      "failed-precondition",
+      "Курьер не в сети"
+    );
+  }
+
+  // Build SMS message in Tajik
+  const courierName = courierData.name || "";
+  const courierPhone = courierData.phone || "";
+  
+  let smsText = `Расонандаи мо ${courierName}`;
+  
+  if (courierPhone) {
+    smsText += ` (тел: ${courierPhone})`;
+  }
+  
+  smsText += ` барои шумо таъин карда шуд. `;
+  smsText += `Барои фармоиш додан бо ӯ тамос гиред. `;
+  smsText += `Барномаи ZaKi: https://clck.ru/3TuGb6`;
+
+  // Send SMS to client
+  await sendSms(clientPhone, smsText);
+
+  // Log the assignment
+  await db.collection("courierAssignments").add({
+    adminId: adminId,
+    courierId: courierId,
+    courierName: courierName,
+    clientPhone: clientPhone,
+    createdAt: Date.now(),
+  });
+
+  return {
+    success: true,
+    courierName: courierName,
+    clientPhone: clientPhone,
+  };
+});

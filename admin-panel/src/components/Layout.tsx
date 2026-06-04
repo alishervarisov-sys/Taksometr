@@ -14,7 +14,8 @@ import {
   Menu as MenuIcon,
   Logout as LogoutIcon,
   AccountBalanceWallet as WalletIcon,
-  VpnKey as KeyIcon
+  VpnKey as KeyIcon,
+  EmojiEvents as LotteryIcon
 } from '@mui/icons-material';
 
 const drawerWidth = 260;
@@ -30,6 +31,7 @@ const menuItems = [
   { text: 'Тарифы', icon: <TariffIcon />, path: '/tariffs' },
   { text: 'Комиссия', icon: <WalletIcon />, path: '/commission' },
   { text: 'Логины', icon: <KeyIcon />, path: '/credentials' },
+  { text: 'Розыгрыш', icon: <LotteryIcon />, path: '/lottery' },
   { text: 'Карта', icon: <MapIcon />, path: '/map' },
   { text: 'Статистика', icon: <StatsIcon />, path: '/statistics' },
 ];

@@ -5,7 +5,7 @@ import {
   DialogActions, TextField, IconButton, Chip, Alert, MenuItem,
   Grid, InputLabel
 } from '@mui/material';
-import { Add, Block, Delete, History } from '@mui/icons-material';
+import { Add, Block, Delete, History, PersonAdd } from '@mui/icons-material';
 import { collection, getDocs, doc, updateDoc, deleteDoc, query, where, orderBy } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { httpsCallable } from 'firebase/functions';
@@ -61,6 +61,13 @@ const Couriers: React.FC<CouriersProps> = ({ adminId }) => {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyCourier, setHistoryCourier] = useState<Courier | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+
+  // Assign to client dialog
+  const [assignOpen, setAssignOpen] = useState(false);
+  const [assignCourier, setAssignCourier] = useState<Courier | null>(null);
+  const [clientPhone, setClientPhone] = useState('');
+  const [assignLoading, setAssignLoading] = useState(false);
+  const [assignError, setAssignError] = useState('');
 
   useEffect(() => {
     loadCouriers();
@@ -163,6 +170,40 @@ const Couriers: React.FC<CouriersProps> = ({ adminId }) => {
     }
   };
 
+  const handleAssignToClient = (courier: Courier) => {
+    setAssignCourier(courier);
+    setClientPhone('');
+    setAssignError('');
+    setAssignOpen(true);
+  };
+
+  const handleConfirmAssign = async () => {
+    if (!assignCourier || !clientPhone) {
+      setAssignError('Введите номер телефона клиента');
+      return;
+    }
+
+    setAssignLoading(true);
+    setAssignError('');
+
+    try {
+      const assignCourierToClientFn = httpsCallable(functions, 'assignCourierToClient');
+      await assignCourierToClientFn({
+        adminId,
+        courierId: assignCourier.id,
+        clientPhone: clientPhone.trim(),
+      });
+
+      setAssignOpen(false);
+      setClientPhone('');
+      alert(`Курьер ${assignCourier.name} назначен клиенту. SMS отправлено.`);
+    } catch (err: any) {
+      setAssignError(err.message || 'Ошибка назначения курьера');
+    } finally {
+      setAssignLoading(false);
+    }
+  };
+
   return (
     <Box>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
@@ -208,6 +249,9 @@ const Couriers: React.FC<CouriersProps> = ({ adminId }) => {
                     )}
                   </TableCell>
                   <TableCell>
+                    <IconButton onClick={() => handleAssignToClient(courier)} color="info" title="Назначить клиенту">
+                      <PersonAdd />
+                    </IconButton>
                     <IconButton onClick={() => handleShowHistory(courier)} color="primary" title="История">
                       <History />
                     </IconButton>
@@ -339,6 +383,38 @@ const Couriers: React.FC<CouriersProps> = ({ adminId }) => {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setHistoryOpen(false)}>Закрыть</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Assign to client dialog */}
+      <Dialog open={assignOpen} onClose={() => setAssignOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>Назначить курьера клиенту</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Курьер: {assignCourier?.name} {assignCourier?.surname}
+          </Typography>
+          <TextField
+            fullWidth
+            label="Номер телефона клиента"
+            placeholder="+992XXXXXXXXX или 9XXXXXXXX"
+            value={clientPhone}
+            onChange={(e) => setClientPhone(e.target.value)}
+            sx={{ mt: 1 }}
+            autoFocus
+          />
+          {assignError && <Alert severity="error" sx={{ mt: 2 }}>{assignError}</Alert>}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setAssignOpen(false)} disabled={assignLoading}>
+            Отмена
+          </Button>
+          <Button
+            variant="contained"
+            onClick={handleConfirmAssign}
+            disabled={assignLoading}
+          >
+            {assignLoading ? 'Отправка...' : 'Назначить'}
+          </Button>
         </DialogActions>
       </Dialog>
     </Box>
