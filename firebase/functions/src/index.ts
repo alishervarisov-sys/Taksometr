@@ -884,6 +884,153 @@ export const updateCourierCredentials = functions.https.onCall(async (data, cont
   return {success: true};
 });
 
+// ============ ADMIN: COMPLETE DELIVERY ============
+export const adminCompleteDelivery = functions.https.onCall(async (data, context) => {
+  const {adminId, deliveryId} = data;
+
+  // Verify admin
+  const adminDoc = await db.collection("users").doc(adminId).get();
+  if (!adminDoc.exists || adminDoc.data()?.role !== "ADMIN") {
+    throw new functions.https.HttpsError("permission-denied", "Only admins");
+  }
+
+  if (!deliveryId) {
+    throw new functions.https.HttpsError("invalid-argument", "deliveryId required");
+  }
+
+  // Get delivery
+  const deliveryRef = db.collection("deliveries").doc(deliveryId);
+  const deliveryDoc = await deliveryRef.get();
+
+  if (!deliveryDoc.exists) {
+    throw new functions.https.HttpsError("not-found", "Delivery not found");
+  }
+
+  const deliveryData = deliveryDoc.data()!;
+
+  if (deliveryData.status !== "IN_PROGRESS") {
+    throw new functions.https.HttpsError(
+      "failed-precondition",
+      "Delivery is not in progress"
+    );
+  }
+
+  // Calculate distance from route (if exists)
+  const routePoints = deliveryData.route || [];
+  const distanceMeters = calculateRouteDistance(routePoints);
+
+  // Get tariff
+  const tariffDoc = await db.collection("tariffs").doc("default").get();
+  let baseCost = 5000;
+  let baseDistanceKm = 3;
+  let costPerKm = 1500;
+
+  if (tariffDoc.exists) {
+    const tariffData = tariffDoc.data()!;
+    baseCost = tariffData.baseCost || 5000;
+    baseDistanceKm = tariffData.baseDistanceKm ?? 3;
+    costPerKm = tariffData.costPerKm || 1500;
+  }
+
+  // Calculate cost
+  const roundedCost = computeCost(distanceMeters, baseCost, baseDistanceKm, costPerKm);
+
+  // Calculate waiting cost
+  const freeWaitingMinutes = tariffDoc.exists
+    ? (tariffDoc.data()!.freeWaitingMinutes ?? 5)
+    : 5;
+  const costPerWaitingMinute = tariffDoc.exists
+    ? (tariffDoc.data()!.costPerWaitingMinute ?? 500)
+    : 500;
+
+  const actualWaitingMinutes = deliveryData.waitingMinutes || 0;
+  let waitingCost = 0;
+  if (actualWaitingMinutes > freeWaitingMinutes) {
+    waitingCost = Math.ceil((actualWaitingMinutes - freeWaitingMinutes) * costPerWaitingMinute);
+  }
+
+  const totalCost = roundedCost + waitingCost;
+
+  // Commission logic
+  const courierId = deliveryData.courierId;
+  const courierRef = db.collection("users").doc(courierId);
+  const courierDoc2 = await courierRef.get();
+  const courierData2 = courierDoc2.exists ? courierDoc2.data()! : {};
+
+  let commissionPercent: number;
+  if (courierData2.commissionPercent !== undefined && courierData2.commissionPercent !== null) {
+    commissionPercent = courierData2.commissionPercent;
+  } else {
+    const settingsDoc = await db.collection("settings").doc("commission").get();
+    commissionPercent = settingsDoc.exists
+      ? (settingsDoc.data()!.percent || 0)
+      : 0;
+  }
+  const commissionAmount = Math.ceil(totalCost * commissionPercent / 100);
+
+  // Deduct commission from courier balance
+  const currentBalance = courierData2.balance || 0;
+  const newBalance = currentBalance - commissionAmount;
+
+  await courierRef.update({balance: newBalance});
+
+  // Record commission transaction
+  if (commissionAmount > 0) {
+    await db.collection("transactions").add({
+      courierId: courierId,
+      courierName: deliveryData.courierName || "",
+      type: "COMMISSION",
+      amount: -commissionAmount,
+      deliveryId: deliveryId,
+      balanceAfter: newBalance,
+      description: `Комиссия ${commissionPercent}% за доставку (завершена администратором)`,
+      createdAt: Date.now(),
+    });
+  }
+
+  const endTime = Date.now();
+
+  // Update delivery
+  await deliveryRef.update({
+    status: "COMPLETED",
+    endTime: endTime,
+    distanceMeters: distanceMeters,
+    cost: totalCost,
+    waitingMinutes: actualWaitingMinutes,
+    waitingCost: waitingCost,
+    commission: commissionAmount,
+    completedBy: "ADMIN",
+    completedByAdminId: adminId,
+  });
+
+  // Send SMS to client
+  const distanceKmText = (distanceMeters / 1000).toFixed(1);
+  let completeSmsText =
+    `Фармоиши ZaKi анҷом ёфт. ` +
+    `Масофа: ${distanceKmText} км. `;
+
+  if (waitingCost > 0) {
+    const waitingMinsRounded = Math.ceil(actualWaitingMinutes);
+    completeSmsText +=
+      `Интизорӣ: ${waitingMinsRounded} дақ. (${formatCostForSms(waitingCost)} сомонӣ). `;
+  }
+
+  completeSmsText +=
+    `Маблағи умумӣ: ${formatCostForSms(totalCost)} сомонӣ. ` +
+    `Барои хариди хӯрок, дору ва дигар молҳо барномаи ZaKi-ро боргирӣ кунед: https://clck.ru/3TuGb6 ` +
+    `Ташаккур!`;
+
+  await sendSms(deliveryData.clientPhone, completeSmsText);
+
+  return {
+    success: true,
+    deliveryId: deliveryId,
+    cost: totalCost,
+    commission: commissionAmount,
+    distanceMeters: distanceMeters,
+  };
+});
+
 // ============ ADMIN: ASSIGN COURIER TO CLIENT ============
 export const assignCourierToClient = functions.https.onCall(async (data, context) => {
   const {adminId, courierId, clientPhone} = data;

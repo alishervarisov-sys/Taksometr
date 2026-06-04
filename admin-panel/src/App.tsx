@@ -92,7 +92,7 @@ function App() {
               <Route index element={<Dashboard adminId={adminId!} />} />
               <Route path="couriers" element={<Couriers adminId={adminId!} />} />
               <Route path="tariffs" element={<Tariffs adminId={adminId!} />} />
-              <Route path="deliveries" element={<Deliveries />} />
+              <Route path="deliveries" element={<Deliveries adminId={adminId!} />} />
               <Route path="map" element={<MapView adminId={adminId!} />} />
               <Route path="statistics" element={<Statistics adminId={adminId!} />} />
               <Route path="commission" element={<Commission adminId={adminId!} />} />

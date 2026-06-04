@@ -8,7 +8,8 @@ import {
 import { Search } from '@mui/icons-material';
 import { collection, getDocs, query, orderBy, limit, doc, getDoc, updateDoc, where } from 'firebase/firestore';
 import { GoogleMap, useJsApiLoader, PolylineF, MarkerF } from '@react-google-maps/api';
-import { db, GOOGLE_MAPS_API_KEY } from '../firebase';
+import { db, GOOGLE_MAPS_API_KEY, functions } from '../firebase';
+import { httpsCallable } from 'firebase/functions';
 
 interface Delivery {
   id: string;
@@ -35,7 +36,11 @@ interface CourierOption {
 type Period = 'all' | 'today' | 'yesterday' | 'week' | 'month' | 'year';
 type ReportType = 'commission' | 'earnings';
 
-const Deliveries: React.FC = () => {
+interface DeliveriesProps {
+  adminId: string;
+}
+
+const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedDelivery, setSelectedDelivery] = useState<Delivery | null>(null);
@@ -181,6 +186,25 @@ const Deliveries: React.FC = () => {
       loadDeliveries();
     } catch {
       alert('Ошибка отмены');
+    }
+  };
+
+  const handleCompleteDelivery = async (delivery: Delivery) => {
+    const confirmMessage = `Завершить доставку?\n\nКурьер: ${delivery.courierName}\nКлиент: ${delivery.clientPhone}\n\nКлиенту будет отправлено SMS с деталями доставки.`;
+    if (!window.confirm(confirmMessage)) return;
+    
+    try {
+      const completeDeliveryFn = httpsCallable(functions, 'adminCompleteDelivery');
+      await completeDeliveryFn({
+        adminId: adminId,
+        deliveryId: delivery.id,
+      });
+      
+      alert('✅ Доставка завершена! SMS отправлено клиенту.');
+      loadDeliveries();
+    } catch (error: any) {
+      console.error('Ошибка завершения доставки:', error);
+      alert('Ошибка: ' + (error.message || 'Не удалось завершить доставку'));
     }
   };
 
@@ -426,10 +450,16 @@ const Deliveries: React.FC = () => {
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                       {getStatusChip(delivery.status)}
                       {delivery.status === 'IN_PROGRESS' && (
-                        <Button size="small" color="error" variant="outlined"
-                          onClick={(e) => { e.stopPropagation(); handleCancelDelivery(delivery.id); }}>
-                          Отменить
-                        </Button>
+                        <>
+                          <Button size="small" color="success" variant="contained"
+                            onClick={(e) => { e.stopPropagation(); handleCompleteDelivery(delivery); }}>
+                            Завершить
+                          </Button>
+                          <Button size="small" color="error" variant="outlined"
+                            onClick={(e) => { e.stopPropagation(); handleCancelDelivery(delivery.id); }}>
+                            Отменить
+                          </Button>
+                        </>
                       )}
                     </Box>
                   </TableCell>
