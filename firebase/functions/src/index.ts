@@ -5,6 +5,19 @@ admin.initializeApp();
 
 const db = admin.firestore();
 
+// Helper function to verify admin or super admin
+function verifyAdmin(adminId: string): Promise<void> {
+  if (adminId === "SUPER_ADMIN") {
+    return Promise.resolve();
+  }
+  
+  return db.collection("users").doc(adminId).get().then(adminDoc => {
+    if (!adminDoc.exists || adminDoc.data()?.role !== "ADMIN") {
+      throw new functions.https.HttpsError("permission-denied", "Only admins");
+    }
+  });
+}
+
 // ============ PAYOM.TJ SMS INTEGRATION ============
 // Credentials are read from environment variables (functions/.env) so the
 // JWT token is never committed to source control or shipped to clients.
@@ -467,13 +480,7 @@ export const createCourier = functions.https.onCall(async (data, context) => {
     scooterPhotoUrl, passportFrontUrl, passportBackUrl} = data;
 
   // Verify admin
-  const adminDoc = await db.collection("users").doc(adminId).get();
-  if (!adminDoc.exists || adminDoc.data()?.role !== "ADMIN") {
-    throw new functions.https.HttpsError(
-      "permission-denied",
-      "Only admins can create couriers"
-    );
-  }
+  await verifyAdmin(adminId);
 
   if (!login || !password || !name) {
     throw new functions.https.HttpsError(
@@ -536,13 +543,7 @@ export const updateTariff = functions.https.onCall(async (data, context) => {
   const {adminId, baseCost, baseDistanceKm, costPerKm} = data;
 
   // Verify admin
-  const adminDoc = await db.collection("users").doc(adminId).get();
-  if (!adminDoc.exists || adminDoc.data()?.role !== "ADMIN") {
-    throw new functions.https.HttpsError(
-      "permission-denied",
-      "Only admins can update tariffs"
-    );
-  }
+  await verifyAdmin(adminId);
 
   if (baseCost === undefined || costPerKm === undefined) {
     throw new functions.https.HttpsError(
@@ -570,13 +571,7 @@ export const getStatistics = functions.https.onCall(async (data, context) => {
   const {adminId, startDate, endDate} = data;
 
   // Verify admin
-  const adminDoc = await db.collection("users").doc(adminId).get();
-  if (!adminDoc.exists || adminDoc.data()?.role !== "ADMIN") {
-    throw new functions.https.HttpsError(
-      "permission-denied",
-      "Only admins can view statistics"
-    );
-  }
+  await verifyAdmin(adminId);
 
   const start = startDate || (Date.now() - 86400000); // Default: last 24h
   const end = endDate || Date.now();
@@ -636,10 +631,7 @@ export const getStatistics = functions.https.onCall(async (data, context) => {
 export const updateCommission = functions.https.onCall(async (data, context) => {
   const {adminId, percent} = data;
 
-  const adminDoc = await db.collection("users").doc(adminId).get();
-  if (!adminDoc.exists || adminDoc.data()?.role !== "ADMIN") {
-    throw new functions.https.HttpsError("permission-denied", "Only admins");
-  }
+  await verifyAdmin(adminId);
 
   if (percent === undefined || percent < 0 || percent > 100) {
     throw new functions.https.HttpsError("invalid-argument", "percent must be 0-100");
@@ -658,10 +650,7 @@ export const topUpBalance = functions.https.onCall(async (data, context) => {
   const {adminId, courierId, amount, note} = data;
 
   // Verify admin
-  const adminDoc = await db.collection("users").doc(adminId).get();
-  if (!adminDoc.exists || adminDoc.data()?.role !== "ADMIN") {
-    throw new functions.https.HttpsError("permission-denied", "Only admins");
-  }
+  await verifyAdmin(adminId);
 
   if (!courierId || !amount || amount <= 0) {
     throw new functions.https.HttpsError("invalid-argument", "courierId and positive amount required");
@@ -751,11 +740,8 @@ export const getCourierTransactions = functions.https.onCall(async (data, contex
 export const requestCourierLocation = functions.https.onCall(async (data, context) => {
   const {adminId, courierId} = data;
 
-  // Verify admin
-  const adminDoc = await db.collection("users").doc(adminId).get();
-  if (!adminDoc.exists || adminDoc.data()?.role !== "ADMIN") {
-    throw new functions.https.HttpsError("permission-denied", "Only admins");
-  }
+  // Verify admin (allow SUPER_ADMIN or regular ADMIN)
+  await verifyAdmin(adminId);
 
   if (!courierId) {
     throw new functions.https.HttpsError("invalid-argument", "courierId required");
@@ -839,10 +825,7 @@ export const requestCourierLocation = functions.https.onCall(async (data, contex
 export const updateCourierCommission = functions.https.onCall(async (data, context) => {
   const {adminId, courierId, percent} = data;
 
-  const adminDoc = await db.collection("users").doc(adminId).get();
-  if (!adminDoc.exists || adminDoc.data()?.role !== "ADMIN") {
-    throw new functions.https.HttpsError("permission-denied", "Only admins");
-  }
+  await verifyAdmin(adminId);
 
   if (!courierId) {
     throw new functions.https.HttpsError("invalid-argument", "courierId required");
@@ -870,10 +853,7 @@ export const updateCourierCommission = functions.https.onCall(async (data, conte
 export const updateCourierCredentials = functions.https.onCall(async (data, context) => {
   const {adminId, courierId, login, password} = data;
 
-  const adminDoc = await db.collection("users").doc(adminId).get();
-  if (!adminDoc.exists || adminDoc.data()?.role !== "ADMIN") {
-    throw new functions.https.HttpsError("permission-denied", "Only admins");
-  }
+  await verifyAdmin(adminId);
 
   if (!courierId) {
     throw new functions.https.HttpsError("invalid-argument", "courierId required");
@@ -924,10 +904,7 @@ export const adminCompleteDelivery = functions.https.onCall(async (data, context
   const {adminId, deliveryId} = data;
 
   // Verify admin
-  const adminDoc = await db.collection("users").doc(adminId).get();
-  if (!adminDoc.exists || adminDoc.data()?.role !== "ADMIN") {
-    throw new functions.https.HttpsError("permission-denied", "Only admins");
-  }
+  await verifyAdmin(adminId);
 
   if (!deliveryId) {
     throw new functions.https.HttpsError("invalid-argument", "deliveryId required");
@@ -1071,10 +1048,7 @@ export const assignCourierToClient = functions.https.onCall(async (data, context
   const {adminId, courierId, clientPhone} = data;
 
   // Verify admin
-  const adminDoc = await db.collection("users").doc(adminId).get();
-  if (!adminDoc.exists || adminDoc.data()?.role !== "ADMIN") {
-    throw new functions.https.HttpsError("permission-denied", "Only admins");
-  }
+  await verifyAdmin(adminId);
 
   if (!courierId || !clientPhone) {
     throw new functions.https.HttpsError(
