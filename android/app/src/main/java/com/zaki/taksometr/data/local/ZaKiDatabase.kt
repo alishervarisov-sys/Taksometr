@@ -2,17 +2,28 @@ package com.zaki.taksometr.data.local
 
 import androidx.room.Database
 import androidx.room.RoomDatabase
+import com.zaki.taksometr.data.local.dao.ChainDeliveryItemDao
+import com.zaki.taksometr.data.local.dao.DeliveryChainDao
 import com.zaki.taksometr.data.local.dao.DeliveryDao
 import com.zaki.taksometr.data.local.dao.RoutePointDao
+import com.zaki.taksometr.data.local.entity.ChainDeliveryItemEntity
+import com.zaki.taksometr.data.local.entity.DeliveryChainEntity
 import com.zaki.taksometr.data.local.entity.DeliveryEntity
 import com.zaki.taksometr.data.local.entity.RoutePointEntity
 
 @Database(
-    entities = [RoutePointEntity::class, DeliveryEntity::class],
-    version = 2,
+    entities = [
+        RoutePointEntity::class,
+        DeliveryEntity::class,
+        DeliveryChainEntity::class,
+        ChainDeliveryItemEntity::class
+    ],
+    version = 3,
     exportSchema = false
 )
 abstract class ZaKiDatabase : RoomDatabase() {
     abstract fun routePointDao(): RoutePointDao
     abstract fun deliveryDao(): DeliveryDao
+    abstract fun deliveryChainDao(): DeliveryChainDao
+    abstract fun chainDeliveryItemDao(): ChainDeliveryItemDao
 }

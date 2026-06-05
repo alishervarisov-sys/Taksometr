@@ -32,6 +32,39 @@
         { "fieldPath": "login", "order": "ASCENDING" },
         { "fieldPath": "passwordHash", "order": "ASCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "delivery_chains",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "courierId", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "delivery_chains",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "courierId", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "chain_delivery_items",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "chainId", "order": "ASCENDING" },
+        { "fieldPath": "sequenceOrder", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "chain_delivery_items",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "chainId", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []

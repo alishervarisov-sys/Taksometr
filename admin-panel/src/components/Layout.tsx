@@ -15,7 +15,8 @@ import {
   Logout as LogoutIcon,
   AccountBalanceWallet as WalletIcon,
   VpnKey as KeyIcon,
-  AdminPanelSettings as AdminIcon
+  AdminPanelSettings as AdminIcon,
+  AccountTree as TreeIcon
 } from '@mui/icons-material';
 
 const drawerWidth = 260;
@@ -34,6 +35,7 @@ const Layout: React.FC<LayoutProps> = ({ onLogout, isSuperAdmin }) => {
     { text: 'Dashboard', icon: <DashboardIcon />, path: '/' },
     { text: 'Курьеры', icon: <PeopleIcon />, path: '/couriers' },
     { text: 'Доставки', icon: <DeliveryIcon />, path: '/deliveries' },
+    { text: 'Дерево заказов', icon: <TreeIcon />, path: '/delivery-chains' },
     { text: 'Тарифы', icon: <TariffIcon />, path: '/tariffs' },
     { text: 'Комиссия', icon: <WalletIcon />, path: '/commission' },
     { text: 'Логины', icon: <KeyIcon />, path: '/credentials' },

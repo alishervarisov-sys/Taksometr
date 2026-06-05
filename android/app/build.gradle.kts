@@ -116,6 +116,9 @@ dependencies {
     // Splash Screen
     implementation("androidx.core:core-splashscreen:1.0.1")
 
+    // Reorderable list for drag & drop
+    implementation("org.burnoutcrew.composereorderable:reorderable:0.9.6")
+
     // Testing
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")

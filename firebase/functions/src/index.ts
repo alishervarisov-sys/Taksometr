@@ -997,150 +997,6 @@ export const updateCourierCredentials = functions.https.onCall(async (data, cont
   return {success: true};
 });
 
-// ============ ADMIN: COMPLETE DELIVERY ============
-export const adminCompleteDelivery = functions.https.onCall(async (data, context) => {
-  const {adminId, deliveryId} = data;
-
-  // Verify admin
-  await verifyAdmin(adminId);
-
-  if (!deliveryId) {
-    throw new functions.https.HttpsError("invalid-argument", "deliveryId required");
-  }
-
-  // Get delivery
-  const deliveryRef = db.collection("deliveries").doc(deliveryId);
-  const deliveryDoc = await deliveryRef.get();
-
-  if (!deliveryDoc.exists) {
-    throw new functions.https.HttpsError("not-found", "Delivery not found");
-  }
-
-  const deliveryData = deliveryDoc.data()!;
-
-  if (deliveryData.status !== "IN_PROGRESS") {
-    throw new functions.https.HttpsError(
-      "failed-precondition",
-      "Delivery is not in progress"
-    );
-  }
-
-  // Calculate distance from route (if exists)
-  const routePoints = deliveryData.route || [];
-  const distanceMeters = calculateRouteDistance(routePoints);
-
-  // Get tariff
-  const tariffDoc = await db.collection("tariffs").doc("default").get();
-  let baseCost = 5000;
-  let baseDistanceKm = 3;
-  let costPerKm = 1500;
-
-  if (tariffDoc.exists) {
-    const tariffData = tariffDoc.data()!;
-    baseCost = tariffData.baseCost || 5000;
-    baseDistanceKm = tariffData.baseDistanceKm ?? 3;
-    costPerKm = tariffData.costPerKm || 1500;
-  }
-
-  // Calculate cost
-  const roundedCost = computeCost(distanceMeters, baseCost, baseDistanceKm, costPerKm);
-
-  // Calculate waiting cost
-  const freeWaitingMinutes = tariffDoc.exists
-    ? (tariffDoc.data()!.freeWaitingMinutes ?? 5)
-    : 5;
-  const costPerWaitingMinute = tariffDoc.exists
-    ? (tariffDoc.data()!.costPerWaitingMinute ?? 500)
-    : 500;
-
-  const actualWaitingMinutes = deliveryData.waitingMinutes || 0;
-  let waitingCost = 0;
-  if (actualWaitingMinutes > freeWaitingMinutes) {
-    waitingCost = Math.ceil((actualWaitingMinutes - freeWaitingMinutes) * costPerWaitingMinute);
-  }
-
-  const totalCost = roundedCost + waitingCost;
-
-  // Commission logic
-  const courierId = deliveryData.courierId;
-  const courierRef = db.collection("users").doc(courierId);
-  const courierDoc2 = await courierRef.get();
-  const courierData2 = courierDoc2.exists ? courierDoc2.data()! : {};
-
-  let commissionPercent: number;
-  if (courierData2.commissionPercent !== undefined && courierData2.commissionPercent !== null) {
-    commissionPercent = courierData2.commissionPercent;
-  } else {
-    const settingsDoc = await db.collection("settings").doc("commission").get();
-    commissionPercent = settingsDoc.exists
-      ? (settingsDoc.data()!.percent || 0)
-      : 0;
-  }
-  const commissionAmount = Math.ceil(totalCost * commissionPercent / 100);
-
-  // Deduct commission from courier balance
-  const currentBalance = courierData2.balance || 0;
-  const newBalance = currentBalance - commissionAmount;
-
-  await courierRef.update({balance: newBalance});
-
-  // Record commission transaction
-  if (commissionAmount > 0) {
-    await db.collection("transactions").add({
-      courierId: courierId,
-      courierName: deliveryData.courierName || "",
-      type: "COMMISSION",
-      amount: -commissionAmount,
-      deliveryId: deliveryId,
-      balanceAfter: newBalance,
-      description: `Комиссия ${commissionPercent}% за доставку (завершена администратором)`,
-      createdAt: Date.now(),
-    });
-  }
-
-  const endTime = Date.now();
-
-  // Update delivery
-  await deliveryRef.update({
-    status: "COMPLETED",
-    endTime: endTime,
-    distanceMeters: distanceMeters,
-    cost: totalCost,
-    waitingMinutes: actualWaitingMinutes,
-    waitingCost: waitingCost,
-    commission: commissionAmount,
-    completedBy: "ADMIN",
-    completedByAdminId: adminId,
-  });
-
-  // Send SMS to client
-  const distanceKmText = (distanceMeters / 1000).toFixed(1);
-  let completeSmsText =
-    `Фармоиши ZaKi анҷом ёфт. ` +
-    `Масофа: ${distanceKmText} км. `;
-
-  if (waitingCost > 0) {
-    const waitingMinsRounded = Math.ceil(actualWaitingMinutes);
-    completeSmsText +=
-      `Интизорӣ: ${waitingMinsRounded} дақ. (${formatCostForSms(waitingCost)} сомонӣ). `;
-  }
-
-  completeSmsText +=
-    `Маблағи умумӣ: ${formatCostForSms(totalCost)} сомонӣ. ` +
-    `Барои хариди хӯрок, дору ва дигар молҳо барномаи ZaKi-ро боргирӣ кунед: https://clck.ru/3TuGb6 ` +
-    `Ташаккур!`;
-
-  await sendSms(deliveryData.clientPhone, completeSmsText);
-
-  return {
-    success: true,
-    deliveryId: deliveryId,
-    cost: totalCost,
-    commission: commissionAmount,
-    distanceMeters: distanceMeters,
-  };
-});
-
 // ============ ADMIN: ASSIGN COURIER TO CLIENT ============
 export const assignCourierToClient = functions.https.onCall(async (data, context) => {
   const {adminId, courierId, clientPhone} = data;
@@ -1210,4 +1066,665 @@ export const assignCourierToClient = functions.https.onCall(async (data, context
     courierName: courierName,
     clientPhone: clientPhone,
   };
+});
+
+
+// ============ DELIVERY CHAINS ============
+
+// Start delivery chain (called by courier app)
+export const startDeliveryChain = functions.https.onCall(async (data, context) => {
+  const {chainId, courierId, items} = data;
+
+  if (!chainId || !courierId || !items || items.length === 0) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "chainId, courierId, and items are required"
+    );
+  }
+
+  // Verify courier
+  const courierDoc = await db.collection("users").doc(courierId).get();
+  if (!courierDoc.exists) {
+    throw new functions.https.HttpsError("not-found", "Courier not found");
+  }
+
+  const courierData = courierDoc.data()!;
+  if (courierData.isBlocked) {
+    throw new functions.https.HttpsError(
+      "permission-denied",
+      "Courier is blocked"
+    );
+  }
+
+  // Check balance
+  const courierBalance = courierData.balance || 0;
+  if (courierBalance < 5) {
+    throw new functions.https.HttpsError(
+      "failed-precondition",
+      "Недостаточно средств на балансе. Минимум 5 сомони для начала доставки."
+    );
+  }
+
+  // Check for active delivery or chain
+  const activeDeliveries = await db.collection("deliveries")
+    .where("courierId", "==", courierId)
+    .where("status", "==", "IN_PROGRESS")
+    .get();
+
+  if (!activeDeliveries.empty) {
+    throw new functions.https.HttpsError(
+      "already-exists",
+      "Courier already has an active delivery"
+    );
+  }
+
+  const activeChains = await db.collection("delivery_chains")
+    .where("courierId", "==", courierId)
+    .where("status", "==", "IN_PROGRESS")
+    .get();
+
+  if (!activeChains.empty) {
+    throw new functions.https.HttpsError(
+      "already-exists",
+      "Courier already has an active chain"
+    );
+  }
+
+  // Create chain in Firestore
+  await db.collection("delivery_chains").doc(chainId).set({
+    courierId: courierId,
+    courierName: courierData.name || "",
+    status: "IN_PROGRESS",
+    createdAt: Date.now(),
+    startedAt: Date.now(),
+    totalDistance: 0,
+    totalCost: 0,
+  });
+
+  // Create chain items
+  const batch = db.batch();
+  for (const item of items) {
+    const itemRef = db.collection("chain_delivery_items").doc(item.id);
+    batch.set(itemRef, {
+      chainId: chainId,
+      clientPhone: item.clientPhone,
+      orderNumber: item.orderNumber,
+      sequenceOrder: item.sequenceOrder,
+      status: item.sequenceOrder === 1 ? "IN_PROGRESS" : "PENDING",
+      deliveryType: item.deliveryType || "default",
+      createdAt: Date.now(),
+    });
+  }
+  await batch.commit();
+
+  // Send SMS to first customer
+  const firstItem = items.find((item: any) => item.sequenceOrder === 1);
+  if (firstItem) {
+    const courierName = courierData.name || "";
+    const courierPhone = courierData.phone || "";
+    
+    let startSmsText = `Салом! Расонандаи ZaKi фармоиши шуморо қабул кард. `;
+    startSmsText += `Расонанда: ${courierName}`;
+    
+    if (courierPhone) {
+      startSmsText += `, тел: ${courierPhone}`;
+    }
+    
+    startSmsText += `. Рақами фармоиш: ${firstItem.orderNumber}`;
+
+    await sendSms(firstItem.clientPhone, startSmsText);
+  }
+
+  return {success: true, chainId: chainId};
+});
+
+// Complete current item in chain and move to next
+export const completeChainDelivery = functions.https.onCall(async (data, context) => {
+  const {chainId, itemId, route, waitingMinutes, endTime} = data;
+
+  if (!chainId || !itemId) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "chainId and itemId are required"
+    );
+  }
+
+  // Get chain
+  const chainRef = db.collection("delivery_chains").doc(chainId);
+  const chainDoc = await chainRef.get();
+  
+  if (!chainDoc.exists) {
+    throw new functions.https.HttpsError("not-found", "Chain not found");
+  }
+
+  const chainData = chainDoc.data()!;
+  if (chainData.status !== "IN_PROGRESS") {
+    throw new functions.https.HttpsError(
+      "failed-precondition",
+      "Chain is not in progress"
+    );
+  }
+
+  // Get item
+  const itemRef = db.collection("chain_delivery_items").doc(itemId);
+  const itemDoc = await itemRef.get();
+  
+  if (!itemDoc.exists) {
+    throw new functions.https.HttpsError("not-found", "Item not found");
+  }
+
+  const itemData = itemDoc.data()!;
+  if (itemData.status !== "IN_PROGRESS") {
+    throw new functions.https.HttpsError(
+      "failed-precondition",
+      "Item is not in progress"
+    );
+  }
+
+  // Calculate cost
+  const deliveryType = itemData.deliveryType || "default";
+  const fixedPrice = itemData.fixedPrice;
+  
+  let totalCost: number;
+  let distanceMeters = 0;
+  let waitingCost = 0;
+  
+  if (deliveryType !== "default" && fixedPrice !== null && fixedPrice !== undefined) {
+    // Fixed price
+    totalCost = fixedPrice;
+  } else {
+    // Calculate from route
+    const routePoints = route || [];
+    distanceMeters = calculateRouteDistance(routePoints);
+
+    const tariffDoc = await db.collection("tariffs").doc("default").get();
+    let baseCost = 5000;
+    let baseDistanceKm = 3;
+    let costPerKm = 1500;
+
+    if (tariffDoc.exists) {
+      const tariffData = tariffDoc.data()!;
+      baseCost = tariffData.baseCost || 5000;
+      baseDistanceKm = tariffData.baseDistanceKm ?? 3;
+      costPerKm = tariffData.costPerKm || 1500;
+    }
+
+    const roundedCost = computeCost(distanceMeters, baseCost, baseDistanceKm, costPerKm);
+
+    const freeWaitingMinutes = tariffDoc.exists
+      ? (tariffDoc.data()!.freeWaitingMinutes ?? 5)
+      : 5;
+    const costPerWaitingMinute = tariffDoc.exists
+      ? (tariffDoc.data()!.costPerWaitingMinute ?? 500)
+      : 500;
+
+    const actualWaitingMinutes = waitingMinutes || 0;
+    if (actualWaitingMinutes > freeWaitingMinutes) {
+      waitingCost = Math.ceil((actualWaitingMinutes - freeWaitingMinutes) * costPerWaitingMinute);
+    }
+
+    totalCost = roundedCost + waitingCost;
+  }
+
+  // Calculate commission
+  const courierRef = db.collection("users").doc(chainData.courierId);
+  const courierDoc = await courierRef.get();
+  const courierData = courierDoc.exists ? courierDoc.data()! : {};
+
+  let commissionPercent: number;
+  if (courierData.commissionPercent !== undefined && courierData.commissionPercent !== null) {
+    commissionPercent = courierData.commissionPercent;
+  } else {
+    const settingsDoc = await db.collection("settings").doc("commission").get();
+    commissionPercent = settingsDoc.exists ? (settingsDoc.data()!.percent || 0) : 0;
+  }
+  const commissionAmount = Math.ceil(totalCost * commissionPercent / 100);
+
+  // Deduct commission
+  const currentBalance = courierData.balance || 0;
+  const newBalance = currentBalance - commissionAmount;
+  await courierRef.update({balance: newBalance});
+
+  // Record transaction
+  if (commissionAmount > 0) {
+    await db.collection("transactions").add({
+      courierId: chainData.courierId,
+      courierName: chainData.courierName || "",
+      type: "COMMISSION",
+      amount: -commissionAmount,
+      chainId: chainId,
+      itemId: itemId,
+      balanceAfter: newBalance,
+      description: `Комиссия ${commissionPercent}% за доставку в цепочке`,
+      createdAt: Date.now(),
+    });
+  }
+
+  // Update item
+  await itemRef.update({
+    status: "COMPLETED",
+    endTime: endTime || Date.now(),
+    distanceMeters: distanceMeters,
+    cost: totalCost,
+    waitingMinutes: waitingMinutes || 0,
+    waitingCost: waitingCost,
+    commission: commissionAmount,
+  });
+
+  // Send completion SMS to current customer
+  let completeSmsText = `Фармоиши ZaKi анҷом ёфт. `;
+  completeSmsText += `Рақами фармоиш: ${itemData.orderNumber}. `;
+  
+  if (deliveryType !== "default" && fixedPrice) {
+    completeSmsText += `Навъи хидмат: ${deliveryType}. `;
+  } else {
+    const distanceKmText = (distanceMeters / 1000).toFixed(1);
+    completeSmsText += `Масофа: ${distanceKmText} км. `;
+    
+    if (waitingCost > 0) {
+      const waitingMinsRounded = Math.ceil(waitingMinutes || 0);
+      completeSmsText += `Интизорӣ: ${waitingMinsRounded} дақ. (${formatCostForSms(waitingCost)} сомонӣ). `;
+    }
+  }
+
+  completeSmsText += `Маблағи умумӣ: ${formatCostForSms(totalCost)} сомонӣ. Ташаккур!`;
+  await sendSms(itemData.clientPhone, completeSmsText);
+
+  // Check for next item
+  const allItems = await db.collection("chain_delivery_items")
+    .where("chainId", "==", chainId)
+    .orderBy("sequenceOrder", "asc")
+    .get();
+
+  const nextItem = allItems.docs.find(doc => 
+    doc.data().status === "PENDING"
+  );
+
+  if (nextItem) {
+    // Start next item
+    await nextItem.ref.update({
+      status: "IN_PROGRESS",
+      startTime: Date.now(),
+    });
+
+    // Send SMS to next customer
+    const nextData = nextItem.data();
+    const courierName = chainData.courierName || "";
+    const courierPhone = courierData.phone || "";
+    
+    let startSmsText = `Салом! Расонандаи ZaKi фармоиши шуморо қабул кард. `;
+    startSmsText += `Расонанда: ${courierName}`;
+    
+    if (courierPhone) {
+      startSmsText += `, тел: ${courierPhone}`;
+    }
+    
+    startSmsText += `. Рақами фармоиш: ${nextData.orderNumber}`;
+    await sendSms(nextData.clientPhone, startSmsText);
+  } else {
+    // All items completed - complete chain
+    const completedItems = allItems.docs.filter(doc => 
+      doc.data().status === "COMPLETED"
+    );
+    
+    const totalDistance = completedItems.reduce((sum, doc) => 
+      sum + (doc.data().distanceMeters || 0), 0
+    );
+    const totalChainCost = completedItems.reduce((sum, doc) => 
+      sum + (doc.data().cost || 0), 0
+    );
+
+    await chainRef.update({
+      status: "COMPLETED",
+      completedAt: Date.now(),
+      totalDistance: totalDistance,
+      totalCost: totalChainCost,
+    });
+  }
+
+  return {
+    success: true,
+    cost: totalCost,
+    distanceMeters: distanceMeters,
+    hasNext: !!nextItem,
+  };
+});
+
+// Cancel delivery chain
+export const cancelDeliveryChain = functions.https.onCall(async (data, context) => {
+  const {chainId, courierId} = data;
+
+  if (!chainId || !courierId) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "chainId and courierId are required"
+    );
+  }
+
+  const chainRef = db.collection("delivery_chains").doc(chainId);
+  const chainDoc = await chainRef.get();
+  
+  if (!chainDoc.exists) {
+    throw new functions.https.HttpsError("not-found", "Chain not found");
+  }
+
+  const chainData = chainDoc.data()!;
+  if (chainData.courierId !== courierId) {
+    throw new functions.https.HttpsError(
+      "permission-denied",
+      "Not authorized"
+    );
+  }
+
+  // Update chain
+  await chainRef.update({
+    status: "CANCELLED",
+    completedAt: Date.now(),
+  });
+
+  // Cancel all pending items
+  const items = await db.collection("chain_delivery_items")
+    .where("chainId", "==", chainId)
+    .where("status", "in", ["PENDING", "IN_PROGRESS"])
+    .get();
+
+  const batch = db.batch();
+  items.docs.forEach(doc => {
+    batch.update(doc.ref, {status: "CANCELLED"});
+  });
+  await batch.commit();
+
+  return {success: true};
+});
+
+// Admin: Create and assign delivery chain to courier
+export const adminCreateDeliveryChain = functions.https.onCall(async (data, context) => {
+  const {adminId, courierId, items} = data;
+
+  // Verify admin
+  await verifyAdmin(adminId);
+
+  if (!courierId || !items || items.length === 0) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "courierId and items are required"
+    );
+  }
+
+  // Verify courier
+  const courierDoc = await db.collection("users").doc(courierId).get();
+  if (!courierDoc.exists) {
+    throw new functions.https.HttpsError("not-found", "Courier not found");
+  }
+
+  const courierData = courierDoc.data()!;
+  if (courierData.isBlocked) {
+    throw new functions.https.HttpsError(
+      "permission-denied",
+      "Courier is blocked"
+    );
+  }
+
+  // Check balance
+  const courierBalance = courierData.balance || 0;
+  if (courierBalance < 5) {
+    throw new functions.https.HttpsError(
+      "failed-precondition",
+      "Недостаточно средств на балансе курьера. Минимум 5 сомони."
+    );
+  }
+
+  // Check for active delivery or chain
+  const activeDeliveries = await db.collection("deliveries")
+    .where("courierId", "==", courierId)
+    .where("status", "==", "IN_PROGRESS")
+    .get();
+
+  if (!activeDeliveries.empty) {
+    throw new functions.https.HttpsError(
+      "already-exists",
+      "Courier already has an active delivery"
+    );
+  }
+
+  const activeChains = await db.collection("delivery_chains")
+    .where("courierId", "==", courierId)
+    .where("status", "==", "IN_PROGRESS")
+    .get();
+
+  if (!activeChains.empty) {
+    throw new functions.https.HttpsError(
+      "already-exists",
+      "Courier already has an active chain"
+    );
+  }
+
+  // Create chain
+  const chainRef = db.collection("delivery_chains").doc();
+  await chainRef.set({
+    courierId: courierId,
+    courierName: courierData.name || "",
+    status: "IN_PROGRESS",
+    createdAt: Date.now(),
+    startedAt: Date.now(),
+    totalDistance: 0,
+    totalCost: 0,
+  });
+
+  // Create chain items
+  const batch = db.batch();
+  items.forEach((item: any, index: number) => {
+    const itemRef = db.collection("chain_delivery_items").doc();
+    batch.set(itemRef, {
+      chainId: chainRef.id,
+      clientPhone: item.clientPhone,
+      orderNumber: item.orderNumber,
+      sequenceOrder: index + 1,
+      status: index === 0 ? "IN_PROGRESS" : "PENDING",
+      deliveryType: item.deliveryType || "default",
+      createdAt: Date.now(),
+    });
+  });
+  await batch.commit();
+
+  // Send SMS to first customer
+  const firstItem = items[0];
+  if (firstItem) {
+    const courierName = courierData.name || "";
+    const courierPhone = courierData.phone || "";
+    
+    let startSmsText = `Салом! Расонандаи ZaKi фармоиши шуморо қабул кард. `;
+    startSmsText += `Расонанда: ${courierName}`;
+    
+    if (courierPhone) {
+      startSmsText += `, тел: ${courierPhone}`;
+    }
+    
+    startSmsText += `. Рақами фармоиш: ${firstItem.orderNumber}`;
+    await sendSms(firstItem.clientPhone, startSmsText);
+  }
+
+  // Send notification to courier
+  const fcmToken = courierData.fcmToken;
+  if (fcmToken) {
+    try {
+      await admin.messaging().send({
+        token: fcmToken,
+        notification: {
+          title: "Новая цепочка заказов",
+          body: `Вам назначена цепочка из ${items.length} заказов`,
+        },
+        data: {
+          type: "NEW_CHAIN",
+          chainId: chainRef.id,
+        },
+      });
+    } catch (e) {
+      console.error("FCM send error:", e);
+    }
+  }
+
+  return {success: true, chainId: chainRef.id};
+});
+
+// Admin: Cancel delivery chain
+export const adminCancelDeliveryChain = functions.https.onCall(async (data, context) => {
+  const {adminId, chainId} = data;
+
+  // Verify admin
+  await verifyAdmin(adminId);
+
+  if (!chainId) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "chainId is required"
+    );
+  }
+
+  const chainRef = db.collection("delivery_chains").doc(chainId);
+  const chainDoc = await chainRef.get();
+  
+  if (!chainDoc.exists) {
+    throw new functions.https.HttpsError("not-found", "Chain not found");
+  }
+
+  // Update chain
+  await chainRef.update({
+    status: "CANCELLED",
+    completedAt: Date.now(),
+  });
+
+  // Cancel all pending items
+  const items = await db.collection("chain_delivery_items")
+    .where("chainId", "==", chainId)
+    .where("status", "in", ["PENDING", "IN_PROGRESS"])
+    .get();
+
+  const batch = db.batch();
+  items.docs.forEach(doc => {
+    batch.update(doc.ref, {status: "CANCELLED"});
+  });
+  await batch.commit();
+
+  return {success: true};
+});
+
+// Admin: Complete delivery (for problem deliveries)
+export const adminCompleteDelivery = functions.https.onCall(async (data, context) => {
+  const {adminId, deliveryId} = data;
+
+  // Verify admin
+  await verifyAdmin(adminId);
+
+  if (!deliveryId) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "deliveryId is required"
+    );
+  }
+
+  // Get delivery
+  const deliveryRef = db.collection("deliveries").doc(deliveryId);
+  const deliveryDoc = await deliveryRef.get();
+
+  if (!deliveryDoc.exists) {
+    throw new functions.https.HttpsError("not-found", "Delivery not found");
+  }
+
+  const deliveryData = deliveryDoc.data()!;
+
+  if (deliveryData.status !== "IN_PROGRESS") {
+    throw new functions.https.HttpsError(
+      "failed-precondition",
+      "Delivery is not in progress"
+    );
+  }
+
+  // Use existing route or empty
+  const route = deliveryData.route || [];
+  const distanceMeters = route.length > 0 ? calculateRouteDistance(route) : 0;
+
+  // Check if fixed price
+  const deliveryType = deliveryData.deliveryType || "default";
+  const fixedPrice = deliveryData.fixedPrice;
+  
+  let totalCost: number;
+  
+  if (deliveryType !== "default" && fixedPrice !== null && fixedPrice !== undefined) {
+    totalCost = fixedPrice;
+  } else {
+    // Calculate cost
+    const tariffDoc = await db.collection("tariffs").doc("default").get();
+    let baseCost = 5000;
+    let baseDistanceKm = 3;
+    let costPerKm = 1500;
+
+    if (tariffDoc.exists) {
+      const tariffData = tariffDoc.data()!;
+      baseCost = tariffData.baseCost || 5000;
+      baseDistanceKm = tariffData.baseDistanceKm ?? 3;
+      costPerKm = tariffData.costPerKm || 1500;
+    }
+
+    totalCost = computeCost(distanceMeters, baseCost, baseDistanceKm, costPerKm);
+  }
+
+  // Calculate commission
+  const courierRef = db.collection("users").doc(deliveryData.courierId);
+  const courierDoc = await courierRef.get();
+  const courierData = courierDoc.exists ? courierDoc.data()! : {};
+
+  let commissionPercent: number;
+  if (courierData.commissionPercent !== undefined && courierData.commissionPercent !== null) {
+    commissionPercent = courierData.commissionPercent;
+  } else {
+    const settingsDoc = await db.collection("settings").doc("commission").get();
+    commissionPercent = settingsDoc.exists ? (settingsDoc.data()!.percent || 0) : 0;
+  }
+  const commissionAmount = Math.ceil(totalCost * commissionPercent / 100);
+
+  // Deduct commission
+  const currentBalance = courierData.balance || 0;
+  const newBalance = currentBalance - commissionAmount;
+  await courierRef.update({balance: newBalance});
+
+  // Record transaction
+  if (commissionAmount > 0) {
+    await db.collection("transactions").add({
+      courierId: deliveryData.courierId,
+      courierName: deliveryData.courierName || "",
+      type: "COMMISSION",
+      amount: -commissionAmount,
+      deliveryId: deliveryId,
+      balanceAfter: newBalance,
+      description: `Комиссия ${commissionPercent}% за доставку (завершена админом)`,
+      createdAt: Date.now(),
+    });
+  }
+
+  // Update delivery
+  await deliveryRef.update({
+    status: "COMPLETED",
+    endTime: Date.now(),
+    distanceMeters: distanceMeters,
+    cost: totalCost,
+    waitingMinutes: 0,
+    waitingCost: 0,
+    commission: commissionAmount,
+  });
+
+  // Send SMS to client
+  let completeSmsText = `Фармоиши ZaKi анҷом ёфт. `;
+  
+  if (deliveryType !== "default" && fixedPrice) {
+    completeSmsText += `Навъи хидмат: ${deliveryType}. `;
+  } else if (distanceMeters > 0) {
+    const distanceKmText = (distanceMeters / 1000).toFixed(1);
+    completeSmsText += `Масофа: ${distanceKmText} км. `;
+  }
+
+  completeSmsText += `Маблағи умумӣ: ${formatCostForSms(totalCost)} сомонӣ. Ташаккур!`;
+  await sendSms(deliveryData.clientPhone, completeSmsText);
+
+  return {success: true};
 });
