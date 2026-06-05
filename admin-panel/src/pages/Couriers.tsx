@@ -3,7 +3,7 @@ import {
   Box, Typography, Card, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, Button, Dialog, DialogTitle, DialogContent,
   DialogActions, TextField, IconButton, Chip, Alert, MenuItem,
-  Grid, InputLabel
+  Grid, InputLabel, CardContent
 } from '@mui/material';
 import { Add, Block, Delete, History, PersonAdd, Edit } from '@mui/icons-material';
 import { collection, getDocs, doc, updateDoc, deleteDoc, query, where, orderBy } from 'firebase/firestore';
@@ -38,6 +38,17 @@ interface Transaction {
   createdAt: number;
 }
 
+interface Delivery {
+  id: string;
+  courierId: string;
+  clientPhone: string;
+  cost: number;
+  commission: number;
+  distanceMeters: number;
+  createdAt: number;
+  status: string;
+}
+
 const TAJIKISTAN_CITIES = [
   'Душанбе', 'Худжанд', 'Бохтар (Курган-Тюбе)', 'Куляб', 'Истаравшан',
   'Турсунзаде', 'Исфара', 'Канибадам', 'Пенджикент', 'Вахдат',
@@ -60,7 +71,14 @@ const Couriers: React.FC<CouriersProps> = ({ adminId }) => {
   // History dialog
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyCourier, setHistoryCourier] = useState<Courier | null>(null);
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [historyPeriod, setHistoryPeriod] = useState<'today' | 'yesterday' | 'week' | 'month' | 'year' | 'all'>('all');
+  const [historyStats, setHistoryStats] = useState<{
+    deliveries: Delivery[];
+    totalDeliveries: number;
+    totalEarnings: number;
+    totalCommission: number;
+    netEarnings: number;
+  } | null>(null);
 
   // Assign to client dialog
   const [assignOpen, setAssignOpen] = useState(false);
@@ -166,19 +184,93 @@ const Couriers: React.FC<CouriersProps> = ({ adminId }) => {
     }
   };
 
+  const getDateRange = (p: typeof historyPeriod): { start: number; end: number } => {
+    const now = new Date();
+    let start = 0;
+    let end = now.getTime();
+    
+    switch (p) {
+      case 'today': {
+        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        start = todayStart.getTime();
+        end = now.getTime();
+        break;
+      }
+      case 'yesterday': {
+        const yesterdayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+        const yesterdayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        start = yesterdayStart.getTime();
+        end = yesterdayEnd.getTime() - 1;
+        break;
+      }
+      case 'week': 
+        start = end - 7 * 86400000; 
+        break;
+      case 'month': 
+        start = end - 30 * 86400000; 
+        break;
+      case 'year': 
+        start = end - 365 * 86400000; 
+        break;
+      default: 
+        start = 0;
+    }
+    return { start, end };
+  };
+
   const handleShowHistory = async (courier: Courier) => {
     setHistoryCourier(courier);
+    setHistoryPeriod('all');
     setHistoryOpen(true);
+    await loadHistoryStats(courier, 'all');
+  };
+
+  const loadHistoryStats = async (courier: Courier, period: typeof historyPeriod) => {
     try {
-      const q = query(
-        collection(db, 'transactions'),
+      const { start, end } = getDateRange(period);
+      
+      // Load deliveries
+      let q = query(
+        collection(db, 'deliveries'),
         where('courierId', '==', courier.id),
-        orderBy('createdAt', 'desc')
+        where('status', '==', 'COMPLETED')
       );
+      
       const snapshot = await getDocs(q);
-      setTransactions(snapshot.docs.map(d => ({ id: d.id, ...d.data() })) as Transaction[]);
-    } catch {
-      setTransactions([]);
+      const allDeliveries = snapshot.docs.map(d => ({
+        id: d.id,
+        ...d.data()
+      })) as Delivery[];
+      
+      // Filter by date range
+      const filteredDeliveries = allDeliveries.filter(d => {
+        if (period === 'all') return true;
+        return d.createdAt >= start && d.createdAt <= end;
+      });
+      
+      // Calculate stats
+      const totalDeliveries = filteredDeliveries.length;
+      const totalEarnings = filteredDeliveries.reduce((sum, d) => sum + (d.cost || 0), 0);
+      const totalCommission = filteredDeliveries.reduce((sum, d) => sum + (d.commission || 0), 0);
+      const netEarnings = totalEarnings - totalCommission;
+      
+      setHistoryStats({
+        deliveries: filteredDeliveries,
+        totalDeliveries,
+        totalEarnings,
+        totalCommission,
+        netEarnings,
+      });
+    } catch (err) {
+      console.error('Error loading history:', err);
+      setHistoryStats(null);
+    }
+  };
+
+  const handleHistoryPeriodChange = (period: typeof historyPeriod) => {
+    setHistoryPeriod(period);
+    if (historyCourier) {
+      loadHistoryStats(historyCourier, period);
     }
   };
 
@@ -420,48 +512,138 @@ const Couriers: React.FC<CouriersProps> = ({ adminId }) => {
 
       {/* History dialog */}
       <Dialog open={historyOpen} onClose={() => setHistoryOpen(false)} maxWidth="md" fullWidth>
-        <DialogTitle>История: {historyCourier?.name}</DialogTitle>
+        <DialogTitle>
+          История доставок: {historyCourier?.name} {historyCourier?.surname}
+        </DialogTitle>
         <DialogContent>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            Баланс: {(historyCourier?.balance || 0).toLocaleString()} сомони
-          </Typography>
-          <TableContainer>
-            <Table size="small">
-              <TableHead>
-                <TableRow>
-                  <TableCell>Дата</TableCell>
-                  <TableCell>Тип</TableCell>
-                  <TableCell>Сумма</TableCell>
-                  <TableCell>Баланс после</TableCell>
-                  <TableCell>Описание</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {transactions.map((tx) => (
-                  <TableRow key={tx.id}>
-                    <TableCell>{new Date(tx.createdAt).toLocaleString('ru-RU')}</TableCell>
-                    <TableCell>
-                      <Chip
-                        label={tx.type === 'TOP_UP' ? 'Пополнение' : 'Комиссия'}
-                        color={tx.type === 'TOP_UP' ? 'success' : 'warning'}
-                        size="small"
-                      />
-                    </TableCell>
-                    <TableCell sx={{ color: tx.amount >= 0 ? 'green' : 'red', fontWeight: 600 }}>
-                      {tx.amount >= 0 ? '+' : ''}{tx.amount.toLocaleString()} сомони
-                    </TableCell>
-                    <TableCell>{tx.balanceAfter?.toLocaleString()} сомони</TableCell>
-                    <TableCell>{tx.description}</TableCell>
-                  </TableRow>
-                ))}
-                {transactions.length === 0 && (
-                  <TableRow>
-                    <TableCell colSpan={5} align="center">Нет операций</TableCell>
-                  </TableRow>
-                )}
-              </TableBody>
-            </Table>
-          </TableContainer>
+          <Box sx={{ mb: 3 }}>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              Текущий баланс: <strong>{(historyCourier?.balance || 0).toLocaleString()} сомони</strong>
+            </Typography>
+            
+            {/* Period selector */}
+            <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 3 }}>
+              {[
+                { value: 'today', label: 'Сегодня' },
+                { value: 'yesterday', label: 'Вчера' },
+                { value: 'week', label: 'Неделя' },
+                { value: 'month', label: 'Месяц' },
+                { value: 'year', label: 'Год' },
+                { value: 'all', label: 'Всё время' },
+              ].map(period => (
+                <Button
+                  key={period.value}
+                  variant={historyPeriod === period.value ? 'contained' : 'outlined'}
+                  size="small"
+                  onClick={() => handleHistoryPeriodChange(period.value as typeof historyPeriod)}
+                >
+                  {period.label}
+                </Button>
+              ))}
+            </Box>
+
+            {/* Stats cards */}
+            {historyStats && (
+              <Grid container spacing={2} sx={{ mb: 3 }}>
+                <Grid item xs={12} sm={3}>
+                  <Card sx={{ bgcolor: 'primary.main', color: 'white' }}>
+                    <CardContent sx={{ textAlign: 'center', py: 2 }}>
+                      <Typography variant="h4" sx={{ fontWeight: 700 }}>
+                        {historyStats.totalDeliveries}
+                      </Typography>
+                      <Typography variant="body2">
+                        Доставок
+                      </Typography>
+                    </CardContent>
+                  </Card>
+                </Grid>
+                <Grid item xs={12} sm={3}>
+                  <Card sx={{ bgcolor: 'success.main', color: 'white' }}>
+                    <CardContent sx={{ textAlign: 'center', py: 2 }}>
+                      <Typography variant="h5" sx={{ fontWeight: 700 }}>
+                        {historyStats.totalEarnings.toLocaleString()}
+                      </Typography>
+                      <Typography variant="body2">
+                        Заработок
+                      </Typography>
+                    </CardContent>
+                  </Card>
+                </Grid>
+                <Grid item xs={12} sm={3}>
+                  <Card sx={{ bgcolor: 'warning.main', color: 'white' }}>
+                    <CardContent sx={{ textAlign: 'center', py: 2 }}>
+                      <Typography variant="h5" sx={{ fontWeight: 700 }}>
+                        {historyStats.totalCommission.toLocaleString()}
+                      </Typography>
+                      <Typography variant="body2">
+                        Комиссия
+                      </Typography>
+                    </CardContent>
+                  </Card>
+                </Grid>
+                <Grid item xs={12} sm={3}>
+                  <Card sx={{ bgcolor: 'info.main', color: 'white' }}>
+                    <CardContent sx={{ textAlign: 'center', py: 2 }}>
+                      <Typography variant="h5" sx={{ fontWeight: 700 }}>
+                        {historyStats.netEarnings.toLocaleString()}
+                      </Typography>
+                      <Typography variant="body2">
+                        Чистый заработок
+                      </Typography>
+                    </CardContent>
+                  </Card>
+                </Grid>
+              </Grid>
+            )}
+
+            {/* Deliveries list */}
+            {historyStats && historyStats.deliveries.length > 0 && (
+              <TableContainer>
+                <Table size="small">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>Дата</TableCell>
+                      <TableCell>Клиент</TableCell>
+                      <TableCell>Расстояние</TableCell>
+                      <TableCell>Стоимость</TableCell>
+                      <TableCell>Комиссия</TableCell>
+                      <TableCell>Чистый</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {historyStats.deliveries.map((delivery) => (
+                      <TableRow key={delivery.id}>
+                        <TableCell>
+                          {new Date(delivery.createdAt).toLocaleDateString('ru-RU')}
+                        </TableCell>
+                        <TableCell>{delivery.clientPhone}</TableCell>
+                        <TableCell>
+                          {delivery.distanceMeters 
+                            ? `${(delivery.distanceMeters / 1000).toFixed(1)} км`
+                            : '—'}
+                        </TableCell>
+                        <TableCell sx={{ color: 'success.main', fontWeight: 600 }}>
+                          {(delivery.cost || 0).toLocaleString()} с
+                        </TableCell>
+                        <TableCell sx={{ color: 'warning.main', fontWeight: 600 }}>
+                          {(delivery.commission || 0).toLocaleString()} с
+                        </TableCell>
+                        <TableCell sx={{ color: 'info.main', fontWeight: 600 }}>
+                          {((delivery.cost || 0) - (delivery.commission || 0)).toLocaleString()} с
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            )}
+
+            {historyStats && historyStats.deliveries.length === 0 && (
+              <Alert severity="info">
+                Нет доставок за выбранный период
+              </Alert>
+            )}
+          </Box>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setHistoryOpen(false)}>Закрыть</Button>
