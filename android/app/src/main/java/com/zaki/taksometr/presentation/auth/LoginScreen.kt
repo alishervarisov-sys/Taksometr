@@ -1,4 +1,4 @@
-package com.zaki.taksometr.presentation.auth
+﻿package com.zaki.taksometr.presentation.auth
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
@@ -18,6 +18,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.LocalFocusManager
+import com.zaki.taksometr.util.str
+import com.zaki.taksometr.util.Strings
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -124,7 +126,7 @@ fun LoginScreen(
                     OutlinedTextField(
                         value = state.password,
                         onValueChange = viewModel::onPasswordChange,
-                        label = { Text("Пароль") },
+                        label = { Text(str(Strings.password)) },
                         leadingIcon = {
                             Icon(Icons.Default.Lock, contentDescription = "Пароль")
                         },

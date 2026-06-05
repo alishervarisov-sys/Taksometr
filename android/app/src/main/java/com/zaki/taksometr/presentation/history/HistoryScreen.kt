@@ -1,4 +1,4 @@
-package com.zaki.taksometr.presentation.history
+﻿package com.zaki.taksometr.presentation.history
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -20,6 +20,8 @@ import com.zaki.taksometr.domain.model.Delivery
 import com.zaki.taksometr.domain.model.DeliveryStatus
 import com.zaki.taksometr.presentation.theme.*
 import com.zaki.taksometr.util.LocationUtils
+import com.zaki.taksometr.util.str
+import com.zaki.taksometr.util.Strings
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -45,10 +47,10 @@ fun HistoryScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("История доставок") },
+                title = { Text(str(Strings.deliveryHistory)) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Назад")
+                        Icon(Icons.Default.ArrowBack, contentDescription = str(Strings.back))
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -74,7 +76,7 @@ fun HistoryScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 12.dp),
-                placeholder = { Text("Поиск по номеру телефона") },
+                placeholder = { Text(str(Strings.searchByPhone)) },
                 leadingIcon = {
                     Icon(Icons.Default.Search, contentDescription = null)
                 },

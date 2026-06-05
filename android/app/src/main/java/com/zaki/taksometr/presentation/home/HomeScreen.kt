@@ -35,6 +35,8 @@ import com.google.accompanist.permissions.rememberMultiplePermissionsState
 import com.zaki.taksometr.presentation.theme.*
 import com.zaki.taksometr.service.LocationTrackingService
 import com.zaki.taksometr.util.LocationUtils
+import com.zaki.taksometr.util.str
+import com.zaki.taksometr.util.Strings
 
 @OptIn(ExperimentalPermissionsApi::class, ExperimentalMaterial3Api::class)
 @Composable
@@ -114,14 +116,14 @@ fun HomeScreen(
                 )
                 Spacer(modifier = Modifier.height(24.dp))
                 Text(
-                    text = "Местоположение отключено",
+                    text = str(Strings.locationDisabled),
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold,
                     textAlign = TextAlign.Center
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 Text(
-                    text = "Для работы приложения необходимо включить GPS и разрешить доступ к местоположению.",
+                    text = str(Strings.locationDisabledMessage),
                     style = MaterialTheme.typography.bodyLarge,
                     textAlign = TextAlign.Center,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
@@ -136,7 +138,7 @@ fun HomeScreen(
                     ) {
                         Icon(Icons.Default.Security, contentDescription = null)
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Разрешить доступ")
+                        Text(str(Strings.allowAccess))
                     }
                     Spacer(modifier = Modifier.height(12.dp))
                 }
@@ -152,7 +154,7 @@ fun HomeScreen(
                     ) {
                         Icon(Icons.Default.GpsFixed, contentDescription = null)
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Включить GPS")
+                        Text(str(Strings.enableGPS))
                     }
                 }
             }
@@ -186,16 +188,16 @@ fun HomeScreen(
                 },
                 actions = {
                     IconButton(onClick = { showLanguageDialog = true }) {
-                        Icon(Icons.Outlined.Language, contentDescription = "Язык")
+                        Icon(Icons.Outlined.Language, contentDescription = str(Strings.language))
                     }
                     IconButton(onClick = onHistoryClick) {
-                        Icon(Icons.Default.History, contentDescription = "История")
+                        Icon(Icons.Default.History, contentDescription = str(Strings.history))
                     }
                     IconButton(onClick = {
                         viewModel.logout()
                         onLogout()
                     }) {
-                        Icon(Icons.Default.Logout, contentDescription = "Выход")
+                        Icon(Icons.Default.Logout, contentDescription = str(Strings.logout))
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -234,7 +236,7 @@ fun HomeScreen(
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = state.user?.name?.firstOrNull()?.uppercase() ?: "К",
+                            text = state.user?.name?.firstOrNull()?.uppercase() ?: str(Strings.courier).first().uppercase().toString(),
                             style = MaterialTheme.typography.headlineMedium,
                             color = MaterialTheme.colorScheme.onPrimary
                         )
@@ -247,7 +249,7 @@ fun HomeScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = state.user?.name ?: "Курьер",
+                                text = state.user?.name ?: str(Strings.courier),
                                 style = MaterialTheme.typography.titleLarge,
                                 fontWeight = FontWeight.Bold
                             )
@@ -280,7 +282,7 @@ fun HomeScreen(
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = if (state.user?.isOnline == true) "Онлайн" else "Оффлайн",
+                                text = if (state.user?.isOnline == true) str(Strings.online) else str(Strings.offline),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
                             )
@@ -299,14 +301,14 @@ fun HomeScreen(
                 StatCard(
                     modifier = Modifier.weight(1f),
                     icon = Icons.Default.AttachMoney,
-                    title = "Заработок",
+                    title = str(Strings.earnings),
                     value = LocationUtils.formatCost(state.todayStats.totalEarnings),
                     color = AccentGreen
                 )
                 StatCard(
                     modifier = Modifier.weight(1f),
                     icon = Icons.Default.DeliveryDining,
-                    title = "Доставки",
+                    title = str(Strings.deliveries),
                     value = "${state.todayStats.deliveryCount}",
                     color = AccentBlue
                 )
@@ -334,7 +336,7 @@ fun HomeScreen(
                 )
                 Spacer(modifier = Modifier.width(12.dp))
                 Text(
-                    text = "Начать поездку",
+                    text = str(Strings.startTrip),
                     style = MaterialTheme.typography.titleLarge
                 )
             }
@@ -347,7 +349,7 @@ fun HomeScreen(
     if (state.showDeliveryTypeDialog) {
         AlertDialog(
             onDismissRequest = { viewModel.hideDeliveryTypeDialog() },
-            title = { Text("Выберите тип доставки") },
+            title = { Text(str(Strings.selectDeliveryType)) },
             text = {
                 Column(
                     modifier = Modifier.fillMaxWidth()
@@ -355,8 +357,8 @@ fun HomeScreen(
                     DeliveryTypeOption(
                         selected = state.selectedDeliveryType == "default",
                         onClick = { viewModel.onDeliveryTypeSelected("default") },
-                        title = "По счётчику (обычная)",
-                        subtitle = "Оплата по километражу"
+                        title = str(Strings.counterBased),
+                        subtitle = str(Strings.paymentByKilometer)
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     
@@ -366,8 +368,8 @@ fun HomeScreen(
                             DeliveryTypeOption(
                                 selected = state.selectedDeliveryType == "coal",
                                 onClick = { viewModel.onDeliveryTypeSelected("coal") },
-                                title = "Уголь",
-                                subtitle = "Фиксированная цена: ${fixedTypes["coal"]?.toLong() ?: 0} сомони"
+                                title = str(Strings.coal),
+                                subtitle = "${str(Strings.fixedPrice)}: ${fixedTypes["coal"]?.toLong() ?: 0} ${str(Strings.somoni)}"
                             )
                             Spacer(modifier = Modifier.height(8.dp))
                         }
@@ -382,8 +384,8 @@ fun HomeScreen(
                                 DeliveryTypeOption(
                                     selected = state.selectedDeliveryType == "gas15",
                                     onClick = { viewModel.onDeliveryTypeSelected("gas15") },
-                                    title = "Газ до 15 литров",
-                                    subtitle = "Фиксированная цена: ${fixedTypes["gas15"]?.toLong() ?: 0} сомони"
+                                    title = str(Strings.gas15),
+                                    subtitle = "${str(Strings.fixedPrice)}: ${fixedTypes["gas15"]?.toLong() ?: 0} ${str(Strings.somoni)}"
                                 )
                                 Spacer(modifier = Modifier.height(8.dp))
                             }
@@ -392,8 +394,8 @@ fun HomeScreen(
                                 DeliveryTypeOption(
                                     selected = state.selectedDeliveryType == "gas30",
                                     onClick = { viewModel.onDeliveryTypeSelected("gas30") },
-                                    title = "Газ до 30 литров",
-                                    subtitle = "Фиксированная цена: ${fixedTypes["gas30"]?.toLong() ?: 0} сомони"
+                                    title = str(Strings.gas30),
+                                    subtitle = "${str(Strings.fixedPrice)}: ${fixedTypes["gas30"]?.toLong() ?: 0} ${str(Strings.somoni)}"
                                 )
                                 Spacer(modifier = Modifier.height(8.dp))
                             }
@@ -402,8 +404,8 @@ fun HomeScreen(
                                 DeliveryTypeOption(
                                     selected = state.selectedDeliveryType == "gas30plus",
                                     onClick = { viewModel.onDeliveryTypeSelected("gas30plus") },
-                                    title = "Газ более 30 литров",
-                                    subtitle = "Фиксированная цена: ${fixedTypes["gas30plus"]?.toLong() ?: 0} сомони"
+                                    title = str(Strings.gas30plus),
+                                    subtitle = "${str(Strings.fixedPrice)}: ${fixedTypes["gas30plus"]?.toLong() ?: 0} ${str(Strings.somoni)}"
                                 )
                                 Spacer(modifier = Modifier.height(8.dp))
                             }
@@ -413,8 +415,8 @@ fun HomeScreen(
                             DeliveryTypeOption(
                                 selected = state.selectedDeliveryType == "errands",
                                 onClick = { viewModel.onDeliveryTypeSelected("errands") },
-                                title = "Различные поручения",
-                                subtitle = "Фиксированная цена: ${fixedTypes["errands"]?.toLong() ?: 0} сомони"
+                                title = str(Strings.errands),
+                                subtitle = "${str(Strings.fixedPrice)}: ${fixedTypes["errands"]?.toLong() ?: 0} ${str(Strings.somoni)}"
                             )
                             Spacer(modifier = Modifier.height(8.dp))
                         }
@@ -423,8 +425,8 @@ fun HomeScreen(
                             DeliveryTypeOption(
                                 selected = state.selectedDeliveryType == "heavyCargo",
                                 onClick = { viewModel.onDeliveryTypeSelected("heavyCargo") },
-                                title = "Тяжелые грузы",
-                                subtitle = "Фиксированная цена: ${fixedTypes["heavyCargo"]?.toLong() ?: 0} сомони"
+                                title = str(Strings.heavyCargo),
+                                subtitle = "${str(Strings.fixedPrice)}: ${fixedTypes["heavyCargo"]?.toLong() ?: 0} ${str(Strings.somoni)}"
                             )
                         }
                     }
@@ -434,12 +436,12 @@ fun HomeScreen(
                 Button(
                     onClick = { viewModel.proceedToPhoneInput() }
                 ) {
-                    Text("Далее")
+                    Text(str(Strings.next))
                 }
             },
             dismissButton = {
                 TextButton(onClick = { viewModel.hideDeliveryTypeDialog() }) {
-                    Text("Отмена")
+                    Text(str(Strings.cancel))
                 }
             }
         )
@@ -449,13 +451,13 @@ fun HomeScreen(
     if (state.showStartDialog) {
         AlertDialog(
             onDismissRequest = { viewModel.hideStartDialog() },
-            title = { Text("Новая доставка") },
+            title = { Text(str(Strings.newDelivery)) },
             text = {
                 Column {
                     OutlinedTextField(
                         value = state.clientPhone,
                         onValueChange = viewModel::onClientPhoneChange,
-                        label = { Text("Номер телефона клиента") },
+                        label = { Text(str(Strings.clientPhoneNumber)) },
                         leadingIcon = {
                             Icon(Icons.Default.Phone, contentDescription = null)
                         },
@@ -489,13 +491,13 @@ fun HomeScreen(
                             strokeWidth = 2.dp
                         )
                     } else {
-                        Text("Начать")
+                        Text(str(Strings.start))
                     }
                 }
             },
             dismissButton = {
                 TextButton(onClick = { viewModel.hideStartDialog() }) {
-                    Text("Отмена")
+                    Text(str(Strings.cancel))
                 }
             }
         )

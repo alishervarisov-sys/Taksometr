@@ -1,4 +1,4 @@
-package com.zaki.taksometr.presentation.delivery
+﻿package com.zaki.taksometr.presentation.delivery
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -17,6 +17,8 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.zaki.taksometr.presentation.theme.*
 import com.zaki.taksometr.util.LocationUtils
+import com.zaki.taksometr.util.str
+import com.zaki.taksometr.util.Strings
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -32,22 +34,22 @@ fun FixedPriceDeliveryScreen(
 
     val delivery = state.delivery
     val deliveryTypeName = when (delivery?.deliveryType) {
-        "coal" -> "Уголь"
-        "gas15" -> "Газ до 15л"
-        "gas30" -> "Газ до 30л"
-        "gas30plus" -> "Газ более 30л"
-        "errands" -> "Различные поручения"
-        "heavyCargo" -> "Тяжелые грузы"
-        else -> "Доставка"
+        "coal" -> str(Strings.coal)
+        "gas15" -> str(Strings.gas15)
+        "gas30" -> str(Strings.gas30)
+        "gas30plus" -> str(Strings.gas30plus)
+        "errands" -> str(Strings.errands)
+        "heavyCargo" -> str(Strings.heavyCargo)
+        else -> str(Strings.delivery)
     }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Активная доставка") },
+                title = { Text(str(Strings.delivery)) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Назад")
+                        Icon(Icons.Default.ArrowBack, contentDescription = str(Strings.back))
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -121,7 +123,7 @@ fun FixedPriceDeliveryScreen(
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Text(
-                        text = "Фиксированная цена",
+                        text = str(Strings.fixedPrice),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
                     )
@@ -156,7 +158,7 @@ fun FixedPriceDeliveryScreen(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "Время: ${LocationUtils.formatDuration(state.elapsedTime)}",
+                        text = "${str(Strings.time)}: ${LocationUtils.formatDuration(state.elapsedTime)}",
                         style = MaterialTheme.typography.titleMedium
                     )
                 }
@@ -188,7 +190,7 @@ fun FixedPriceDeliveryScreen(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "Позвонить клиенту",
+                    text = "озвонить клиенту",
                     style = MaterialTheme.typography.bodyLarge
                 )
             }
@@ -210,7 +212,7 @@ fun FixedPriceDeliveryScreen(
                 ) {
                     Icon(Icons.Default.Close, contentDescription = null)
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text("Отменить")
+                    Text(str(Strings.cancel))
                 }
 
                 Button(
@@ -231,7 +233,7 @@ fun FixedPriceDeliveryScreen(
                     } else {
                         Icon(Icons.Default.Check, contentDescription = null)
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("Завершить")
+                        Text(str(Strings.complete))
                     }
                 }
             }
@@ -252,8 +254,8 @@ fun FixedPriceDeliveryScreen(
     if (showCancelDialog) {
         AlertDialog(
             onDismissRequest = { showCancelDialog = false },
-            title = { Text("Отменить доставку?") },
-            text = { Text("Вы уверены, что хотите отменить текущую доставку?") },
+            title = { Text(str(Strings.cancelDelivery)) },
+            text = { Text(str(Strings.confirmCancel)) },
             confirmButton = {
                 Button(
                     onClick = {
@@ -262,12 +264,12 @@ fun FixedPriceDeliveryScreen(
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = AccentRed)
                 ) {
-                    Text("Отменить доставку")
+                    Text(str(Strings.cancelDelivery))
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showCancelDialog = false }) {
-                    Text("Нет")
+                    Text(str(Strings.no))
                 }
             }
         )
@@ -277,10 +279,10 @@ fun FixedPriceDeliveryScreen(
     if (showCompleteDialog) {
         AlertDialog(
             onDismissRequest = { showCompleteDialog = false },
-            title = { Text("Завершить доставку?") },
+            title = { Text("${str(Strings.complete)}?") },
             text = {
                 Text(
-                    "Тип: $deliveryTypeName\n" +
+                    "${str(Strings.delivery)}: $deliveryTypeName\n" +
                     "Стоимость: ${LocationUtils.formatCost(delivery?.fixedPrice ?: 0.0)}"
                 )
             },
@@ -293,12 +295,12 @@ fun FixedPriceDeliveryScreen(
                         }
                     }
                 ) {
-                    Text("Завершить")
+                    Text(str(Strings.complete))
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showCompleteDialog = false }) {
-                    Text("Нет")
+                    Text(str(Strings.no))
                 }
             }
         )

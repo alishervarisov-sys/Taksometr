@@ -44,33 +44,55 @@ const Statistics: React.FC<StatisticsProps> = () => {
 
   const getDateRange = (): { startDate: number; endDate: number } => {
     const now = new Date();
-    const endDate = now.getTime();
     let startDate: number;
+    let endDate: number;
 
     switch (period) {
       case 'today': {
         const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
         startDate = today.getTime();
+        endDate = now.getTime();
         break;
       }
       case 'yesterday': {
         const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
         startDate = yesterday.getTime();
+        endDate = todayStart.getTime() - 1; // конец вчерашнего дня (23:59:59.999)
         break;
       }
-      case 'week':
-        startDate = endDate - 7 * 24 * 60 * 60 * 1000;
+      case 'week': {
+        const weekAgo = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7);
+        startDate = weekAgo.getTime();
+        endDate = now.getTime();
         break;
-      case 'month':
-        startDate = endDate - 30 * 24 * 60 * 60 * 1000;
+      }
+      case 'month': {
+        const monthAgo = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate());
+        startDate = monthAgo.getTime();
+        endDate = now.getTime();
         break;
-      case 'year':
-        startDate = endDate - 365 * 24 * 60 * 60 * 1000;
+      }
+      case 'year': {
+        const yearAgo = new Date(now.getFullYear() - 1, now.getMonth(), now.getDate());
+        startDate = yearAgo.getTime();
+        endDate = now.getTime();
         break;
-      case 'custom':
-        startDate = customStart ? new Date(customStart).getTime() : endDate - 86400000;
-        return { startDate, endDate: customEnd ? new Date(customEnd).getTime() + 86400000 : endDate };
+      }
+      case 'custom': {
+        if (customStart && customEnd) {
+          const customStartDate = new Date(customStart);
+          const customEndDate = new Date(customEnd);
+          startDate = new Date(customStartDate.getFullYear(), customStartDate.getMonth(), customStartDate.getDate()).getTime();
+          endDate = new Date(customEndDate.getFullYear(), customEndDate.getMonth(), customEndDate.getDate(), 23, 59, 59, 999).getTime();
+        } else {
+          endDate = now.getTime();
+          startDate = endDate - 86400000;
+        }
+        return { startDate, endDate };
+      }
       default:
+        endDate = now.getTime();
         startDate = endDate - 86400000;
     }
     return { startDate, endDate };

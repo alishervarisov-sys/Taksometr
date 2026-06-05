@@ -8,6 +8,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.navigation.compose.rememberNavController
@@ -46,22 +47,29 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         setContent {
-            ZaKiTaksometrTheme {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
-                ) {
-                    val navController = rememberNavController()
-                    val startDestination = if (authRepository.isLoggedIn()) {
-                        Screen.Home.route
-                    } else {
-                        Screen.Auth.route
-                    }
+            val prefs = getSharedPreferences(Constants.PREFS_NAME, MODE_PRIVATE)
+            val currentLanguageCode = remember {
+                mutableStateOf(LocalizationManager.getCurrentLanguage(prefs).code)
+            }
 
-                    NavGraph(
-                        navController = navController,
-                        startDestination = startDestination
-                    )
+            ZaKiTaksometrTheme {
+                com.zaki.taksometr.util.ProvideLanguage(currentLanguageCode.value) {
+                    Surface(
+                        modifier = Modifier.fillMaxSize(),
+                        color = MaterialTheme.colorScheme.background
+                    ) {
+                        val navController = rememberNavController()
+                        val startDestination = if (authRepository.isLoggedIn()) {
+                            Screen.Home.route
+                        } else {
+                            Screen.Auth.route
+                        }
+
+                        NavGraph(
+                            navController = navController,
+                            startDestination = startDestination
+                        )
+                    }
                 }
             }
         }

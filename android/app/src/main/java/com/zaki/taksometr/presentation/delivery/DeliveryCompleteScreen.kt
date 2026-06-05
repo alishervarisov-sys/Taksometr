@@ -1,4 +1,4 @@
-package com.zaki.taksometr.presentation.delivery
+﻿package com.zaki.taksometr.presentation.delivery
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -18,6 +18,8 @@ import com.google.maps.android.compose.*
 import com.zaki.taksometr.domain.model.Delivery
 import com.zaki.taksometr.presentation.theme.*
 import com.zaki.taksometr.util.LocationUtils
+import com.zaki.taksometr.util.str
+import com.zaki.taksometr.util.Strings
 import com.zaki.taksometr.util.Resource
 import java.text.SimpleDateFormat
 import java.util.*
@@ -53,7 +55,7 @@ fun DeliveryCompleteScreen(
         Spacer(modifier = Modifier.height(16.dp))
 
         Text(
-            text = "Доставка завершена!",
+            text = str(Strings.deliveryCompleted),
             style = MaterialTheme.typography.headlineMedium,
             fontWeight = FontWeight.Bold,
             textAlign = TextAlign.Center
@@ -75,19 +77,19 @@ fun DeliveryCompleteScreen(
                 ) {
                     DetailRow(
                         icon = Icons.Default.Phone,
-                        label = "Клиент",
+                        label = str(Strings.client),
                         value = delivery.clientPhone
                     )
                     Divider(modifier = Modifier.padding(vertical = 12.dp))
                     DetailRow(
                         icon = Icons.Default.Route,
-                        label = "Расстояние",
+                        label = str(Strings.distance),
                         value = LocationUtils.formatDistance(delivery.distanceMeters)
                     )
                     Divider(modifier = Modifier.padding(vertical = 12.dp))
                     DetailRow(
                         icon = Icons.Default.Timer,
-                        label = "Время поездки",
+                        label = "${str(Strings.time)}",
                         value = delivery.endTime?.let {
                             LocationUtils.formatDuration(it - delivery.startTime)
                         } ?: "—"
@@ -95,7 +97,7 @@ fun DeliveryCompleteScreen(
                     Divider(modifier = Modifier.padding(vertical = 12.dp))
                     DetailRow(
                         icon = Icons.Default.CalendarToday,
-                        label = "Дата",
+                        label = "${str(Strings.time)}",
                         value = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault())
                             .format(Date(delivery.createdAt))
                     )
@@ -115,7 +117,7 @@ fun DeliveryCompleteScreen(
                         Spacer(modifier = Modifier.width(12.dp))
                         Column {
                             Text(
-                                text = "Итого",
+                                text = str(Strings.totalCost),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                             )
@@ -175,7 +177,7 @@ fun DeliveryCompleteScreen(
             shape = RoundedCornerShape(12.dp)
         ) {
             Text(
-                text = "Готово",
+                text = str(Strings.done),
                 style = MaterialTheme.typography.titleMedium
             )
         }

@@ -1,4 +1,4 @@
-package com.zaki.taksometr.presentation.delivery
+﻿package com.zaki.taksometr.presentation.delivery
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -19,6 +19,8 @@ import com.google.maps.android.compose.*
 import com.zaki.taksometr.presentation.theme.*
 import com.zaki.taksometr.service.LocationTrackingService
 import com.zaki.taksometr.util.LocationUtils
+import com.zaki.taksometr.util.str
+import com.zaki.taksometr.util.Strings
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -54,10 +56,10 @@ fun ActiveDeliveryScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Активная доставка") },
+                title = { Text(str(Strings.delivery)) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Назад")
+                        Icon(Icons.Default.ArrowBack, contentDescription = str(Strings.back))
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -98,7 +100,7 @@ fun ActiveDeliveryScreen(
                     state.currentLocation?.let {
                         Marker(
                             state = MarkerState(position = LatLng(it.latitude, it.longitude)),
-                            title = "Текущее местоположение"
+                            title = str(Strings.delivery)
                         )
                     }
                 }
@@ -143,7 +145,7 @@ fun ActiveDeliveryScreen(
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "Позвонить клиенту",
+                                text = "озвонить клиенту",
                                 style = MaterialTheme.typography.bodyMedium
                             )
                         }
@@ -158,17 +160,17 @@ fun ActiveDeliveryScreen(
                     ) {
                         DeliveryStatItem(
                             icon = Icons.Default.Route,
-                            label = "Расстояние",
+                            label = str(Strings.distance),
                             value = LocationUtils.formatDistance(state.distanceMeters)
                         )
                         DeliveryStatItem(
                             icon = Icons.Default.Timer,
-                            label = "Время",
+                            label = str(Strings.time),
                             value = LocationUtils.formatDuration(state.elapsedTime)
                         )
                         DeliveryStatItem(
                             icon = Icons.Default.AttachMoney,
-                            label = "Стоимость",
+                            label = str(Strings.cost),
                             value = LocationUtils.formatCost(state.currentCost)
                         )
                     }
@@ -189,7 +191,7 @@ fun ActiveDeliveryScreen(
                             )
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(
-                                text = "Ожидание: ${LocationUtils.formatDuration(state.totalWaitingMs)}",
+                                text = "${str(Strings.waiting)}: ${LocationUtils.formatDuration(state.totalWaitingMs)}",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = if (state.isWaiting) AccentRed else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                             )
@@ -217,7 +219,7 @@ fun ActiveDeliveryScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = if (state.isWaiting) "Остановить ожидание" else "Ожидание",
+                            text = if (state.isWaiting) str(Strings.stopWaiting) else str(Strings.startWaiting),
                             style = MaterialTheme.typography.bodyMedium
                         )
                     }
@@ -239,7 +241,7 @@ fun ActiveDeliveryScreen(
                         ) {
                             Icon(Icons.Default.Close, contentDescription = null)
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("Отменить")
+                            Text(str(Strings.cancel))
                         }
 
                         Button(
@@ -260,7 +262,7 @@ fun ActiveDeliveryScreen(
                             } else {
                                 Icon(Icons.Default.Check, contentDescription = null)
                                 Spacer(modifier = Modifier.width(4.dp))
-                                Text("Завершить")
+                                Text(str(Strings.complete))
                             }
                         }
                     }
@@ -283,8 +285,8 @@ fun ActiveDeliveryScreen(
     if (showCancelDialog) {
         AlertDialog(
             onDismissRequest = { showCancelDialog = false },
-            title = { Text("Отменить доставку?") },
-            text = { Text("Вы уверены, что хотите отменить текущую доставку?") },
+            title = { Text(str(Strings.cancelDelivery)) },
+            text = { Text(str(Strings.confirmCancel)) },
             confirmButton = {
                 Button(
                     onClick = {
@@ -294,12 +296,12 @@ fun ActiveDeliveryScreen(
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = AccentRed)
                 ) {
-                    Text("Отменить доставку")
+                    Text(str(Strings.cancelDelivery))
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showCancelDialog = false }) {
-                    Text("Нет")
+                    Text(str(Strings.no))
                 }
             }
         )
@@ -309,11 +311,11 @@ fun ActiveDeliveryScreen(
     if (showCompleteDialog) {
         AlertDialog(
             onDismissRequest = { showCompleteDialog = false },
-            title = { Text("Завершить доставку?") },
+            title = { Text("${str(Strings.complete)}?") },
             text = {
                 Text(
-                    "Расстояние: ${LocationUtils.formatDistance(state.distanceMeters)}\n" +
-                    "Стоимость: ${LocationUtils.formatCost(state.currentCost)}"
+                    "${str(Strings.distance)}: ${LocationUtils.formatDistance(state.distanceMeters)}\n" +
+                    "${str(Strings.cost)}: ${LocationUtils.formatCost(state.currentCost)}"
                 )
             },
             confirmButton = {
@@ -326,12 +328,12 @@ fun ActiveDeliveryScreen(
                         }
                     }
                 ) {
-                    Text("Завершить")
+                    Text(str(Strings.complete))
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showCompleteDialog = false }) {
-                    Text("Нет")
+                    Text(str(Strings.no))
                 }
             }
         )
