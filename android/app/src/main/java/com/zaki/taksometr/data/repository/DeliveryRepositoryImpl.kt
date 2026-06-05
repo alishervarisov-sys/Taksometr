@@ -45,6 +45,9 @@ class DeliveryRepositoryImpl @Inject constructor(
                 "deliveryType" to deliveryType
             )
 
+            android.util.Log.d("DeliveryRepo", "=== SENDING TO FIREBASE ===")
+            android.util.Log.d("DeliveryRepo", "Request data: $data")
+
             val result = functions
                 .getHttpsCallable("createDelivery")
                 .call(data)
@@ -52,7 +55,13 @@ class DeliveryRepositoryImpl @Inject constructor(
 
             @Suppress("UNCHECKED_CAST")
             val responseData = result.data as Map<String, Any>
+            android.util.Log.d("DeliveryRepo", "createDelivery response: $responseData")
+            
             val deliveryId = responseData["deliveryId"] as String
+            val responseDeliveryType = responseData["deliveryType"] as? String ?: "default"
+            val responseFixedPrice = (responseData["fixedPrice"] as? Number)?.toDouble()
+            
+            android.util.Log.d("DeliveryRepo", "Parsed - deliveryId: $deliveryId, type: $responseDeliveryType, price: $responseFixedPrice")
 
             val delivery = Delivery(
                 id = deliveryId,
@@ -60,8 +69,12 @@ class DeliveryRepositoryImpl @Inject constructor(
                 courierName = responseData["courierName"] as? String ?: "",
                 clientPhone = clientPhone,
                 status = DeliveryStatus.IN_PROGRESS,
-                startTime = System.currentTimeMillis()
+                startTime = System.currentTimeMillis(),
+                deliveryType = responseDeliveryType,
+                fixedPrice = responseFixedPrice
             )
+            
+            android.util.Log.d("DeliveryRepo", "Created delivery object: $delivery")
 
             // Save locally
             deliveryDao.insert(DeliveryEntity.fromDelivery(delivery))
@@ -73,6 +86,7 @@ class DeliveryRepositoryImpl @Inject constructor(
 
             Resource.Success(delivery)
         } catch (e: Exception) {
+            android.util.Log.e("DeliveryRepo", "Error creating delivery", e)
             Resource.Error("Ошибка создания доставки: ${e.localizedMessage}")
         }
     }

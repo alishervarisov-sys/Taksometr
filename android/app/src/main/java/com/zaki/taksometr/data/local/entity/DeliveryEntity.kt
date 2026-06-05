@@ -17,6 +17,8 @@ data class DeliveryEntity(
     val endTime: Long?,
     val distanceMeters: Double,
     val cost: Double,
+    val deliveryType: String = "default",
+    val fixedPrice: Double? = null,
     val createdAt: Long,
     val isSynced: Boolean = false
 ) {
@@ -30,6 +32,8 @@ data class DeliveryEntity(
         endTime = endTime,
         distanceMeters = distanceMeters,
         cost = cost,
+        deliveryType = deliveryType,
+        fixedPrice = fixedPrice,
         createdAt = createdAt
     )
 
@@ -44,6 +48,8 @@ data class DeliveryEntity(
             endTime = delivery.endTime,
             distanceMeters = delivery.distanceMeters,
             cost = delivery.cost,
+            deliveryType = delivery.deliveryType,
+            fixedPrice = delivery.fixedPrice,
             createdAt = delivery.createdAt
         )
     }

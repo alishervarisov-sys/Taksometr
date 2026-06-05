@@ -11,6 +11,8 @@ data class Delivery(
     val distanceMeters: Double = 0.0,
     val cost: Double = 0.0,
     val route: List<GeoPoint> = emptyList(),
+    val deliveryType: String = "default",
+    val fixedPrice: Double? = null,
     val createdAt: Long = System.currentTimeMillis()
 )
 

@@ -339,23 +339,6 @@ fun HomeScreen(
                 Column(
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    // Debug info
-                    if (state.isLoadingTariff) {
-                        Text(
-                            "Загрузка тарифов...",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.secondary
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                    }
-                    
-                    Text(
-                        "Загружено типов: ${state.fixedTypes.size}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.secondary
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    
                     DeliveryTypeOption(
                         selected = state.selectedDeliveryType == "default",
                         onClick = { viewModel.onDeliveryTypeSelected("default") },

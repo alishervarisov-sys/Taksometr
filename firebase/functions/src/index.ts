@@ -219,12 +219,23 @@ export const createDelivery = functions.https.onCall(async (data, context) => {
   // Validate delivery type and get fixed price if applicable
   let fixedPrice: number | null = null;
   let deliveryTypeName = "";
+  let actualDeliveryType = deliveryType || "default";
+  
+  console.log("=== CREATE DELIVERY DEBUG ===");
+  console.log("Received deliveryType:", deliveryType);
+  console.log("actualDeliveryType:", actualDeliveryType);
   
   if (deliveryType && deliveryType !== "default") {
     const tariffDoc = await db.collection("tariffs").doc("default").get();
+    console.log("Tariff doc exists:", tariffDoc.exists);
+    
     if (tariffDoc.exists) {
       const fixedTypes = tariffDoc.data()!.fixedTypes || {};
-      if (fixedTypes[deliveryType] !== undefined) {
+      console.log("Fixed types:", fixedTypes);
+      console.log("Looking for:", deliveryType);
+      console.log("Found price:", fixedTypes[deliveryType]);
+      
+      if (fixedTypes[deliveryType] !== undefined && fixedTypes[deliveryType] > 0) {
         fixedPrice = fixedTypes[deliveryType];
         
         // Map type to display name
@@ -237,9 +248,16 @@ export const createDelivery = functions.https.onCall(async (data, context) => {
           heavyCargo: "Тяжелые грузы",
         };
         deliveryTypeName = typeNames[deliveryType] || deliveryType;
+        console.log("Set fixedPrice:", fixedPrice, "deliveryTypeName:", deliveryTypeName);
+      } else {
+        console.log("Price is 0 or undefined, using default");
+        actualDeliveryType = "default";
       }
     }
   }
+  
+  console.log("Final: actualDeliveryType=", actualDeliveryType, "fixedPrice=", fixedPrice);
+  console.log("=============================");
 
   // Create delivery
   const deliveryRef = db.collection("deliveries").doc();
@@ -253,10 +271,12 @@ export const createDelivery = functions.https.onCall(async (data, context) => {
     distanceMeters: 0,
     cost: 0,
     route: [],
-    deliveryType: deliveryType || "default",
+    deliveryType: actualDeliveryType,
     fixedPrice: fixedPrice,
     createdAt: Date.now(),
   };
+  
+  console.log("Saving delivery to Firestore:", deliveryData);
 
   await deliveryRef.set(deliveryData);
 
@@ -282,7 +302,7 @@ export const createDelivery = functions.https.onCall(async (data, context) => {
   return {
     deliveryId: deliveryRef.id,
     courierName: courierData.name || "",
-    deliveryType: deliveryType || "default",
+    deliveryType: actualDeliveryType,
     fixedPrice: fixedPrice,
   };
 });

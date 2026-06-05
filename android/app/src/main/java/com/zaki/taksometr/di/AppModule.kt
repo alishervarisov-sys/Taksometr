@@ -63,7 +63,17 @@ object AppModule {
         context,
         ZaKiDatabase::class.java,
         "zaki_database"
-    ).build()
+    )
+        .addMigrations(MIGRATION_1_2)
+        .fallbackToDestructiveMigration()
+        .build()
+    
+    private val MIGRATION_1_2 = object : androidx.room.migration.Migration(1, 2) {
+        override fun migrate(database: androidx.sqlite.db.SupportSQLiteDatabase) {
+            database.execSQL("ALTER TABLE deliveries ADD COLUMN deliveryType TEXT NOT NULL DEFAULT 'default'")
+            database.execSQL("ALTER TABLE deliveries ADD COLUMN fixedPrice REAL")
+        }
+    }
 
     @Provides
     @Singleton

@@ -9,7 +9,7 @@ import com.zaki.taksometr.data.local.entity.RoutePointEntity
 
 @Database(
     entities = [RoutePointEntity::class, DeliveryEntity::class],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class ZaKiDatabase : RoomDatabase() {

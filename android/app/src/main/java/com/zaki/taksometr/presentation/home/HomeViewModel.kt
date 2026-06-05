@@ -91,7 +91,12 @@ class HomeViewModel @Inject constructor(
     }
 
     fun hideStartDialog() {
-        _state.value = _state.value.copy(showStartDialog = false, clientPhone = "", error = null)
+        _state.value = _state.value.copy(
+            showStartDialog = false, 
+            clientPhone = "", 
+            selectedDeliveryType = "default",  // Reset delivery type when cancelling
+            error = null
+        )
     }
 
     fun showDeliveryTypeDialog() {
@@ -141,7 +146,8 @@ class HomeViewModel @Inject constructor(
     }
 
     fun proceedToPhoneInput() {
-        hideDeliveryTypeDialog()
+        // Keep selectedDeliveryType, just close the dialog and open phone input
+        _state.value = _state.value.copy(showDeliveryTypeDialog = false, error = null)
         showStartDialog()
     }
 
@@ -153,20 +159,29 @@ class HomeViewModel @Inject constructor(
         }
 
         val deliveryType = _state.value.selectedDeliveryType
+        
+        android.util.Log.d("HomeViewModel", "=== START DELIVERY ===")
+        android.util.Log.d("HomeViewModel", "Phone: $phone")
+        android.util.Log.d("HomeViewModel", "Selected deliveryType: $deliveryType")
+        android.util.Log.d("HomeViewModel", "FixedTypes: ${_state.value.fixedTypes}")
+        android.util.Log.d("HomeViewModel", "======================")
 
         viewModelScope.launch {
             _state.value = _state.value.copy(isStartingDelivery = true, error = null)
 
             when (val result = deliveryRepository.createDelivery(phone, deliveryType)) {
                 is Resource.Success -> {
+                    android.util.Log.d("HomeViewModel", "Delivery created successfully: ${result.data}")
                     _state.value = _state.value.copy(
                         isStartingDelivery = false,
                         showStartDialog = false,
                         showDeliveryTypeDialog = false,
+                        selectedDeliveryType = "default",  // Reset after successful creation
                         activeDelivery = result.data
                     )
                 }
                 is Resource.Error -> {
+                    android.util.Log.e("HomeViewModel", "Error creating delivery: ${result.message}")
                     _state.value = _state.value.copy(
                         isStartingDelivery = false,
                         error = result.message
