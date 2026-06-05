@@ -5,7 +5,7 @@ import {
   DialogActions, TextField, IconButton, Chip, Alert, MenuItem,
   Grid, InputLabel
 } from '@mui/material';
-import { Add, Block, Delete, History, PersonAdd } from '@mui/icons-material';
+import { Add, Block, Delete, History, PersonAdd, Edit } from '@mui/icons-material';
 import { collection, getDocs, doc, updateDoc, deleteDoc, query, where, orderBy } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { httpsCallable } from 'firebase/functions';
@@ -68,6 +68,18 @@ const Couriers: React.FC<CouriersProps> = ({ adminId }) => {
   const [clientPhone, setClientPhone] = useState('');
   const [assignLoading, setAssignLoading] = useState(false);
   const [assignError, setAssignError] = useState('');
+
+  // Edit courier dialog
+  const [editOpen, setEditOpen] = useState(false);
+  const [editingCourier, setEditingCourier] = useState<Courier | null>(null);
+  const [editData, setEditData] = useState({
+    name: '', surname: '', birthYear: '', city: '', phone: ''
+  });
+  const [editScooterPhoto, setEditScooterPhoto] = useState<File | null>(null);
+  const [editPassportFront, setEditPassportFront] = useState<File | null>(null);
+  const [editPassportBack, setEditPassportBack] = useState<File | null>(null);
+  const [editError, setEditError] = useState('');
+  const [editLoading, setEditLoading] = useState(false);
 
   useEffect(() => {
     loadCouriers();
@@ -204,6 +216,73 @@ const Couriers: React.FC<CouriersProps> = ({ adminId }) => {
     }
   };
 
+  const handleOpenEdit = (courier: Courier) => {
+    setEditingCourier(courier);
+    setEditData({
+      name: courier.name,
+      surname: courier.surname || '',
+      birthYear: courier.birthYear || '',
+      city: courier.city || '',
+      phone: courier.phone || '',
+    });
+    setEditScooterPhoto(null);
+    setEditPassportFront(null);
+    setEditPassportBack(null);
+    setEditError('');
+    setEditOpen(true);
+  };
+
+  const handleUpdateCourier = async () => {
+    if (!editingCourier || !editData.name) {
+      setEditError('Имя обязательно');
+      return;
+    }
+
+    setEditLoading(true);
+    setEditError('');
+
+    try {
+      // Upload new photos if provided
+      const timestamp = Date.now();
+      const updates: any = {
+        name: editData.name,
+        surname: editData.surname,
+        birthYear: editData.birthYear,
+        city: editData.city,
+        phone: editData.phone,
+      };
+
+      if (editScooterPhoto) {
+        updates.scooterPhotoUrl = await uploadFile(
+          editScooterPhoto,
+          `couriers/${editingCourier.login}/scooter_${timestamp}.jpg`
+        );
+      }
+      if (editPassportFront) {
+        updates.passportFrontUrl = await uploadFile(
+          editPassportFront,
+          `couriers/${editingCourier.login}/passport_front_${timestamp}.jpg`
+        );
+      }
+      if (editPassportBack) {
+        updates.passportBackUrl = await uploadFile(
+          editPassportBack,
+          `couriers/${editingCourier.login}/passport_back_${timestamp}.jpg`
+        );
+      }
+
+      await updateDoc(doc(db, 'users', editingCourier.id), updates);
+
+      setEditOpen(false);
+      alert('Данные курьера обновлены');
+      loadCouriers();
+    } catch (err: any) {
+      setEditError(err.message || 'Ошибка обновления данных');
+    } finally {
+      setEditLoading(false);
+    }
+  };
+
   return (
     <Box>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
@@ -249,6 +328,9 @@ const Couriers: React.FC<CouriersProps> = ({ adminId }) => {
                     )}
                   </TableCell>
                   <TableCell>
+                    <IconButton onClick={() => handleOpenEdit(courier)} color="primary" title="Редактировать">
+                      <Edit />
+                    </IconButton>
                     <IconButton onClick={() => handleAssignToClient(courier)} color="info" title="Назначить клиенту">
                       <PersonAdd />
                     </IconButton>
@@ -414,6 +496,106 @@ const Couriers: React.FC<CouriersProps> = ({ adminId }) => {
             disabled={assignLoading}
           >
             {assignLoading ? 'Отправка...' : 'Назначить'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Edit courier dialog */}
+      <Dialog open={editOpen} onClose={() => setEditOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Редактировать курьера</DialogTitle>
+        <DialogContent>
+          <Grid container spacing={2} sx={{ mt: 0.5 }}>
+            <Grid item xs={6}>
+              <TextField
+                fullWidth
+                label="Имя *"
+                value={editData.name}
+                onChange={(e) => setEditData({ ...editData, name: e.target.value })}
+              />
+            </Grid>
+            <Grid item xs={6}>
+              <TextField
+                fullWidth
+                label="Фамилия"
+                value={editData.surname}
+                onChange={(e) => setEditData({ ...editData, surname: e.target.value })}
+              />
+            </Grid>
+            <Grid item xs={6}>
+              <TextField
+                fullWidth
+                label="Год рождения"
+                type="number"
+                value={editData.birthYear}
+                onChange={(e) => setEditData({ ...editData, birthYear: e.target.value })}
+              />
+            </Grid>
+            <Grid item xs={6}>
+              <TextField
+                fullWidth
+                select
+                label="Город"
+                value={editData.city}
+                onChange={(e) => setEditData({ ...editData, city: e.target.value })}
+              >
+                {TAJIKISTAN_CITIES.map(city => (
+                  <MenuItem key={city} value={city}>{city}</MenuItem>
+                ))}
+              </TextField>
+            </Grid>
+            <Grid item xs={12}>
+              <TextField
+                fullWidth
+                label="Телефон"
+                value={editData.phone}
+                onChange={(e) => setEditData({ ...editData, phone: e.target.value })}
+              />
+            </Grid>
+
+            {/* Photo uploads */}
+            <Grid item xs={12}>
+              <InputLabel sx={{ mb: 0.5, fontSize: 14 }}>
+                Фото скутера {editScooterPhoto && '(новое фото выбрано)'}
+              </InputLabel>
+              <input
+                type="file"
+                accept="image/*"
+                onChange={(e) => setEditScooterPhoto(e.target.files?.[0] || null)}
+              />
+            </Grid>
+            <Grid item xs={6}>
+              <InputLabel sx={{ mb: 0.5, fontSize: 14 }}>
+                Паспорт (лицевая) {editPassportFront && '(новое фото)'}
+              </InputLabel>
+              <input
+                type="file"
+                accept="image/*"
+                onChange={(e) => setEditPassportFront(e.target.files?.[0] || null)}
+              />
+            </Grid>
+            <Grid item xs={6}>
+              <InputLabel sx={{ mb: 0.5, fontSize: 14 }}>
+                Паспорт (обратная) {editPassportBack && '(новое фото)'}
+              </InputLabel>
+              <input
+                type="file"
+                accept="image/*"
+                onChange={(e) => setEditPassportBack(e.target.files?.[0] || null)}
+              />
+            </Grid>
+          </Grid>
+          {editError && <Alert severity="error" sx={{ mt: 2 }}>{editError}</Alert>}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setEditOpen(false)} disabled={editLoading}>
+            Отмена
+          </Button>
+          <Button
+            variant="contained"
+            onClick={handleUpdateCourier}
+            disabled={editLoading}
+          >
+            {editLoading ? 'Сохранение...' : 'Сохранить'}
           </Button>
         </DialogActions>
       </Dialog>

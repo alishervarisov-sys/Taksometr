@@ -141,21 +141,36 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
 
   const getDateRange = (p: Period): { start: number; end: number } => {
     const now = new Date();
-    const end = now.getTime();
     let start = 0;
+    let end = now.getTime();
+    
     switch (p) {
       case 'today': {
-        const t = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-        start = t.getTime(); break;
+        // Сегодня: с 00:00 сегодня до текущего момента
+        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        start = todayStart.getTime();
+        end = now.getTime();
+        break;
       }
       case 'yesterday': {
-        const y = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
-        start = y.getTime(); break;
+        // Вчера: с 00:00 вчера до 23:59:59 вчера
+        const yesterdayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+        const yesterdayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        start = yesterdayStart.getTime();
+        end = yesterdayEnd.getTime() - 1; // минус 1мс чтобы не включать сегодня
+        break;
       }
-      case 'week': start = end - 7 * 86400000; break;
-      case 'month': start = end - 30 * 86400000; break;
-      case 'year': start = end - 365 * 86400000; break;
-      default: start = 0;
+      case 'week': 
+        start = end - 7 * 86400000; 
+        break;
+      case 'month': 
+        start = end - 30 * 86400000; 
+        break;
+      case 'year': 
+        start = end - 365 * 86400000; 
+        break;
+      default: 
+        start = 0;
     }
     return { start, end };
   };
@@ -249,10 +264,24 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
     setDetailOpen(true);
   };
 
-  const filteredDeliveries = deliveries.filter(d =>
-    d.clientPhone?.includes(searchQuery) ||
-    d.courierName?.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredDeliveries = deliveries.filter(d => {
+    // Поиск по телефону или имени курьера
+    const matchesSearch = d.clientPhone?.includes(searchQuery) ||
+      d.courierName?.toLowerCase().includes(searchQuery.toLowerCase());
+    
+    if (!matchesSearch) return false;
+    
+    // Фильтр по курьеру
+    if (selectedCourier !== 'all' && d.courierId !== selectedCourier) return false;
+    
+    // Фильтр по периоду (если расчет был выполнен)
+    if (reportResult && period !== 'all') {
+      const { start, end } = getDateRange(period);
+      if (d.createdAt < start || d.createdAt > end) return false;
+    }
+    
+    return true;
+  });
 
   const getStatusChip = (status: string) => {
     switch (status) {
