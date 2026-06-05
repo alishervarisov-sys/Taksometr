@@ -14,6 +14,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -45,6 +46,15 @@ fun HomeScreen(
 ) {
     val state by viewModel.state.collectAsState()
     val context = LocalContext.current
+    
+    // Language dialog state
+    var showLanguageDialog by remember { mutableStateOf(false) }
+    val prefs = remember { 
+        context.getSharedPreferences(com.zaki.taksometr.util.Constants.PREFS_NAME, android.content.Context.MODE_PRIVATE) 
+    }
+    val currentLanguage = remember(showLanguageDialog) {
+        com.zaki.taksometr.util.LocalizationManager.getCurrentLanguage(prefs)
+    }
 
     val locationPermissions = rememberMultiplePermissionsState(
         permissions = listOf(
@@ -175,6 +185,9 @@ fun HomeScreen(
                     )
                 },
                 actions = {
+                    IconButton(onClick = { showLanguageDialog = true }) {
+                        Icon(Icons.Outlined.Language, contentDescription = "Язык")
+                    }
                     IconButton(onClick = onHistoryClick) {
                         Icon(Icons.Default.History, contentDescription = "История")
                     }
@@ -484,6 +497,19 @@ fun HomeScreen(
                 TextButton(onClick = { viewModel.hideStartDialog() }) {
                     Text("Отмена")
                 }
+            }
+        )
+    }
+    
+    // Language dialog
+    if (showLanguageDialog) {
+        com.zaki.taksometr.presentation.components.LanguageDialog(
+            currentLanguage = currentLanguage,
+            onDismiss = { showLanguageDialog = false },
+            onLanguageSelected = { language ->
+                // Restart activity to apply language change
+                val activity = context as? android.app.Activity
+                activity?.recreate()
             }
         )
     }
