@@ -55,6 +55,7 @@ class AuthRepositoryImpl @Inject constructor(
             // Save session
             prefs.edit()
                 .putString(Constants.PREF_USER_ID, user.id)
+                .putString(Constants.PREF_USER_NAME, user.name)
                 .putBoolean(Constants.PREF_IS_LOGGED_IN, true)
                 .apply()
 

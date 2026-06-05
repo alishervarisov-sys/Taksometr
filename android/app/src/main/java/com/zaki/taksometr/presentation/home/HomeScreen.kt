@@ -43,6 +43,7 @@ import com.zaki.taksometr.util.Strings
 fun HomeScreen(
     onStartDelivery: () -> Unit,
     onHistoryClick: () -> Unit,
+    onChainClick: () -> Unit,
     onLogout: () -> Unit,
     viewModel: HomeViewModel = hiltViewModel()
 ) {
@@ -315,6 +316,21 @@ fun HomeScreen(
             }
 
             Spacer(modifier = Modifier.weight(1f))
+
+            // Delivery chain button
+            OutlinedButton(
+                onClick = onChainClick,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(52.dp),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Icon(Icons.Default.List, contentDescription = null, modifier = Modifier.size(22.dp))
+                Spacer(modifier = Modifier.width(10.dp))
+                Text("Дерево заказов", style = MaterialTheme.typography.titleMedium)
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
 
             // Start delivery button
             Button(

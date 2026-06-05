@@ -17,6 +17,7 @@ data class Delivery(
 )
 
 enum class DeliveryStatus {
+    PENDING,
     IN_PROGRESS,
     COMPLETED,
     CANCELLED

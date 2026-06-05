@@ -226,12 +226,14 @@ fun DeliveryHistoryItem(
                     DeliveryStatus.COMPLETED -> Icons.Default.CheckCircle
                     DeliveryStatus.CANCELLED -> Icons.Default.Cancel
                     DeliveryStatus.IN_PROGRESS -> Icons.Default.DirectionsBike
+                    DeliveryStatus.PENDING -> Icons.Default.Schedule
                 },
                 contentDescription = null,
                 tint = when (delivery.status) {
                     DeliveryStatus.COMPLETED -> StatusCompleted
                     DeliveryStatus.CANCELLED -> StatusCancelled
                     DeliveryStatus.IN_PROGRESS -> StatusDelivery
+                    DeliveryStatus.PENDING -> StatusDelivery
                 },
                 modifier = Modifier.size(40.dp)
             )

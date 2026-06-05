@@ -1,6 +1,7 @@
 package com.zaki.taksometr.presentation.deliverychain
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -392,10 +393,10 @@ fun DeliveryTypeDialog(
             Column {
                 // Стандартная доставка
                 Card(
-                    onClick = { onSelect("default") },
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(vertical = 4.dp)
+                        .clickable { onSelect("default") }
                 ) {
                     Text(
                         "Стандартная доставка (по счетчику)",
@@ -406,10 +407,10 @@ fun DeliveryTypeDialog(
                 // Фиксированные типы
                 fixedTypes.forEach { (type, price) ->
                     Card(
-                        onClick = { onSelect(type) },
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(vertical = 4.dp)
+                            .clickable { onSelect(type) }
                     ) {
                         Column(modifier = Modifier.padding(16.dp)) {
                             Text(type, fontWeight = FontWeight.Bold)

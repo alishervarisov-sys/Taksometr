@@ -16,6 +16,7 @@ object Constants {
     // Preferences
     const val PREFS_NAME = "zaki_prefs"
     const val PREF_USER_ID = "user_id"
+    const val PREF_USER_NAME = "user_name"
     const val PREF_IS_LOGGED_IN = "is_logged_in"
     const val PREF_ACTIVE_DELIVERY_ID = "active_delivery_id"
 

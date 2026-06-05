@@ -15,13 +15,18 @@ import com.zaki.taksometr.domain.model.DeliveryStatus
 import com.zaki.taksometr.domain.repository.DeliveryChainRepository
 import com.zaki.taksometr.util.Constants
 import com.zaki.taksometr.util.Resource
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.tasks.await
 import java.util.*
 import javax.inject.Inject
 import javax.inject.Singleton
 
+@OptIn(ExperimentalCoroutinesApi::class)
 @Singleton
 class DeliveryChainRepositoryImpl @Inject constructor(
     private val firestore: FirebaseFirestore,
@@ -47,7 +52,6 @@ class DeliveryChainRepositoryImpl @Inject constructor(
                 status = DeliveryChainStatus.DRAFT,
                 createdAt = System.currentTimeMillis()
             )
-            
             chainDao.insert(DeliveryChainEntity.fromDeliveryChain(chain))
             Resource.Success(chain)
         } catch (e: Exception) {
@@ -62,9 +66,8 @@ class DeliveryChainRepositoryImpl @Inject constructor(
         deliveryType: String
     ): Resource<ChainDeliveryItem> {
         return try {
-            val existingItems = itemDao.getItemsByChainIdSync(chainId)
-            val nextOrder = (existingItems.maxOfOrNull { it.sequenceOrder } ?: 0) + 1
-            
+            val existing = itemDao.getItemsByChainIdSync(chainId)
+            val nextOrder = (existing.maxOfOrNull { it.sequenceOrder } ?: 0) + 1
             val item = ChainDeliveryItem(
                 id = UUID.randomUUID().toString(),
                 chainId = chainId,
@@ -75,7 +78,6 @@ class DeliveryChainRepositoryImpl @Inject constructor(
                 deliveryType = deliveryType,
                 createdAt = System.currentTimeMillis()
             )
-            
             itemDao.insert(ChainDeliveryItemEntity.fromChainDeliveryItem(item))
             Resource.Success(item)
         } catch (e: Exception) {
@@ -112,13 +114,9 @@ class DeliveryChainRepositoryImpl @Inject constructor(
         return try {
             val chainEntity = chainDao.getById(chainId)
                 ?: return Resource.Error("Цепочка не найдена")
-            
             val items = itemDao.getItemsByChainIdSync(chainId)
-            if (items.isEmpty()) {
-                return Resource.Error("Добавьте хотя бы один заказ")
-            }
-            
-            // Вызываем Cloud Function для создания цепочки на сервере
+            if (items.isEmpty()) return Resource.Error("Добавьте хотя бы один заказ")
+
             val data = hashMapOf(
                 "chainId" to chainId,
                 "courierId" to userId,
@@ -132,26 +130,22 @@ class DeliveryChainRepositoryImpl @Inject constructor(
                     )
                 }
             )
-            
             functions.getHttpsCallable("startDeliveryChain").call(data).await()
-            
-            // Обновляем локально
-            val updatedChain = chainEntity.copy(
+
+            val updated = chainEntity.copy(
                 status = DeliveryChainStatus.IN_PROGRESS.name,
                 startedAt = System.currentTimeMillis()
             )
-            chainDao.update(updatedChain)
-            
-            // Запускаем первую доставку
-            val firstItem = items.minByOrNull { it.sequenceOrder }
-            if (firstItem != null) {
-                itemDao.update(firstItem.copy(
+            chainDao.update(updated)
+
+            val first = items.minByOrNull { it.sequenceOrder }
+            first?.let {
+                itemDao.update(it.copy(
                     status = DeliveryStatus.IN_PROGRESS.name,
                     startTime = System.currentTimeMillis()
                 ))
             }
-            
-            Resource.Success(updatedChain.toDeliveryChain())
+            Resource.Success(updated.toDeliveryChain())
         } catch (e: Exception) {
             Resource.Error("Ошибка запуска цепочки: ${e.localizedMessage}")
         }
@@ -164,71 +158,62 @@ class DeliveryChainRepositoryImpl @Inject constructor(
         return try {
             val chainEntity = chainDao.getById(chainId)
                 ?: return Resource.Error("Цепочка не найдена")
-            
             val items = itemDao.getItemsByChainIdSync(chainId)
-            val currentItem = items.firstOrNull { it.status == DeliveryStatus.IN_PROGRESS.name }
+            val current = items.firstOrNull { it.status == DeliveryStatus.IN_PROGRESS.name }
                 ?: return Resource.Error("Нет активной доставки")
-            
-            // Получаем маршрут текущей доставки
-            val points = currentItem.deliveryId?.let { 
-                routePointDao.getPointsByDeliveryIdSync(it) 
+
+            val points = current.deliveryId?.let {
+                routePointDao.getPointsByDeliveryIdSync(it)
             } ?: emptyList()
-            
-            val routeData = points.map { point ->
+
+            val routeData = points.map { p ->
                 hashMapOf(
-                    "latitude" to point.latitude,
-                    "longitude" to point.longitude,
-                    "timestamp" to point.timestamp,
-                    "accuracy" to point.accuracy
+                    "latitude" to p.latitude,
+                    "longitude" to p.longitude,
+                    "timestamp" to p.timestamp,
+                    "accuracy" to p.accuracy
                 )
             }
-            
-            // Вызываем Cloud Function для завершения текущей доставки
+
             val data = hashMapOf(
                 "chainId" to chainId,
-                "itemId" to currentItem.id,
-                "deliveryId" to (currentItem.deliveryId ?: ""),
+                "itemId" to current.id,
                 "route" to routeData,
                 "waitingMinutes" to waitingMinutes,
                 "endTime" to System.currentTimeMillis()
             )
-            
             val result = functions.getHttpsCallable("completeChainDelivery").call(data).await()
-            
+
             @Suppress("UNCHECKED_CAST")
-            val responseData = result.data as Map<String, Any>
-            val cost = (responseData["cost"] as? Number)?.toDouble() ?: 0.0
-            val distance = (responseData["distanceMeters"] as? Number)?.toDouble() ?: 0.0
-            
-            // Обновляем текущую доставку
-            itemDao.update(currentItem.copy(
+            val resp = result.data as Map<String, Any>
+            val cost = (resp["cost"] as? Number)?.toDouble() ?: 0.0
+            val dist = (resp["distanceMeters"] as? Number)?.toDouble() ?: 0.0
+
+            itemDao.update(current.copy(
                 status = DeliveryStatus.COMPLETED.name,
                 endTime = System.currentTimeMillis(),
                 cost = cost,
-                distanceMeters = distance
+                distanceMeters = dist
             ))
-            
-            // Проверяем, есть ли следующая доставка
-            val nextItem = items
+
+            val next = items
                 .filter { it.status == DeliveryStatus.PENDING.name }
                 .minByOrNull { it.sequenceOrder }
-            
-            if (nextItem != null) {
-                // Запускаем следующую доставку
-                itemDao.update(nextItem.copy(
+
+            if (next != null) {
+                itemDao.update(next.copy(
                     status = DeliveryStatus.IN_PROGRESS.name,
                     startTime = System.currentTimeMillis()
                 ))
             } else {
-                // Все доставки завершены
                 chainDao.update(chainEntity.copy(
                     status = DeliveryChainStatus.COMPLETED.name,
                     completedAt = System.currentTimeMillis()
                 ))
             }
-            
-            val updatedChain = chainDao.getById(chainId)
-            Resource.Success(updatedChain?.toDeliveryChain() ?: chainEntity.toDeliveryChain())
+
+            val updated = chainDao.getById(chainId)
+            Resource.Success(updated?.toDeliveryChain() ?: chainEntity.toDeliveryChain())
         } catch (e: Exception) {
             Resource.Error("Ошибка завершения доставки: ${e.localizedMessage}")
         }
@@ -238,17 +223,12 @@ class DeliveryChainRepositoryImpl @Inject constructor(
         return try {
             val chainEntity = chainDao.getById(chainId)
                 ?: return Resource.Error("Цепочка не найдена")
-            
-            // Отменяем на сервере
             val data = hashMapOf("chainId" to chainId, "courierId" to userId)
             functions.getHttpsCallable("cancelDeliveryChain").call(data).await()
-            
-            // Обновляем локально
             chainDao.update(chainEntity.copy(
                 status = DeliveryChainStatus.CANCELLED.name,
                 completedAt = System.currentTimeMillis()
             ))
-            
             Resource.Success(Unit)
         } catch (e: Exception) {
             Resource.Error("Ошибка отмены цепочки: ${e.localizedMessage}")
@@ -257,15 +237,12 @@ class DeliveryChainRepositoryImpl @Inject constructor(
 
     override suspend fun getChainById(chainId: String): Resource<DeliveryChain> {
         return try {
-            val chainEntity = chainDao.getById(chainId)
+            val entity = chainDao.getById(chainId)
                 ?: return Resource.Error("Цепочка не найдена")
-            
             val items = itemDao.getItemsByChainIdSync(chainId)
-            val chain = chainEntity.toDeliveryChain().copy(
+            Resource.Success(entity.toDeliveryChain().copy(
                 items = items.map { it.toChainDeliveryItem() }
-            )
-            
-            Resource.Success(chain)
+            ))
         } catch (e: Exception) {
             Resource.Error("Ошибка загрузки цепочки: ${e.localizedMessage}")
         }
@@ -276,51 +253,36 @@ class DeliveryChainRepositoryImpl @Inject constructor(
             chainDao.getByIdFlow(chainId),
             itemDao.getItemsByChainId(chainId)
         ) { chain, items ->
-            chain?.toDeliveryChain()?.copy(
-                items = items.map { it.toChainDeliveryItem() }
-            )
+            chain?.toDeliveryChain()?.copy(items = items.map { it.toChainDeliveryItem() })
         }
     }
 
     override fun getActiveChain(courierId: String): Flow<DeliveryChain?> {
-        return combine(
-            chainDao.getActiveChain(courierId),
-            chainDao.getActiveChain(courierId)
-        ) { chain, _ ->
-            if (chain != null) {
-                val items = itemDao.getItemsByChainIdSync(chain.id)
-                chain.toDeliveryChain().copy(
-                    items = items.map { it.toChainDeliveryItem() }
-                )
-            } else {
-                null
+        return chainDao.getActiveChain(courierId).flatMapLatest { chain ->
+            if (chain == null) flowOf(null)
+            else itemDao.getItemsByChainId(chain.id).map { items ->
+                chain.toDeliveryChain().copy(items = items.map { it.toChainDeliveryItem() })
             }
         }
     }
 
     override fun getChainsByCourier(courierId: String): Flow<List<DeliveryChain>> {
-        return chainDao.getChainsByCourier(courierId).combine(
-            chainDao.getChainsByCourier(courierId)
-        ) { chains, _ ->
-            chains.map { chain ->
+        return chainDao.getChainsByCourier(courierId).flatMapLatest { chains ->
+            if (chains.isEmpty()) flowOf(emptyList())
+            else flowOf(chains.map { chain ->
                 val items = itemDao.getItemsByChainIdSync(chain.id)
-                chain.toDeliveryChain().copy(
-                    items = items.map { it.toChainDeliveryItem() }
-                )
-            }
+                chain.toDeliveryChain().copy(items = items.map { it.toChainDeliveryItem() })
+            })
         }
     }
 
     override fun getDraftChains(courierId: String): Flow<List<DeliveryChain>> {
-        return chainDao.getDraftChains(courierId).combine(
-            chainDao.getDraftChains(courierId)
-        ) { chains, _ ->
-            chains.map { chain ->
+        return chainDao.getDraftChains(courierId).flatMapLatest { chains ->
+            if (chains.isEmpty()) flowOf(emptyList())
+            else flowOf(chains.map { chain ->
                 val items = itemDao.getItemsByChainIdSync(chain.id)
-                chain.toDeliveryChain().copy(
-                    items = items.map { it.toChainDeliveryItem() }
-                )
-            }
+                chain.toDeliveryChain().copy(items = items.map { it.toChainDeliveryItem() })
+            })
         }
     }
 }

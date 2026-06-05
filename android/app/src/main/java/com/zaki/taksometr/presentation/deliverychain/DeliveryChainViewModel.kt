@@ -13,6 +13,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -50,7 +51,14 @@ class DeliveryChainViewModel @Inject constructor(
 
     private fun observeActiveChain() {
         viewModelScope.launch {
-            chainRepository.getActiveChain(userId).collect { chain ->
+            // Если есть активная цепочка в состоянии IN_PROGRESS — показываем её.
+            // Если активной цепочки нет, но есть черновики — показываем последний черновик.
+            combine(
+                chainRepository.getActiveChain(userId),
+                chainRepository.getDraftChains(userId)
+            ) { active, drafts ->
+                active ?: drafts.firstOrNull()
+            }.collect { chain ->
                 _state.value = _state.value.copy(currentChain = chain)
             }
         }
