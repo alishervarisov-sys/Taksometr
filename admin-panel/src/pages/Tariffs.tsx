@@ -16,6 +16,17 @@ const Tariffs: React.FC<TariffsProps> = ({ adminId }) => {
   const [costPerKm, setCostPerKm] = useState('1500');
   const [freeWaitingMinutes, setFreeWaitingMinutes] = useState('5');
   const [costPerWaitingMinute, setCostPerWaitingMinute] = useState('500');
+  
+  // Fixed delivery types
+  const [fixedTypes, setFixedTypes] = useState({
+    coal: '0',           // Уголь
+    gas15: '0',          // Газ до 15л
+    gas30: '0',          // Газ до 30л
+    gas30plus: '0',      // Газ более 30л
+    errands: '0',        // Различные поручения
+    heavyCargo: '0',     // Тяжелые грузы
+  });
+  
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState('');
@@ -34,6 +45,16 @@ const Tariffs: React.FC<TariffsProps> = ({ adminId }) => {
         setCostPerKm(String(data.costPerKm ?? 1500));
         setFreeWaitingMinutes(String(data.freeWaitingMinutes ?? 5));
         setCostPerWaitingMinute(String(data.costPerWaitingMinute ?? 500));
+        
+        // Load fixed types
+        setFixedTypes({
+          coal: String(data.fixedTypes?.coal ?? 0),
+          gas15: String(data.fixedTypes?.gas15 ?? 0),
+          gas30: String(data.fixedTypes?.gas30 ?? 0),
+          gas30plus: String(data.fixedTypes?.gas30plus ?? 0),
+          errands: String(data.fixedTypes?.errands ?? 0),
+          heavyCargo: String(data.fixedTypes?.heavyCargo ?? 0),
+        });
       }
     } catch (err) {
       console.error('Error loading tariff:', err);
@@ -54,6 +75,14 @@ const Tariffs: React.FC<TariffsProps> = ({ adminId }) => {
         costPerKm: Number(costPerKm),
         freeWaitingMinutes: Number(freeWaitingMinutes),
         costPerWaitingMinute: Number(costPerWaitingMinute),
+        fixedTypes: {
+          coal: Number(fixedTypes.coal),
+          gas15: Number(fixedTypes.gas15),
+          gas30: Number(fixedTypes.gas30),
+          gas30plus: Number(fixedTypes.gas30plus),
+          errands: Number(fixedTypes.errands),
+          heavyCargo: Number(fixedTypes.heavyCargo),
+        },
       });
       setSuccess(true);
     } catch (err: any) {
@@ -143,6 +172,71 @@ const Tariffs: React.FC<TariffsProps> = ({ adminId }) => {
                 onChange={(e) => setCostPerWaitingMinute(e.target.value)}
                 margin="normal"
                 helperText="Берётся за каждую минуту после бесплатного времени"
+              />
+
+              <Typography variant="h6" sx={{ mt: 3, mb: 1 }}>Фиксированные типы доставки</Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                Доставки без счётчика с фиксированной ценой
+              </Typography>
+
+              <TextField
+                fullWidth
+                label="Уголь (сомони)"
+                type="number"
+                value={fixedTypes.coal}
+                onChange={(e) => setFixedTypes({ ...fixedTypes, coal: e.target.value })}
+                margin="normal"
+                helperText="Фиксированная цена за доставку угля"
+              />
+
+              <TextField
+                fullWidth
+                label="Газ до 15 литров (сомони)"
+                type="number"
+                value={fixedTypes.gas15}
+                onChange={(e) => setFixedTypes({ ...fixedTypes, gas15: e.target.value })}
+                margin="normal"
+                helperText="Фиксированная цена за доставку газа до 15 литров"
+              />
+
+              <TextField
+                fullWidth
+                label="Газ до 30 литров (сомони)"
+                type="number"
+                value={fixedTypes.gas30}
+                onChange={(e) => setFixedTypes({ ...fixedTypes, gas30: e.target.value })}
+                margin="normal"
+                helperText="Фиксированная цена за доставку газа до 30 литров"
+              />
+
+              <TextField
+                fullWidth
+                label="Газ более 30 литров (сомони)"
+                type="number"
+                value={fixedTypes.gas30plus}
+                onChange={(e) => setFixedTypes({ ...fixedTypes, gas30plus: e.target.value })}
+                margin="normal"
+                helperText="Фиксированная цена за доставку газа более 30 литров"
+              />
+
+              <TextField
+                fullWidth
+                label="Различные поручения (сомони)"
+                type="number"
+                value={fixedTypes.errands}
+                onChange={(e) => setFixedTypes({ ...fixedTypes, errands: e.target.value })}
+                margin="normal"
+                helperText="Фиксированная цена за различные поручения"
+              />
+
+              <TextField
+                fullWidth
+                label="Тяжелые грузы (сомони)"
+                type="number"
+                value={fixedTypes.heavyCargo}
+                onChange={(e) => setFixedTypes({ ...fixedTypes, heavyCargo: e.target.value })}
+                margin="normal"
+                helperText="Фиксированная цена за тяжелые грузы"
               />
 
               {error && <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>}

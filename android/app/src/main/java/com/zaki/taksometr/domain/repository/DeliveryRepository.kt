@@ -6,9 +6,10 @@ import com.zaki.taksometr.util.Resource
 import kotlinx.coroutines.flow.Flow
 
 interface DeliveryRepository {
-    suspend fun createDelivery(clientPhone: String): Resource<Delivery>
+    suspend fun createDelivery(clientPhone: String, deliveryType: String = "default"): Resource<Delivery>
     suspend fun completeDelivery(deliveryId: String, waitingMinutes: Double = 0.0): Resource<Delivery>
     suspend fun cancelDelivery(deliveryId: String): Resource<Unit>
+    suspend fun getFixedDeliveryTypes(): Resource<Map<String, Double>>
     fun getActiveDelivery(): Flow<Delivery?>
     fun getDeliveryHistory(courierId: String): Flow<List<Delivery>>
     fun searchDeliveries(phone: String): Flow<List<Delivery>>

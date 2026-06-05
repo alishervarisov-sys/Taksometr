@@ -22,6 +22,10 @@ data class HomeState(
     val clientPhone: String = "",
     val isStartingDelivery: Boolean = false,
     val showStartDialog: Boolean = false,
+    val showDeliveryTypeDialog: Boolean = false,
+    val selectedDeliveryType: String = "default",
+    val fixedTypes: Map<String, Double> = emptyMap(),
+    val isLoadingTariff: Boolean = false,
     val isBlocked: Boolean = false,
     val error: String? = null
 )
@@ -43,6 +47,7 @@ class HomeViewModel @Inject constructor(
         loadUserData()
         loadTodayStats()
         observeActiveDelivery()
+        loadFixedTypes()
     }
 
     private var userLoaded = false
@@ -89,8 +94,55 @@ class HomeViewModel @Inject constructor(
         _state.value = _state.value.copy(showStartDialog = false, clientPhone = "", error = null)
     }
 
+    fun showDeliveryTypeDialog() {
+        _state.value = _state.value.copy(showDeliveryTypeDialog = true, selectedDeliveryType = "default", error = null)
+        // Reload tariffs when dialog is shown
+        loadFixedTypes()
+    }
+
+    fun hideDeliveryTypeDialog() {
+        _state.value = _state.value.copy(showDeliveryTypeDialog = false, selectedDeliveryType = "default", error = null)
+    }
+
+    fun onDeliveryTypeSelected(type: String) {
+        _state.value = _state.value.copy(selectedDeliveryType = type, error = null)
+    }
+
     fun onClientPhoneChange(phone: String) {
         _state.value = _state.value.copy(clientPhone = phone, error = null)
+    }
+
+    private fun loadFixedTypes() {
+        viewModelScope.launch {
+            _state.value = _state.value.copy(isLoadingTariff = true)
+            try {
+                when (val result = deliveryRepository.getFixedDeliveryTypes()) {
+                    is Resource.Success -> {
+                        _state.value = _state.value.copy(
+                            fixedTypes = result.data ?: emptyMap(),
+                            isLoadingTariff = false
+                        )
+                    }
+                    is Resource.Error -> {
+                        _state.value = _state.value.copy(
+                            fixedTypes = emptyMap(),
+                            isLoadingTariff = false
+                        )
+                    }
+                    is Resource.Loading -> {}
+                }
+            } catch (e: Exception) {
+                _state.value = _state.value.copy(
+                    fixedTypes = emptyMap(),
+                    isLoadingTariff = false
+                )
+            }
+        }
+    }
+
+    fun proceedToPhoneInput() {
+        hideDeliveryTypeDialog()
+        showStartDialog()
     }
 
     fun startDelivery() {
@@ -100,14 +152,17 @@ class HomeViewModel @Inject constructor(
             return
         }
 
+        val deliveryType = _state.value.selectedDeliveryType
+
         viewModelScope.launch {
             _state.value = _state.value.copy(isStartingDelivery = true, error = null)
 
-            when (val result = deliveryRepository.createDelivery(phone)) {
+            when (val result = deliveryRepository.createDelivery(phone, deliveryType)) {
                 is Resource.Success -> {
                     _state.value = _state.value.copy(
                         isStartingDelivery = false,
                         showStartDialog = false,
+                        showDeliveryTypeDialog = false,
                         activeDelivery = result.data
                     )
                 }

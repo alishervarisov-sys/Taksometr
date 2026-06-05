@@ -7,6 +7,7 @@ import android.location.LocationManager
 import android.provider.Settings
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -303,7 +304,7 @@ fun HomeScreen(
             // Start delivery button
             Button(
                 onClick = {
-                    viewModel.showStartDialog()
+                    viewModel.showDeliveryTypeDialog()
                 },
                 modifier = Modifier
                     .fillMaxWidth()
@@ -327,6 +328,125 @@ fun HomeScreen(
 
             Spacer(modifier = Modifier.height(32.dp))
         }
+    }
+
+    // Delivery type selection dialog
+    if (state.showDeliveryTypeDialog) {
+        AlertDialog(
+            onDismissRequest = { viewModel.hideDeliveryTypeDialog() },
+            title = { Text("Выберите тип доставки") },
+            text = {
+                Column(
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    // Debug info
+                    if (state.isLoadingTariff) {
+                        Text(
+                            "Загрузка тарифов...",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.secondary
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+                    
+                    Text(
+                        "Загружено типов: ${state.fixedTypes.size}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.secondary
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    
+                    DeliveryTypeOption(
+                        selected = state.selectedDeliveryType == "default",
+                        onClick = { viewModel.onDeliveryTypeSelected("default") },
+                        title = "По счётчику (обычная)",
+                        subtitle = "Оплата по километражу"
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    
+                    val fixedTypes = state.fixedTypes
+                    if (fixedTypes.isNotEmpty()) {
+                        if (fixedTypes["coal"] ?: 0.0 > 0) {
+                            DeliveryTypeOption(
+                                selected = state.selectedDeliveryType == "coal",
+                                onClick = { viewModel.onDeliveryTypeSelected("coal") },
+                                title = "Уголь",
+                                subtitle = "Фиксированная цена: ${fixedTypes["coal"]?.toLong() ?: 0} сомони"
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
+                        
+                        // Gas options - show as sub-options
+                        val hasGas = (fixedTypes["gas15"] ?: 0.0 > 0) || 
+                                     (fixedTypes["gas30"] ?: 0.0 > 0) || 
+                                     (fixedTypes["gas30plus"] ?: 0.0 > 0)
+                        
+                        if (hasGas) {
+                            if (fixedTypes["gas15"] ?: 0.0 > 0) {
+                                DeliveryTypeOption(
+                                    selected = state.selectedDeliveryType == "gas15",
+                                    onClick = { viewModel.onDeliveryTypeSelected("gas15") },
+                                    title = "Газ до 15 литров",
+                                    subtitle = "Фиксированная цена: ${fixedTypes["gas15"]?.toLong() ?: 0} сомони"
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                            }
+                            
+                            if (fixedTypes["gas30"] ?: 0.0 > 0) {
+                                DeliveryTypeOption(
+                                    selected = state.selectedDeliveryType == "gas30",
+                                    onClick = { viewModel.onDeliveryTypeSelected("gas30") },
+                                    title = "Газ до 30 литров",
+                                    subtitle = "Фиксированная цена: ${fixedTypes["gas30"]?.toLong() ?: 0} сомони"
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                            }
+                            
+                            if (fixedTypes["gas30plus"] ?: 0.0 > 0) {
+                                DeliveryTypeOption(
+                                    selected = state.selectedDeliveryType == "gas30plus",
+                                    onClick = { viewModel.onDeliveryTypeSelected("gas30plus") },
+                                    title = "Газ более 30 литров",
+                                    subtitle = "Фиксированная цена: ${fixedTypes["gas30plus"]?.toLong() ?: 0} сомони"
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                            }
+                        }
+                        
+                        if (fixedTypes["errands"] ?: 0.0 > 0) {
+                            DeliveryTypeOption(
+                                selected = state.selectedDeliveryType == "errands",
+                                onClick = { viewModel.onDeliveryTypeSelected("errands") },
+                                title = "Различные поручения",
+                                subtitle = "Фиксированная цена: ${fixedTypes["errands"]?.toLong() ?: 0} сомони"
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
+                        
+                        if (fixedTypes["heavyCargo"] ?: 0.0 > 0) {
+                            DeliveryTypeOption(
+                                selected = state.selectedDeliveryType == "heavyCargo",
+                                onClick = { viewModel.onDeliveryTypeSelected("heavyCargo") },
+                                title = "Тяжелые грузы",
+                                subtitle = "Фиксированная цена: ${fixedTypes["heavyCargo"]?.toLong() ?: 0} сомони"
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = { viewModel.proceedToPhoneInput() }
+                ) {
+                    Text("Далее")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.hideDeliveryTypeDialog() }) {
+                    Text("Отмена")
+                }
+            }
+        )
     }
 
     // Start delivery dialog
@@ -383,6 +503,55 @@ fun HomeScreen(
                 }
             }
         )
+    }
+}
+
+@Composable
+fun DeliveryTypeOption(
+    selected: Boolean,
+    onClick: () -> Unit,
+    title: String,
+    subtitle: String
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (selected) 
+                MaterialTheme.colorScheme.primaryContainer 
+            else 
+                MaterialTheme.colorScheme.surface
+        ),
+        elevation = CardDefaults.cardElevation(
+            defaultElevation = if (selected) 4.dp else 1.dp
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            RadioButton(
+                selected = selected,
+                onClick = onClick
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Column {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                )
+            }
+        }
     }
 }
 

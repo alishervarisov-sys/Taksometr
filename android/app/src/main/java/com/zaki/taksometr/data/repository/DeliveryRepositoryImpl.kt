@@ -36,12 +36,13 @@ class DeliveryRepositoryImpl @Inject constructor(
     private val userId: String
         get() = prefs.getString(Constants.PREF_USER_ID, "") ?: ""
 
-    override suspend fun createDelivery(clientPhone: String): Resource<Delivery> {
+    override suspend fun createDelivery(clientPhone: String, deliveryType: String): Resource<Delivery> {
         return try {
             // Call Cloud Function to create delivery (server-side validation)
             val data = hashMapOf(
                 "courierId" to userId,
-                "clientPhone" to clientPhone
+                "clientPhone" to clientPhone,
+                "deliveryType" to deliveryType
             )
 
             val result = functions
@@ -73,6 +74,39 @@ class DeliveryRepositoryImpl @Inject constructor(
             Resource.Success(delivery)
         } catch (e: Exception) {
             Resource.Error("Ошибка создания доставки: ${e.localizedMessage}")
+        }
+    }
+
+    override suspend fun getFixedDeliveryTypes(): Resource<Map<String, Double>> {
+        return try {
+            val doc = firestore.collection("tariffs")
+                .document("default")
+                .get()
+                .await()
+
+            if (!doc.exists()) {
+                android.util.Log.d("DeliveryRepo", "Tariff document does not exist")
+                return Resource.Success(emptyMap())
+            }
+
+            @Suppress("UNCHECKED_CAST")
+            val fixedTypes = doc.get("fixedTypes") as? Map<String, Any> ?: emptyMap()
+            
+            android.util.Log.d("DeliveryRepo", "Loaded fixedTypes: $fixedTypes")
+            
+            val result = fixedTypes.mapValues { (_, value) ->
+                when (value) {
+                    is Number -> value.toDouble()
+                    else -> 0.0
+                }
+            }
+            
+            android.util.Log.d("DeliveryRepo", "Converted result: $result")
+
+            Resource.Success(result)
+        } catch (e: Exception) {
+            android.util.Log.e("DeliveryRepo", "Error loading tariffs", e)
+            Resource.Error("Ошибка загрузки тарифов: ${e.localizedMessage}")
         }
     }
 

@@ -171,7 +171,7 @@ function computeCost(
 
 // ============ CREATE DELIVERY ============
 export const createDelivery = functions.https.onCall(async (data, context) => {
-  const {courierId, clientPhone} = data;
+  const {courierId, clientPhone, deliveryType} = data;
 
   if (!courierId || !clientPhone) {
     throw new functions.https.HttpsError(
@@ -216,6 +216,31 @@ export const createDelivery = functions.https.onCall(async (data, context) => {
     );
   }
 
+  // Validate delivery type and get fixed price if applicable
+  let fixedPrice: number | null = null;
+  let deliveryTypeName = "";
+  
+  if (deliveryType && deliveryType !== "default") {
+    const tariffDoc = await db.collection("tariffs").doc("default").get();
+    if (tariffDoc.exists) {
+      const fixedTypes = tariffDoc.data()!.fixedTypes || {};
+      if (fixedTypes[deliveryType] !== undefined) {
+        fixedPrice = fixedTypes[deliveryType];
+        
+        // Map type to display name
+        const typeNames: {[key: string]: string} = {
+          coal: "Уголь",
+          gas15: "Газ до 15л",
+          gas30: "Газ до 30л",
+          gas30plus: "Газ более 30л",
+          errands: "Различные поручения",
+          heavyCargo: "Тяжелые грузы",
+        };
+        deliveryTypeName = typeNames[deliveryType] || deliveryType;
+      }
+    }
+  }
+
   // Create delivery
   const deliveryRef = db.collection("deliveries").doc();
   const deliveryData = {
@@ -228,24 +253,37 @@ export const createDelivery = functions.https.onCall(async (data, context) => {
     distanceMeters: 0,
     cost: 0,
     route: [],
+    deliveryType: deliveryType || "default",
+    fixedPrice: fixedPrice,
     createdAt: Date.now(),
   };
 
   await deliveryRef.set(deliveryData);
 
-  // ---- Notify client by SMS that the courier started the meter (Tajik) ----
+  // ---- Notify client by SMS that the courier started (Tajik) ----
   const courierName = courierData.name || "";
   const courierPhone = courierData.phone || "";
-  const startSmsText = courierPhone ?
-    `Салом! Расонандаи ZaKi фармоиши шуморо қабул кард. ` +
-    `Расонанда: ${courierName}, тел: ${courierPhone}.` :
-    `Салом! Расонандаи ZaKi фармоиши шуморо қабул кард. Расонанда: ${courierName}.`;
+  
+  let startSmsText = `Салом! Расонандаи ZaKi фармоиши шуморо қабул кард. `;
+  startSmsText += `Расонанда: ${courierName}`;
+  
+  if (courierPhone) {
+    startSmsText += `, тел: ${courierPhone}`;
+  }
+  
+  startSmsText += `.`;
+  
+  if (fixedPrice !== null && fixedPrice > 0) {
+    startSmsText += ` Навъи хидмат: ${deliveryTypeName}. Нархи қатъӣ: ${formatCostForSms(fixedPrice)} сомонӣ.`;
+  }
 
   await sendSms(clientPhone, startSmsText);
 
   return {
     deliveryId: deliveryRef.id,
     courierName: courierData.name || "",
+    deliveryType: deliveryType || "default",
+    fixedPrice: fixedPrice,
   };
 });
 
@@ -284,41 +322,57 @@ export const completeDelivery = functions.https.onCall(async (data, context) => 
     );
   }
 
-  // Calculate distance from route
-  const routePoints = route || [];
-  const distanceMeters = calculateRouteDistance(routePoints);
-
-  // Get tariff
-  const tariffDoc = await db.collection("tariffs").doc("default").get();
-  let baseCost = 5000;
-  let baseDistanceKm = 3;
-  let costPerKm = 1500;
-
-  if (tariffDoc.exists) {
-    const tariffData = tariffDoc.data()!;
-    baseCost = tariffData.baseCost || 5000;
-    baseDistanceKm = tariffData.baseDistanceKm ?? 3;
-    costPerKm = tariffData.costPerKm || 1500;
-  }
-
-  // Calculate cost: base covers baseDistanceKm, then costPerKm beyond
-  const roundedCost = computeCost(distanceMeters, baseCost, baseDistanceKm, costPerKm);
-
-  // Calculate waiting cost
-  const freeWaitingMinutes = tariffDoc.exists
-    ? (tariffDoc.data()!.freeWaitingMinutes ?? 5)
-    : 5;
-  const costPerWaitingMinute = tariffDoc.exists
-    ? (tariffDoc.data()!.costPerWaitingMinute ?? 500)
-    : 500;
-
-  const actualWaitingMinutes = waitingMinutes || 0;
+  // Check if this is a fixed-price delivery
+  const deliveryType = deliveryData.deliveryType || "default";
+  const fixedPrice = deliveryData.fixedPrice;
+  
+  let totalCost: number;
+  let distanceMeters = 0;
   let waitingCost = 0;
-  if (actualWaitingMinutes > freeWaitingMinutes) {
-    waitingCost = Math.ceil((actualWaitingMinutes - freeWaitingMinutes) * costPerWaitingMinute);
+  let roundedCost = 0;
+  
+  if (deliveryType !== "default" && fixedPrice !== null && fixedPrice !== undefined) {
+    // Fixed price delivery - no calculation needed
+    totalCost = fixedPrice;
+    distanceMeters = 0;
+  } else {
+    // Calculate distance from route
+    const routePoints = route || [];
+    distanceMeters = calculateRouteDistance(routePoints);
+
+    // Get tariff
+    const tariffDoc = await db.collection("tariffs").doc("default").get();
+    let baseCost = 5000;
+    let baseDistanceKm = 3;
+    let costPerKm = 1500;
+
+    if (tariffDoc.exists) {
+      const tariffData = tariffDoc.data()!;
+      baseCost = tariffData.baseCost || 5000;
+      baseDistanceKm = tariffData.baseDistanceKm ?? 3;
+      costPerKm = tariffData.costPerKm || 1500;
+    }
+
+    // Calculate cost: base covers baseDistanceKm, then costPerKm beyond
+    roundedCost = computeCost(distanceMeters, baseCost, baseDistanceKm, costPerKm);
+
+    // Calculate waiting cost
+    const freeWaitingMinutes = tariffDoc.exists
+      ? (tariffDoc.data()!.freeWaitingMinutes ?? 5)
+      : 5;
+    const costPerWaitingMinute = tariffDoc.exists
+      ? (tariffDoc.data()!.costPerWaitingMinute ?? 500)
+      : 500;
+
+    const actualWaitingMinutes = waitingMinutes || 0;
+    if (actualWaitingMinutes > freeWaitingMinutes) {
+      waitingCost = Math.ceil((actualWaitingMinutes - freeWaitingMinutes) * costPerWaitingMinute);
+    }
+
+    totalCost = roundedCost + waitingCost;
   }
 
-  const totalCost = roundedCost + waitingCost;
+  const routePoints = route || [];
 
   // ---- Commission logic ----
   // Per-courier commission takes priority over global setting
@@ -364,22 +418,38 @@ export const completeDelivery = functions.https.onCall(async (data, context) => 
     endTime: endTime || Date.now(),
     distanceMeters: distanceMeters,
     cost: totalCost,
-    waitingMinutes: actualWaitingMinutes,
+    waitingMinutes: waitingMinutes || 0,
     waitingCost: waitingCost,
     commission: commissionAmount,
     route: routePoints,
   });
 
   // ---- Notify client by SMS about the final delivery total (Tajik) ----
-  const distanceKmText = (distanceMeters / 1000).toFixed(1);
-  let completeSmsText =
-    `Фармоиши ZaKi анҷом ёфт. ` +
-    `Масофа: ${distanceKmText} км. `;
-
-  if (waitingCost > 0) {
-    const waitingMinsRounded = Math.ceil(actualWaitingMinutes);
-    completeSmsText +=
-      `Интизорӣ: ${waitingMinsRounded} дақ. (${formatCostForSms(waitingCost)} сомонӣ). `;
+  let completeSmsText = `Фармоиши ZaKi анҷом ёфт. `;
+  
+  if (deliveryType !== "default" && fixedPrice !== null && fixedPrice !== undefined) {
+    // Fixed price delivery - simple message
+    const typeNames: {[key: string]: string} = {
+      coal: "Уголь",
+      gas15: "Газ до 15л",
+      gas30: "Газ до 30л",
+      gas30plus: "Газ более 30л",
+      errands: "Различные поручения",
+      heavyCargo: "Тяжелые грузы",
+    };
+    const typeName = typeNames[deliveryType] || deliveryType;
+    completeSmsText += `Навъи хидмат: ${typeName}. `;
+  } else {
+    // Regular counter-based delivery - show distance
+    const distanceKmText = (distanceMeters / 1000).toFixed(1);
+    completeSmsText += `Масофа: ${distanceKmText} км. `;
+    
+    if (waitingCost > 0) {
+      const actualWaitingMinutes = waitingMinutes || 0;
+      const waitingMinsRounded = Math.ceil(actualWaitingMinutes);
+      completeSmsText +=
+        `Интизорӣ: ${waitingMinsRounded} дақ. (${formatCostForSms(waitingCost)} сомонӣ). `;
+    }
   }
 
   completeSmsText +=
@@ -397,7 +467,7 @@ export const completeDelivery = functions.https.onCall(async (data, context) => 
     endTime: endTime || Date.now(),
     distanceMeters: distanceMeters,
     cost: totalCost,
-    waitingMinutes: actualWaitingMinutes,
+    waitingMinutes: waitingMinutes || 0,
     waitingCost: waitingCost,
     commission: commissionAmount,
   };
@@ -540,7 +610,7 @@ export const createCourier = functions.https.onCall(async (data, context) => {
 
 // ============ ADMIN: UPDATE TARIFF ============
 export const updateTariff = functions.https.onCall(async (data, context) => {
-  const {adminId, baseCost, baseDistanceKm, costPerKm} = data;
+  const {adminId, baseCost, baseDistanceKm, costPerKm, fixedTypes} = data;
 
   // Verify admin
   await verifyAdmin(adminId);
@@ -558,6 +628,14 @@ export const updateTariff = functions.https.onCall(async (data, context) => {
     costPerKm: costPerKm,
     freeWaitingMinutes: data.freeWaitingMinutes ?? 5,
     costPerWaitingMinute: data.costPerWaitingMinute ?? 500,
+    fixedTypes: fixedTypes || {
+      coal: 0,
+      gas15: 0,
+      gas30: 0,
+      gas30plus: 0,
+      errands: 0,
+      heavyCargo: 0,
+    },
     currency: "сомони",
     isActive: true,
     updatedAt: Date.now(),
