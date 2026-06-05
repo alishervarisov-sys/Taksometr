@@ -238,14 +238,14 @@ export const createDelivery = functions.https.onCall(async (data, context) => {
       if (fixedTypes[deliveryType] !== undefined && fixedTypes[deliveryType] > 0) {
         fixedPrice = fixedTypes[deliveryType];
         
-        // Map type to display name
+        // Map type to display name (Tajik)
         const typeNames: {[key: string]: string} = {
-          coal: "Уголь",
-          gas15: "Газ до 15л",
-          gas30: "Газ до 30л",
-          gas30plus: "Газ более 30л",
-          errands: "Различные поручения",
-          heavyCargo: "Тяжелые грузы",
+          coal: "Ангишт",
+          gas15: "Газ то 15 литр",
+          gas30: "Газ то 30 литр",
+          gas30plus: "Газ зиёда аз 30 литр",
+          errands: "Гуногун супоришҳо",
+          heavyCargo: "Бори вазнин",
         };
         deliveryTypeName = typeNames[deliveryType] || deliveryType;
         console.log("Set fixedPrice:", fixedPrice, "deliveryTypeName:", deliveryTypeName);
@@ -450,12 +450,12 @@ export const completeDelivery = functions.https.onCall(async (data, context) => 
   if (deliveryType !== "default" && fixedPrice !== null && fixedPrice !== undefined) {
     // Fixed price delivery - simple message
     const typeNames: {[key: string]: string} = {
-      coal: "Уголь",
-      gas15: "Газ до 15л",
-      gas30: "Газ до 30л",
-      gas30plus: "Газ более 30л",
-      errands: "Различные поручения",
-      heavyCargo: "Тяжелые грузы",
+      coal: "Ангишт",
+      gas15: "Газ то 15 литр",
+      gas30: "Газ то 30 литр",
+      gas30plus: "Газ зиёда аз 30 литр",
+      errands: "Гуногун супоришҳо",
+      heavyCargo: "Бори вазнин",
     };
     const typeName = typeNames[deliveryType] || deliveryType;
     completeSmsText += `Навъи хидмат: ${typeName}. `;
