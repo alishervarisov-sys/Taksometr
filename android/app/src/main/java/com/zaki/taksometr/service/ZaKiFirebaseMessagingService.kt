@@ -17,11 +17,16 @@ import com.google.firebase.messaging.RemoteMessage
 import com.zaki.taksometr.R
 import com.zaki.taksometr.ZaKiApp
 import com.zaki.taksometr.domain.repository.AuthRepository
+import com.zaki.taksometr.data.local.dao.DeliveryChainDao
+import com.zaki.taksometr.data.local.dao.ChainDeliveryItemDao
+import com.zaki.taksometr.data.local.entity.DeliveryChainEntity
+import com.zaki.taksometr.data.local.entity.ChainDeliveryItemEntity
 import com.zaki.taksometr.util.Constants
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
 import javax.inject.Inject
 
 @AndroidEntryPoint
@@ -31,6 +36,8 @@ class ZaKiFirebaseMessagingService : FirebaseMessagingService() {
     @Inject lateinit var fusedLocationClient: FusedLocationProviderClient
     @Inject lateinit var firestore: FirebaseFirestore
     @Inject lateinit var prefs: SharedPreferences
+    @Inject lateinit var chainDao: DeliveryChainDao
+    @Inject lateinit var itemDao: ChainDeliveryItemDao
 
     override fun onNewToken(token: String) {
         super.onNewToken(token)
@@ -46,12 +53,89 @@ class ZaKiFirebaseMessagingService : FirebaseMessagingService() {
 
         when (type) {
             "REQUEST_LOCATION" -> handleLocationRequest()
+            "NEW_CHAIN" -> handleNewChain(message.data)
             else -> {
                 val title = message.notification?.title ?: message.data["title"] ?: "ZaKi Taksometr"
                 val body = message.notification?.body ?: message.data["body"] ?: ""
                 if (body.isNotEmpty()) {
                     showNotification(title, body)
                 }
+            }
+        }
+    }
+
+    private fun handleNewChain(data: Map<String, String>) {
+        val chainId = data["chainId"] ?: return
+
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val chainDoc = firestore.collection("delivery_chains").document(chainId).get().await()
+                if (!chainDoc.exists()) return@launch
+
+                val courierId = chainDoc.getString("courierId") ?: ""
+                val courierName = chainDoc.getString("courierName") ?: ""
+                val status = chainDoc.getString("status") ?: "IN_PROGRESS"
+                val createdAt = chainDoc.getLong("createdAt") ?: System.currentTimeMillis()
+                val startedAt = chainDoc.getLong("startedAt")
+                val completedAt = chainDoc.getLong("completedAt")
+                val totalDistance = chainDoc.getDouble("totalDistance") ?: 0.0
+                val totalCost = chainDoc.getDouble("totalCost") ?: 0.0
+
+                val chainEntity = DeliveryChainEntity(
+                    id = chainId,
+                    courierId = courierId,
+                    courierName = courierName,
+                    status = status,
+                    createdAt = createdAt,
+                    startedAt = startedAt,
+                    completedAt = completedAt,
+                    totalDistance = totalDistance,
+                    totalCost = totalCost,
+                    isSynced = true
+                )
+
+                // Insert or replace chain
+                chainDao.insert(chainEntity)
+
+                // Load items
+                val itemsSnap = firestore.collection("chain_delivery_items")
+                    .whereEqualTo("chainId", chainId)
+                    .orderBy("sequenceOrder")
+                    .get()
+                    .await()
+
+                val items = itemsSnap.documents.map { doc ->
+                    ChainDeliveryItemEntity(
+                        id = doc.id,
+                        chainId = chainId,
+                        clientPhone = doc.getString("clientPhone") ?: "",
+                        orderNumber = doc.getString("orderNumber") ?: "",
+                        sequenceOrder = (doc.getLong("sequenceOrder")?.toInt() ?: 0),
+                        status = doc.getString("status") ?: "PENDING",
+                        deliveryId = doc.getString("deliveryId"),
+                        startTime = doc.getLong("startTime"),
+                        endTime = doc.getLong("endTime"),
+                        distanceMeters = doc.getDouble("distanceMeters") ?: 0.0,
+                        cost = doc.getDouble("cost") ?: 0.0,
+                        deliveryType = doc.getString("deliveryType") ?: "default",
+                        fixedPrice = doc.getDouble("fixedPrice"),
+                        createdAt = doc.getLong("createdAt") ?: System.currentTimeMillis()
+                    )
+                }
+
+                // Replace items for this chain
+                itemDao.deleteByChainId(chainId)
+                if (items.isNotEmpty()) {
+                    itemDao.insertAll(items)
+                }
+
+                // Notify user
+                val title = "Новая цепочка заказов"
+                val body = "Вам назначена цепочка из ${items.size} заказов"
+                showNotification(title, body)
+
+            } catch (e: Exception) {
+                // swallow errors - they are non-critical for FCM handling
             }
         }
     }

@@ -87,15 +87,28 @@ const MapView: React.FC<MapViewProps> = ({ adminId }) => {
       const requestFn = httpsCallable(functions, 'requestCourierLocation');
       const result = await requestFn({ adminId, courierId });
       const data = result.data as { message?: string; hasToken?: boolean; lastLocation?: any };
-      
+      // If the callable returns a lastLocation (e.g. when courier app is closed)
+      // update the UI immediately so admin sees the position without waiting
+      // for the device to come online.
+      if (data.lastLocation && data.lastLocation.latitude !== undefined && data.lastLocation.longitude !== undefined) {
+        setCouriers(prev => prev.map(c => c.id === courierId ? ({
+          ...c,
+          lastLocation: {
+            latitude: data.lastLocation.latitude,
+            longitude: data.lastLocation.longitude,
+            timestamp: data.lastLocation.timestamp || Date.now(),
+          }
+        } as CourierLocation) : c));
+
+        // Select and center the map on this courier
+        setSelectedCourier(courierId);
+      }
+
       setSnackbar({
         open: true,
         message: data.message || 'Запрос отправлен',
         severity: data.hasToken === false ? 'warning' : 'success'
       });
-      
-      // If we got lastLocation in response, we could update the UI immediately
-      // but since we're using real-time listeners, it will update automatically
     } catch (err: any) {
       setSnackbar({
         open: true,
