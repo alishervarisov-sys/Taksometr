@@ -47,4 +47,7 @@ interface DeliveryChainRepository {
     
     // Получить черновики (незапущенные цепочки)
     fun getDraftChains(courierId: String): Flow<List<DeliveryChain>>
+
+    // Синхронизировать активную цепочку с сервера (если есть) и сохранить локально
+    suspend fun syncActiveChain(): Resource<Unit>
 }

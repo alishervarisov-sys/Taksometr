@@ -154,6 +154,54 @@ const DeliveryChains: React.FC<DeliveryChainsProps> = ({ adminId }) => {
     }
 
     try {
+      // Проверим, нет ли у курьера уже активной цепочки
+      const activeQuery = query(
+        collection(db, 'delivery_chains'),
+        where('courierId', '==', newChain.courierId),
+        where('status', '==', 'IN_PROGRESS')
+      );
+      const activeSnap = await getDocs(activeQuery);
+
+      if (!activeSnap.empty) {
+        const existing = activeSnap.docs[0];
+        const confirmCancel = window.confirm(
+          'У выбранного курьера уже есть активная цепочка (ID: ' + existing.id + ').\n' +
+          'Нажмите OK чтобы отменить существующую цепочку и создать новую, или Отмена чтобы открыть детали существующей.'
+        );
+
+        if (!confirmCancel) {
+          // Откроем детали существующей цепочки
+          await loadChains();
+          // Найдём цепочку в состоянии IN_PROGRESS для данного курьера и покажем её
+          const refreshed = await getDocs(activeQuery);
+          if (!refreshed.empty) {
+            const doc = refreshed.docs[0];
+            const itemsQuery = query(
+              collection(db, 'chain_delivery_items'),
+              where('chainId', '==', doc.id),
+              orderBy('sequenceOrder', 'asc')
+            );
+            const itemsSnap = await getDocs(itemsQuery);
+            const items = itemsSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
+            setSelectedChain({
+              id: doc.id,
+              courierId: doc.data().courierId,
+              courierName: doc.data().courierName || '',
+              status: doc.data().status,
+              items: items,
+              createdAt: doc.data().createdAt || 0,
+              startedAt: doc.data().startedAt,
+            } as DeliveryChain);
+            setDetailDialogOpen(true);
+          }
+          return;
+        } else {
+          // Отменим существующую цепочку перед созданием новой
+          const cancelChainFn = httpsCallable(functions, 'adminCancelDeliveryChain');
+          await cancelChainFn({ adminId: adminId, chainId: existing.id });
+        }
+      }
+
       const createChainFn = httpsCallable(functions, 'adminCreateDeliveryChain');
       await createChainFn({
         adminId: adminId,

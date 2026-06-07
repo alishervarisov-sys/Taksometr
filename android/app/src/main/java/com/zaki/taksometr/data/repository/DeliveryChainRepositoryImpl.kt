@@ -285,4 +285,76 @@ class DeliveryChainRepositoryImpl @Inject constructor(
             })
         }
     }
+
+    override suspend fun syncActiveChain(): Resource<Unit> {
+        return try {
+            val snap = firestore.collection("delivery_chains")
+                .whereEqualTo("courierId", userId)
+                .whereEqualTo("status", "IN_PROGRESS")
+                .get()
+                .await()
+
+            if (snap.isEmpty) return Resource.Success(Unit)
+
+            val doc = snap.documents.first()
+            val chainId = doc.id
+            val courierId = doc.getString("courierId") ?: ""
+            val courierName = doc.getString("courierName") ?: ""
+            val status = doc.getString("status") ?: "IN_PROGRESS"
+            val createdAt = doc.getLong("createdAt") ?: System.currentTimeMillis()
+            val startedAt = doc.getLong("startedAt")
+            val completedAt = doc.getLong("completedAt")
+            val totalDistance = doc.getDouble("totalDistance") ?: 0.0
+            val totalCost = doc.getDouble("totalCost") ?: 0.0
+
+            val chainEntity = DeliveryChainEntity(
+                id = chainId,
+                courierId = courierId,
+                courierName = courierName,
+                status = status,
+                createdAt = createdAt,
+                startedAt = startedAt,
+                completedAt = completedAt,
+                totalDistance = totalDistance,
+                totalCost = totalCost,
+                isSynced = true
+            )
+
+            // Insert or replace chain locally
+            chainDao.insert(chainEntity)
+
+            // Load and replace items for this chain
+            val itemsSnap = firestore.collection("chain_delivery_items")
+                .whereEqualTo("chainId", chainId)
+                .orderBy("sequenceOrder")
+                .get()
+                .await()
+
+            val items = itemsSnap.documents.map { d ->
+                ChainDeliveryItemEntity(
+                    id = d.id,
+                    chainId = chainId,
+                    clientPhone = d.getString("clientPhone") ?: "",
+                    orderNumber = d.getString("orderNumber") ?: "",
+                    sequenceOrder = (d.getLong("sequenceOrder")?.toInt() ?: 0),
+                    status = d.getString("status") ?: "PENDING",
+                    deliveryId = d.getString("deliveryId"),
+                    startTime = d.getLong("startTime"),
+                    endTime = d.getLong("endTime"),
+                    distanceMeters = d.getDouble("distanceMeters") ?: 0.0,
+                    cost = d.getDouble("cost") ?: 0.0,
+                    deliveryType = d.getString("deliveryType") ?: "default",
+                    fixedPrice = d.getDouble("fixedPrice"),
+                    createdAt = d.getLong("createdAt") ?: System.currentTimeMillis()
+                )
+            }
+
+            itemDao.deleteByChainId(chainId)
+            if (items.isNotEmpty()) itemDao.insertAll(items)
+
+            Resource.Success(Unit)
+        } catch (e: Exception) {
+            Resource.Error("Ошибка синхронизации цепочки: ${e.localizedMessage}")
+        }
+    }
 }

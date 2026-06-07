@@ -44,6 +44,13 @@ class DeliveryChainViewModel @Inject constructor(
         get() = prefs.getString(Constants.PREF_USER_ID, "") ?: ""
 
     init {
+        viewModelScope.launch {
+            // Попытаемся синхронизировать активную цепочку с сервера при старте
+            try {
+                chainRepository.syncActiveChain()
+            } catch (_: Exception) {}
+        }
+
         observeActiveChain()
         loadDraftChains()
         loadFixedTypes()
