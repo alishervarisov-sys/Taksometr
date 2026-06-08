@@ -13,7 +13,6 @@ import com.zaki.taksometr.presentation.delivery.ActiveDeliveryScreen
 import com.zaki.taksometr.presentation.delivery.FixedPriceDeliveryScreen
 import com.zaki.taksometr.presentation.delivery.DeliveryCompleteScreen
 import com.zaki.taksometr.presentation.delivery.DeliveryDetailScreen
-import com.zaki.taksometr.presentation.deliverychain.DeliveryChainScreen
 import com.zaki.taksometr.presentation.history.HistoryScreen
 import com.zaki.taksometr.presentation.home.HomeScreen
 
@@ -44,9 +43,6 @@ fun NavGraph(
                 onHistoryClick = {
                     navController.navigate(Screen.History.route)
                 },
-                onChainClick = {
-                    navController.navigate(Screen.DeliveryChain.route)
-                },
                 onLogout = {
                     navController.navigate(Screen.Auth.route) {
                         popUpTo(Screen.Home.route) { inclusive = true }
@@ -55,11 +51,7 @@ fun NavGraph(
             )
         }
 
-        composable(Screen.DeliveryChain.route) {
-            DeliveryChainScreen(
-                onBack = { navController.popBackStack() }
-            )
-        }
+        // DeliveryChain route removed
 
         composable(Screen.ActiveDelivery.route) {
             ActiveDeliveryScreenRouter(
