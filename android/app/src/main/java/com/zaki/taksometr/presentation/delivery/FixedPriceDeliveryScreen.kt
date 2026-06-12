@@ -197,7 +197,7 @@ fun FixedPriceDeliveryScreen(
 
             Spacer(modifier = Modifier.weight(1f))
 
-            // Action buttons
+                        // Action buttons
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -219,7 +219,7 @@ fun FixedPriceDeliveryScreen(
                     onClick = { showCompleteDialog = true },
                     modifier = Modifier.weight(1f),
                     shape = RoundedCornerShape(12.dp),
-                    enabled = !state.isCompleting,
+                    enabled = !state.isCompleting && state.delivery?.status?.name == "IN_PROGRESS",
                     colors = ButtonDefaults.buttonColors(
                         containerColor = AccentGreen
                     )
@@ -235,6 +235,22 @@ fun FixedPriceDeliveryScreen(
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(str(Strings.complete))
                     }
+                }
+            }
+
+            // Warning if not in progress
+            if (state.delivery?.status?.name != "IN_PROGRESS") {
+                Spacer(modifier = Modifier.height(8.dp))
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = AccentRed.copy(alpha = 0.1f)
+                ) {
+                    Text(
+                        text = "Доставка не в статусе 'В процессе'. Кнопка 'Завершить' недоступна. Текущий статус: ${state.delivery?.status?.name ?: "null"}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AccentRed,
+                        modifier = Modifier.padding(8.dp)
+                    )
                 }
             }
 

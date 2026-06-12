@@ -18,6 +18,8 @@ interface DeliveryRepository {
     suspend fun updateRoute(deliveryId: String, points: List<GeoPoint>)
     suspend fun updateDistance(deliveryId: String, distanceMeters: Double)
     fun getTodayStats(courierId: String): Flow<TodayStats>
+    suspend fun syncDeliveryStatusFromFirestore(deliveryId: String): Resource<Delivery?>
+    suspend fun clearStaleActiveDelivery()
 }
 
 data class TodayStats(

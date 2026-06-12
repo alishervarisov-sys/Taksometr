@@ -226,6 +226,33 @@ fun ActiveDeliveryScreen(
 
                     Spacer(modifier = Modifier.height(16.dp))
 
+                                        // Status indicator
+                    state.delivery?.let { delivery ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            val isInProgress = delivery.status.name == "IN_PROGRESS"
+                            val statusColor = if (isInProgress) AccentGreen else AccentRed
+                            val statusText = if (isInProgress) str(Strings.inProgress) else "${str(Strings.status)}: ${delivery.status.name}"
+
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = statusColor.copy(alpha = 0.15f)
+                            ) {
+                                Text(
+                                    text = statusText,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = statusColor,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+
                     // Action buttons
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -248,7 +275,7 @@ fun ActiveDeliveryScreen(
                             onClick = { showCompleteDialog = true },
                             modifier = Modifier.weight(1f),
                             shape = RoundedCornerShape(12.dp),
-                            enabled = !state.isCompleting,
+                            enabled = !state.isCompleting && state.delivery?.status?.name == "IN_PROGRESS",
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = AccentGreen
                             )
@@ -264,6 +291,22 @@ fun ActiveDeliveryScreen(
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text(str(Strings.complete))
                             }
+                        }
+                    }
+
+                    // Warning if not in progress
+                    if (state.delivery?.status?.name != "IN_PROGRESS") {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = AccentRed.copy(alpha = 0.1f)
+                        ) {
+                            Text(
+                                text = "Доставка не в статусе 'В процессе'. Кнопка 'Завершить' недоступна. Текущий статус: ${state.delivery?.status?.name ?: "null"}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = AccentRed,
+                                modifier = Modifier.padding(8.dp)
+                            )
                         }
                     }
 

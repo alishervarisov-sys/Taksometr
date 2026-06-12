@@ -43,11 +43,19 @@ class HomeViewModel @Inject constructor(
     private val userId: String
         get() = prefs.getString(Constants.PREF_USER_ID, "") ?: ""
 
-    init {
+        init {
         loadUserData()
         loadTodayStats()
         observeActiveDelivery()
         loadFixedTypes()
+        clearStaleActiveDeliveryOnStart()
+    }
+
+    private fun clearStaleActiveDeliveryOnStart() {
+        viewModelScope.launch {
+            android.util.Log.d("HomeViewModel", "Clearing stale active deliveries on startup...")
+            deliveryRepository.clearStaleActiveDelivery()
+        }
     }
 
     private var userLoaded = false

@@ -124,10 +124,72 @@ class DeliveryRepositoryImpl @Inject constructor(
         }
     }
 
-    override suspend fun completeDelivery(deliveryId: String, waitingMinutes: Double): Resource<Delivery> {
+        override suspend fun completeDelivery(deliveryId: String, waitingMinutes: Double): Resource<Delivery> {
+        android.util.Log.d("DeliveryRepo", "=== COMPLETE DELIVERY START ===")
+        android.util.Log.d("DeliveryRepo", "deliveryId=$deliveryId")
+        android.util.Log.d("DeliveryRepo", "waitingMinutes=$waitingMinutes")
+        android.util.Log.d("DeliveryRepo", "userId=$userId")
+
         return try {
+            // First check Firestore for the actual status of this delivery
+            val firestoreDoc = firestore.collection(Constants.COLLECTION_DELIVERIES).document(deliveryId).get().await()
+            if (firestoreDoc.exists()) {
+                val firestoreStatus = firestoreDoc.getString("status") ?: "unknown"
+                android.util.Log.d("DeliveryRepo", "Firestore delivery status: $firestoreStatus")
+                
+                if (firestoreStatus != "IN_PROGRESS") {
+                    android.util.Log.e("DeliveryRepo", "Delivery status in Firestore is '$firestoreStatus', not 'IN_PROGRESS'")
+                    
+                    // If already completed on server, update local status
+                    if (firestoreStatus == "COMPLETED") {
+                        val cost = firestoreDoc.getDouble("cost") ?: 0.0
+                        val distance = firestoreDoc.getDouble("distanceMeters") ?: 0.0
+                        
+                        // Update local DB to COMPLETED
+                        val localEntity = deliveryDao.getById(deliveryId)
+                        localEntity?.let {
+                            deliveryDao.update(it.copy(
+                                status = DeliveryStatus.COMPLETED.name,
+                                cost = cost,
+                                distanceMeters = distance,
+                                endTime = firestoreDoc.getLong("endTime") ?: System.currentTimeMillis(),
+                                isSynced = true
+                            ))
+                        }
+                        
+                        // Clear active delivery
+                        prefs.edit().remove(Constants.PREF_ACTIVE_DELIVERY_ID).apply()
+                        
+                        val delivery = Delivery(
+                            id = deliveryId,
+                            courierId = userId,
+                            clientPhone = firestoreDoc.getString("clientPhone") ?: "",
+                            courierName = firestoreDoc.getString("courierName") ?: "",
+                            status = DeliveryStatus.COMPLETED,
+                            startTime = firestoreDoc.getLong("startTime") ?: System.currentTimeMillis(),
+                            endTime = firestoreDoc.getLong("endTime") ?: System.currentTimeMillis(),
+                            distanceMeters = distance,
+                            cost = cost
+                        )
+                        
+                        android.util.Log.d("DeliveryRepo", "Delivery already completed on server. Synced locally.")
+                        return Resource.Success(delivery)
+                    }
+                    
+                    return Resource.Error(
+                        "Доставка не в статусе 'В процессе' (статус на сервере: $firestoreStatus). " +
+                        "Пожалуйста, обновите экран."
+                    )
+                }
+            } else {
+                android.util.Log.w("DeliveryRepo", "Delivery $deliveryId not found in Firestore!")
+                return Resource.Error("Доставка не найдена на сервере. Возможно, она была удалена.")
+            }
+
             // Get route points from local DB
             val points = routePointDao.getPointsByDeliveryIdSync(deliveryId)
+            android.util.Log.d("DeliveryRepo", "Route points count: ${points.size}")
+            
             val routeData = points.map { point ->
                 hashMapOf(
                     "latitude" to point.latitude,
@@ -146,6 +208,9 @@ class DeliveryRepositoryImpl @Inject constructor(
                 "waitingMinutes" to waitingMinutes
             )
 
+            android.util.Log.d("DeliveryRepo", "Calling completeDelivery cloud function...")
+            android.util.Log.d("DeliveryRepo", "Request data: $data")
+
             val result = functions
                 .getHttpsCallable("completeDelivery")
                 .call(data)
@@ -153,6 +218,8 @@ class DeliveryRepositoryImpl @Inject constructor(
 
             @Suppress("UNCHECKED_CAST")
             val responseData = result.data as Map<String, Any>
+            android.util.Log.d("DeliveryRepo", "completeDelivery response: $responseData")
+            
             val cost = (responseData["cost"] as? Number)?.toDouble() ?: 0.0
             val distance = (responseData["distanceMeters"] as? Number)?.toDouble() ?: 0.0
 
@@ -175,23 +242,36 @@ class DeliveryRepositoryImpl @Inject constructor(
             // Clear active delivery
             prefs.edit().remove(Constants.PREF_ACTIVE_DELIVERY_ID).apply()
 
+            android.util.Log.d("DeliveryRepo", "=== COMPLETE DELIVERY SUCCESS ===")
             Resource.Success(delivery)
         } catch (e: Exception) {
-            Resource.Error("Ошибка завершения доставки: ${e.localizedMessage}")
+            android.util.Log.e("DeliveryRepo", "=== COMPLETE DELIVERY ERROR ===")
+            android.util.Log.e("DeliveryRepo", "Error: ${e.message}", e)
+            
+            // Check if this is a Firebase Functions error with a specific message
+            val errorMessage = e.localizedMessage ?: e.message ?: "Неизвестная ошибка"
+            
+            Resource.Error("Ошибка завершения доставки: $errorMessage")
         }
     }
 
-    override suspend fun cancelDelivery(deliveryId: String): Resource<Unit> {
+        override suspend fun cancelDelivery(deliveryId: String): Resource<Unit> {
+        android.util.Log.d("DeliveryRepo", "=== CANCEL DELIVERY ===")
+        android.util.Log.d("DeliveryRepo", "deliveryId=$deliveryId")
+        
         return try {
             val data = hashMapOf(
                 "deliveryId" to deliveryId,
                 "courierId" to userId
             )
+            android.util.Log.d("DeliveryRepo", "Calling cancelDelivery cloud function...")
             functions.getHttpsCallable("cancelDelivery").call(data).await()
+            android.util.Log.d("DeliveryRepo", "cancelDelivery cloud function succeeded")
 
             // Update local
             val entity = deliveryDao.getById(deliveryId)
             entity?.let {
+                android.util.Log.d("DeliveryRepo", "Updating local status to CANCELLED")
                 deliveryDao.update(it.copy(status = DeliveryStatus.CANCELLED.name))
             }
 
@@ -199,8 +279,11 @@ class DeliveryRepositoryImpl @Inject constructor(
             routePointDao.deleteByDeliveryId(deliveryId)
             prefs.edit().remove(Constants.PREF_ACTIVE_DELIVERY_ID).apply()
 
+            android.util.Log.d("DeliveryRepo", "=== CANCEL DELIVERY SUCCESS ===")
             Resource.Success(Unit)
         } catch (e: Exception) {
+            android.util.Log.e("DeliveryRepo", "=== CANCEL DELIVERY ERROR ===")
+            android.util.Log.e("DeliveryRepo", "Error: ${e.message}", e)
             Resource.Error("Ошибка отмены доставки: ${e.localizedMessage}")
         }
     }
@@ -286,7 +369,7 @@ class DeliveryRepositoryImpl @Inject constructor(
         }
     }
 
-    override fun getTodayStats(courierId: String): Flow<TodayStats> {
+        override fun getTodayStats(courierId: String): Flow<TodayStats> {
         val calendar = Calendar.getInstance().apply {
             set(Calendar.HOUR_OF_DAY, 0)
             set(Calendar.MINUTE, 0)
@@ -300,6 +383,107 @@ class DeliveryRepositoryImpl @Inject constructor(
             deliveryDao.getTodayEarnings(courierId, todayStart)
         ) { count, earnings ->
             TodayStats(deliveryCount = count, totalEarnings = earnings)
+        }
+    }
+
+    override suspend fun syncDeliveryStatusFromFirestore(deliveryId: String): Resource<Delivery?> {
+        android.util.Log.d("DeliveryRepo", "=== SYNC DELIVERY STATUS ===")
+        android.util.Log.d("DeliveryRepo", "deliveryId=$deliveryId")
+        
+        return try {
+            val doc = firestore.collection(Constants.COLLECTION_DELIVERIES)
+                .document(deliveryId)
+                .get()
+                .await()
+            
+            if (!doc.exists()) {
+                android.util.Log.w("DeliveryRepo", "Delivery $deliveryId not found in Firestore!")
+                // Delete from local and clear prefs
+                deliveryDao.deleteById(deliveryId)
+                prefs.edit().remove(Constants.PREF_ACTIVE_DELIVERY_ID).apply()
+                return Resource.Success(null)
+            }
+            
+            val firestoreStatus = doc.getString("status") ?: "COMPLETED"
+            android.util.Log.d("DeliveryRepo", "Firestore status: $firestoreStatus")
+            
+            val localEntity = deliveryDao.getById(deliveryId)
+            
+            if (firestoreStatus != "IN_PROGRESS" && localEntity?.status == "IN_PROGRESS") {
+                // Stale delivery - update local
+                android.util.Log.d("DeliveryRepo", "Local status is stale. Updating to: $firestoreStatus")
+                
+                deliveryDao.update(localEntity.copy(
+                    status = firestoreStatus,
+                    cost = doc.getDouble("cost") ?: localEntity.cost,
+                    distanceMeters = doc.getDouble("distanceMeters") ?: localEntity.distanceMeters,
+                    endTime = doc.getLong("endTime"),
+                    isSynced = true
+                ))
+                
+                // Clear active delivery
+                prefs.edit().remove(Constants.PREF_ACTIVE_DELIVERY_ID).apply()
+            }
+            
+            val delivery = if (doc.exists()) {
+                val routeList = doc.get("route") as? List<Map<String, Any>> ?: emptyList()
+                val route = routeList.map { point ->
+                    GeoPoint(
+                        latitude = (point["latitude"] as? Number)?.toDouble() ?: 0.0,
+                        longitude = (point["longitude"] as? Number)?.toDouble() ?: 0.0,
+                        timestamp = (point["timestamp"] as? Number)?.toLong() ?: 0L,
+                        accuracy = (point["accuracy"] as? Number)?.toFloat() ?: 0f
+                    )
+                }
+                
+                Delivery(
+                    id = doc.id,
+                    courierId = doc.getString("courierId") ?: "",
+                    courierName = doc.getString("courierName") ?: "",
+                    clientPhone = doc.getString("clientPhone") ?: "",
+                    status = DeliveryStatus.valueOf(firestoreStatus),
+                    startTime = doc.getLong("startTime") ?: 0L,
+                    endTime = doc.getLong("endTime"),
+                    distanceMeters = doc.getDouble("distanceMeters") ?: 0.0,
+                    cost = doc.getDouble("cost") ?: 0.0,
+                    route = route,
+                    deliveryType = doc.getString("deliveryType") ?: "default",
+                    fixedPrice = doc.getDouble("fixedPrice"),
+                    createdAt = doc.getLong("createdAt") ?: 0L
+                )
+            } else null
+            
+            android.util.Log.d("DeliveryRepo", "=== SYNC COMPLETE ===")
+            Resource.Success(delivery)
+        } catch (e: Exception) {
+            android.util.Log.e("DeliveryRepo", "Error syncing delivery status: ${e.message}")
+            Resource.Error("Ошибка синхронизации статуса: ${e.localizedMessage}")
+        }
+    }
+
+    override suspend fun clearStaleActiveDelivery() {
+        android.util.Log.d("DeliveryRepo", "=== CLEAR STALE ACTIVE DELIVERY ===")
+        try {
+            val activeId = prefs.getString(Constants.PREF_ACTIVE_DELIVERY_ID, "")
+            if (!activeId.isNullOrEmpty()) {
+                // Try to sync from Firestore first to check status
+                val result = syncDeliveryStatusFromFirestore(activeId)
+                if (result is Resource.Success && (result.data == null || result.data?.status != DeliveryStatus.IN_PROGRESS)) {
+                    // Delivery is no longer active, delete local record
+                    deliveryDao.deleteById(activeId)
+                    routePointDao.deleteByDeliveryId(activeId)
+                    prefs.edit().remove(Constants.PREF_ACTIVE_DELIVERY_ID).apply()
+                    android.util.Log.d("DeliveryRepo", "Cleared stale active delivery: $activeId")
+                }
+            }
+            
+            // Also check for any IN_PROGRESS deliveries in local DB that don't match active ID
+            val activeLocalDelivery = deliveryDao.getActiveDeliverySync(userId)
+            if (activeLocalDelivery != null && activeLocalDelivery.id != activeId) {
+                android.util.Log.d("DeliveryRepo", "Found orphaned active delivery: ${activeLocalDelivery.id}")
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("DeliveryRepo", "Error clearing stale delivery: ${e.message}")
         }
     }
 }

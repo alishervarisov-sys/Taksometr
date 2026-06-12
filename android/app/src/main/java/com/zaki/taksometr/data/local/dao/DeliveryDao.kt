@@ -13,30 +13,36 @@ interface DeliveryDao {
     @Update
     suspend fun update(delivery: DeliveryEntity)
 
+    @Delete
+    suspend fun delete(delivery: DeliveryEntity)
+
     @Query("SELECT * FROM deliveries WHERE id = :id")
     suspend fun getById(id: String): DeliveryEntity?
 
-    @Query("SELECT * FROM deliveries WHERE status = 'IN_PROGRESS' AND courierId = :courierId LIMIT 1")
+    @Query("SELECT * FROM deliveries WHERE id = :id")
+    fun getByIdFlow(id: String): Flow<DeliveryEntity?>
+
+    @Query("SELECT * FROM deliveries WHERE courierId = :courierId AND status = 'IN_PROGRESS' LIMIT 1")
     fun getActiveDelivery(courierId: String): Flow<DeliveryEntity?>
 
-    @Query("SELECT * FROM deliveries WHERE courierId = :courierId ORDER BY createdAt DESC")
+    @Query("SELECT * FROM deliveries WHERE courierId = :courierId AND status = 'IN_PROGRESS' LIMIT 1")
+    suspend fun getActiveDeliverySync(courierId: String): DeliveryEntity?
+
+    @Query("SELECT * FROM deliveries WHERE courierId = :courierId ORDER BY startTime DESC")
     fun getDeliveriesByCourier(courierId: String): Flow<List<DeliveryEntity>>
 
-    @Query("SELECT * FROM deliveries WHERE clientPhone LIKE '%' || :phone || '%' AND courierId = :courierId ORDER BY createdAt DESC")
+    @Query("SELECT * FROM deliveries WHERE clientPhone LIKE '%' || :phone || '%' AND courierId = :courierId ORDER BY startTime DESC")
     fun searchByPhone(phone: String, courierId: String): Flow<List<DeliveryEntity>>
 
-    @Query("SELECT * FROM deliveries WHERE createdAt BETWEEN :startDate AND :endDate AND courierId = :courierId ORDER BY createdAt DESC")
+    @Query("SELECT * FROM deliveries WHERE startTime >= :startDate AND startTime <= :endDate AND courierId = :courierId ORDER BY startTime DESC")
     fun getByDateRange(startDate: Long, endDate: Long, courierId: String): Flow<List<DeliveryEntity>>
 
-    @Query("SELECT COUNT(*) FROM deliveries WHERE courierId = :courierId AND status = 'COMPLETED' AND createdAt >= :todayStart")
+    @Query("SELECT COUNT(*) FROM deliveries WHERE courierId = :courierId AND startTime >= :todayStart AND status = 'COMPLETED'")
     fun getTodayDeliveryCount(courierId: String, todayStart: Long): Flow<Int>
 
-    @Query("SELECT COALESCE(SUM(cost), 0.0) FROM deliveries WHERE courierId = :courierId AND status = 'COMPLETED' AND createdAt >= :todayStart")
+    @Query("SELECT COALESCE(SUM(cost), 0) FROM deliveries WHERE courierId = :courierId AND startTime >= :todayStart AND status = 'COMPLETED'")
     fun getTodayEarnings(courierId: String, todayStart: Long): Flow<Double>
 
-    @Query("SELECT * FROM deliveries WHERE isSynced = 0")
-    suspend fun getUnsyncedDeliveries(): List<DeliveryEntity>
-
-    @Query("UPDATE deliveries SET isSynced = 1 WHERE id = :id")
-    suspend fun markAsSynced(id: String)
+    @Query("DELETE FROM deliveries WHERE id = :id")
+    suspend fun deleteById(id: String)
 }
