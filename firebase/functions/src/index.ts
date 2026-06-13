@@ -169,6 +169,83 @@ function computeCost(
   return Math.max(baseCost, Math.ceil(cost));
 }
 
+// ============ COURIER STATUS SYNCHRONIZATION ============
+/**
+ * Synchronise le statut isOnline d'un coursier en fonction de ses livraisons actives.
+ * 
+ * Règle métier :
+ * - Si le coursier a au moins une livraison IN_PROGRESS → isOnline = true
+ * - Si le coursier a au moins une chaîne IN_PROGRESS → isOnline = true
+ * - Sinon → isOnline = false (aucune activité en cours)
+ * 
+ * Logge chaque changement de statut avec la raison détaillée.
+ * 
+ * PROTECTION: Cette fonction est la SEULE source de vérité pour le statut isOnline.
+ * Toute modification de isOnline doit passer par cette fonction.
+ */
+async function syncCourierStatus(courierId: string, reason: string): Promise<void> {
+  console.log(`[STATUS_SYNC] Checking status for courier ${courierId}. Reason: ${reason}`);
+
+  const courierRef = db.collection("users").doc(courierId);
+  const courierDoc = await courierRef.get();
+
+  if (!courierDoc.exists) {
+    console.warn(`[STATUS_SYNC] Courier ${courierId} not found. Skipping sync.`);
+    return;
+  }
+
+  const courierData = courierDoc.data()!;
+
+  // Check for active deliveries
+  const activeDeliveries = await db.collection("deliveries")
+    .where("courierId", "==", courierId)
+    .where("status", "==", "IN_PROGRESS")
+    .get();
+
+  // Check for active chains
+  const activeChains = await db.collection("delivery_chains")
+    .where("courierId", "==", courierId)
+    .where("status", "==", "IN_PROGRESS")
+    .get();
+
+  const hasActiveDelivery = !activeDeliveries.empty;
+  const hasActiveChain = !activeChains.empty;
+  const shouldBeOnline = hasActiveDelivery || hasActiveChain;
+  const currentIsOnline = courierData.isOnline || false;
+
+  if (shouldBeOnline === currentIsOnline) {
+    console.log(
+      `[STATUS_SYNC] Courier ${courierId} status unchanged: isOnline=${currentIsOnline}. ` +
+      `activeDeliveries=${activeDeliveries.size}, activeChains=${activeChains.size}. Reason: ${reason}`
+    );
+    return;
+  }
+
+  // Status needs to change
+  console.log(
+    `[STATUS_SYNC] CHANGING courier ${courierId}: isOnline ${currentIsOnline} → ${shouldBeOnline}. ` +
+    `Reason: ${reason}. ` +
+    `activeDeliveries=${activeDeliveries.size}, activeChains=${activeChains.size}`
+  );
+
+  await courierRef.update({
+    isOnline: shouldBeOnline,
+    lastStatusChange: {
+      from: currentIsOnline,
+      to: shouldBeOnline,
+      reason: reason,
+      timestamp: Date.now(),
+      activeDeliveries: activeDeliveries.size,
+      activeChains: activeChains.size,
+    },
+  });
+
+  console.log(
+    `[STATUS_SYNC] SUCCESS: Courier ${courierId} isOnline updated to ${shouldBeOnline}. ` +
+    `Reason: ${reason}`
+  );
+}
+
 // ============ CREATE DELIVERY ============
 export const createDelivery = functions.https.onCall(async (data, context) => {
   const {courierId, clientPhone, deliveryType} = data;
@@ -276,9 +353,12 @@ export const createDelivery = functions.https.onCall(async (data, context) => {
     createdAt: Date.now(),
   };
   
-  console.log("Saving delivery to Firestore:", deliveryData);
+    console.log("Saving delivery to Firestore:", deliveryData);
 
   await deliveryRef.set(deliveryData);
+
+  // ---- Sync courier status: delivery IN_PROGRESS → courier must be ONLINE ----
+  await syncCourierStatus(courierId, "createDelivery: new delivery set to IN_PROGRESS");
 
   // ---- Notify client by SMS that the courier started (Tajik) ----
   const courierName = courierData.name || "";
@@ -444,6 +524,9 @@ export const completeDelivery = functions.https.onCall(async (data, context) => 
     route: routePoints,
   });
 
+    // ---- Sync courier status after completing this delivery ----
+  await syncCourierStatus(courierId, "completeDelivery: delivery status changed to COMPLETED");
+
   // ---- Notify client by SMS about the final delivery total (Tajik) ----
   let completeSmsText = `Фармоиши ZaKi анҷом ёфт. `;
   
@@ -520,10 +603,13 @@ export const cancelDelivery = functions.https.onCall(async (data, context) => {
     );
   }
 
-  await deliveryRef.update({
+    await deliveryRef.update({
     status: "CANCELLED",
     endTime: Date.now(),
   });
+
+  // ---- Sync courier status after cancellation ----
+  await syncCourierStatus(courierId, "cancelDelivery: delivery status changed to CANCELLED");
 
   return {success: true};
 });
@@ -1130,7 +1216,7 @@ export const startDeliveryChain = functions.https.onCall(async (data, context) =
     );
   }
 
-  // Create chain in Firestore
+    // Create chain in Firestore
   await db.collection("delivery_chains").doc(chainId).set({
     courierId: courierId,
     courierName: courierData.name || "",
@@ -1156,6 +1242,9 @@ export const startDeliveryChain = functions.https.onCall(async (data, context) =
     });
   }
   await batch.commit();
+
+  // ---- Sync courier status: chain IN_PROGRESS → courier must be ONLINE ----
+  await syncCourierStatus(courierId, "startDeliveryChain: chain set to IN_PROGRESS");
 
   // Send SMS to first customer
   const firstItem = items.find((item: any) => item.sequenceOrder === 1);
@@ -1374,13 +1463,18 @@ export const completeChainDelivery = functions.https.onCall(async (data, context
       sum + (doc.data().cost || 0), 0
     );
 
-    await chainRef.update({
+        await chainRef.update({
       status: "COMPLETED",
       completedAt: Date.now(),
       totalDistance: totalDistance,
       totalCost: totalChainCost,
     });
   }
+
+  // ---- Sync courier status after chain item completion ----
+  // If chain completed → isOnline might become false
+  // If chain still in progress (next item exists) → isOnline should stay true
+  await syncCourierStatus(chainData.courierId, "completeChainDelivery: chain item completed");
 
   return {
     success: true,
@@ -1422,7 +1516,7 @@ export const cancelDeliveryChain = functions.https.onCall(async (data, context) 
     completedAt: Date.now(),
   });
 
-  // Cancel all pending items
+    // Cancel all pending items
   const items = await db.collection("chain_delivery_items")
     .where("chainId", "==", chainId)
     .where("status", "in", ["PENDING", "IN_PROGRESS"])
@@ -1433,6 +1527,9 @@ export const cancelDeliveryChain = functions.https.onCall(async (data, context) 
     batch.update(doc.ref, {status: "CANCELLED"});
   });
   await batch.commit();
+
+  // ---- Sync courier status after chain cancellation ----
+  await syncCourierStatus(courierId, "cancelDeliveryChain: chain cancelled");
 
   return {success: true};
 });
@@ -1499,7 +1596,7 @@ export const adminCreateDeliveryChain = functions.https.onCall(async (data, cont
     );
   }
 
-  // Create chain
+    // Create chain
   const chainRef = db.collection("delivery_chains").doc();
   await chainRef.set({
     courierId: courierId,
@@ -1526,6 +1623,9 @@ export const adminCreateDeliveryChain = functions.https.onCall(async (data, cont
     });
   });
   await batch.commit();
+
+  // ---- Sync courier status: admin-created chain IN_PROGRESS → courier must be ONLINE ----
+  await syncCourierStatus(courierId, "adminCreateDeliveryChain: admin created chain with IN_PROGRESS status");
 
   // Send SMS to first customer
   const firstItem = items[0];
@@ -1588,7 +1688,7 @@ export const adminCancelDeliveryChain = functions.https.onCall(async (data, cont
     throw new functions.https.HttpsError("not-found", "Chain not found");
   }
 
-  // Update chain
+    // Update chain
   await chainRef.update({
     status: "CANCELLED",
     completedAt: Date.now(),
@@ -1605,6 +1705,11 @@ export const adminCancelDeliveryChain = functions.https.onCall(async (data, cont
     batch.update(doc.ref, {status: "CANCELLED"});
   });
   await batch.commit();
+
+  // Get the chain data to find the courierId
+  const chainDataForStatus = chainDoc.data()!;
+  // ---- Sync courier status after admin chain cancellation ----
+  await syncCourierStatus(chainDataForStatus.courierId, "adminCancelDeliveryChain: chain cancelled by admin");
 
   return {success: true};
 });
@@ -1723,8 +1828,11 @@ export const adminCompleteDelivery = functions.https.onCall(async (data, context
     completeSmsText += `Масофа: ${distanceKmText} км. `;
   }
 
-  completeSmsText += `Маблағи умумӣ: ${formatCostForSms(totalCost)} сомонӣ. Ташаккур!`;
+    completeSmsText += `Маблағи умумӣ: ${formatCostForSms(totalCost)} сомонӣ. Ташаккур!`;
   await sendSms(deliveryData.clientPhone, completeSmsText);
+
+  // ---- Sync courier status after admin completes the delivery ----
+  await syncCourierStatus(deliveryData.courierId, "adminCompleteDelivery: delivery completed by admin");
 
   return {success: true};
 });

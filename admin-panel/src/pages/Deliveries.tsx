@@ -191,16 +191,28 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
     setReportResult({ total, count: filtered.length });
   };
 
-  const handleCancelDelivery = async (deliveryId: string) => {
-    if (!window.confirm('Отменить эту доставку?')) return;
+    const handleCancelDelivery = async (delivery: Delivery) => {
+    const confirmMessage = delivery.courierId
+      ? `Отменить доставку?\n\nКурьер: ${delivery.courierName}\nКлиент: ${delivery.clientPhone}\n\nПри отмене через Cloud Function статус курьера синхронизируется автоматически.`
+      : 'Отменить эту доставку?';
+    if (!window.confirm(confirmMessage)) return;
     try {
-      await updateDoc(doc(db, 'deliveries', deliveryId), {
-        status: 'CANCELLED',
-        endTime: Date.now(),
-      });
+      // Use adminCompleteDelivery instead if the delivery was ongoing
+      if (delivery.courierId) {
+        const cancelDeliveryFn = httpsCallable(functions, 'adminCancelDelivery');
+        await cancelDeliveryFn({
+          adminId: adminId,
+          deliveryId: delivery.id,
+        });
+      } else {
+        await updateDoc(doc(db, 'deliveries', delivery.id), {
+          status: 'CANCELLED',
+          endTime: Date.now(),
+        });
+      }
       loadDeliveries();
-    } catch {
-      alert('Ошибка отмены');
+    } catch (error: any) {
+      alert('Ошибка отмены: ' + (error.message || 'Неизвестная ошибка'));
     }
   };
 
@@ -223,17 +235,26 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
     }
   };
 
-  const handleFixProblemDelivery = async (delivery: Delivery) => {
+    const handleFixProblemDelivery = async (delivery: Delivery) => {
     if (!window.confirm(`Завершить проблемную доставку?\n\nКурьер: ${delivery.courierName}\nКлиент: ${delivery.clientPhone}\nДлится: ${formatDuration(delivery.startTime, null)}`)) {
       return;
     }
     
     try {
-      await updateDoc(doc(db, 'deliveries', delivery.id), {
-        status: 'CANCELLED',
-        endTime: Date.now(),
-        note: 'Автоматически отменена через админ-панель (проблемная доставка)'
-      });
+      // Use Cloud Function to ensure courier status is synced
+      if (delivery.courierId) {
+        const cancelDeliveryFn = httpsCallable(functions, 'adminCancelDelivery');
+        await cancelDeliveryFn({
+          adminId: adminId,
+          deliveryId: delivery.id,
+        });
+      } else {
+        await updateDoc(doc(db, 'deliveries', delivery.id), {
+          status: 'CANCELLED',
+          endTime: Date.now(),
+          note: 'Автоматически отменена через админ-панель (проблемная доставка)'
+        });
+      }
       
       alert('Доставка отменена. Курьер может создать новую.');
       loadDeliveries();
@@ -484,8 +505,8 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
                             onClick={(e) => { e.stopPropagation(); handleCompleteDelivery(delivery); }}>
                             Завершить
                           </Button>
-                          <Button size="small" color="error" variant="outlined"
-                            onClick={(e) => { e.stopPropagation(); handleCancelDelivery(delivery.id); }}>
+                                                    <Button size="small" color="error" variant="outlined"
+                            onClick={(e) => { e.stopPropagation(); handleCancelDelivery(delivery); }}>
                             Отменить
                           </Button>
                         </>
