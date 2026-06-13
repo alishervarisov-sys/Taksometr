@@ -1,4 +1,4 @@
-import * as functions from "firebase-functions";
+﻿import * as functions from "firebase-functions";
 import * as admin from "firebase-admin";
 
 admin.initializeApp();
@@ -1110,14 +1110,6 @@ export const assignCourierToClient = functions.https.onCall(async (data, context
     throw new functions.https.HttpsError(
       "permission-denied",
       "Курьер заблокирован"
-    );
-  }
-
-  // Check if courier is online
-  if (!courierData.isOnline) {
-    throw new functions.https.HttpsError(
-      "failed-precondition",
-      "Курьер не в сети"
     );
   }
 
