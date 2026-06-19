@@ -1828,3 +1828,148 @@ export const adminCompleteDelivery = functions.https.onCall(async (data, context
 
   return {success: true};
 });
+
+
+// ============ TELEGRAM REPORT ============
+
+const TELEGRAM_BOT_TOKEN = "8620521976:AAHw9ySmHH63NPrmOH4aC9RMyvuLTWJXu00";
+const TELEGRAM_CHAT_ID = "-5440589956";
+
+async function buildDailyReportText(): Promise<string> {
+  const now = new Date();
+  // Use UTC+5 (Tajikistan) for start-of-day calculation
+  const tjOffsetMs = 5 * 60 * 60 * 1000;
+  const nowTj = new Date(now.getTime() + tjOffsetMs);
+  const startOfDayTj = new Date(
+    Date.UTC(nowTj.getUTCFullYear(), nowTj.getUTCMonth(), nowTj.getUTCDate())
+  ).getTime() - tjOffsetMs;
+  const endOfDayTj = now.getTime();
+
+  // Query only by endTime range to avoid composite index requirement;
+  // filter status in code.
+  const snapshot = await db.collection("deliveries")
+    .where("endTime", ">=", startOfDayTj)
+    .where("endTime", "<=", endOfDayTj)
+    .get();
+
+  const courierMap: {[id: string]: {name: string; count: number; commission: number}} = {};
+  let totalCommission = 0;
+  let totalOrders = 0;
+
+  snapshot.forEach((doc) => {
+    const d = doc.data();
+    if (d.status !== "COMPLETED") return;
+    totalOrders++;
+    const cid = d.courierId || "unknown";
+    if (!courierMap[cid]) {
+      courierMap[cid] = {name: d.courierName || cid, count: 0, commission: 0};
+    }
+    courierMap[cid].count++;
+    const comm = d.commission || 0;
+    courierMap[cid].commission += comm;
+    totalCommission += comm;
+  });
+
+  const dateStr = nowTj.toLocaleDateString("ru-RU", {day: "2-digit", month: "2-digit", year: "numeric"});
+
+  let text = `📊 *Ежедневный отчёт ZaKi*\n`;
+  text += `📅 ${dateStr}\n\n`;
+
+  if (totalOrders === 0) {
+    text += `Заказов за сегодня нет.\n`;
+  } else {
+    text += `*Курьеры:*\n`;
+    const sorted = Object.values(courierMap).sort((a, b) => b.count - a.count);
+    sorted.forEach((c, i) => {
+      text += `${i + 1}. ${c.name} — ${c.count} заказ(ов)\n`;
+    });
+    text += `\n✅ *Итого заказов: ${totalOrders}*`;
+    text += `\n💰 *Итого комиссия: ${totalCommission.toLocaleString("ru-RU")} сомони*`;
+  }
+
+  return text;
+}
+
+async function sendTelegramMessage(text: string): Promise<void> {
+  const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({
+      chat_id: TELEGRAM_CHAT_ID,
+      text: text,
+      parse_mode: "Markdown",
+    }),
+  });
+
+  if (!response.ok) {
+    const err = await response.text().catch(() => "");
+    console.error(`Telegram send failed (${response.status}): ${err}`);
+    throw new Error(`Telegram API error ${response.status}: ${err}`);
+  }
+
+  const result: any = await response.json().catch(() => ({}));
+  console.log("Telegram message sent, message_id=", result?.result?.message_id);
+}
+
+// Callable: send report immediately (triggered by admin button)
+export const sendTelegramReport = functions.https.onCall(async (data, context) => {
+  const {adminId} = data;
+  await verifyAdmin(adminId);
+
+  try {
+    const text = await buildDailyReportText();
+    await sendTelegramMessage(text);
+  } catch (e: any) {
+    console.error("sendTelegramReport error:", e);
+    throw new functions.https.HttpsError(
+      "internal",
+      "Ошибка отправки в Telegram: " + (e?.message || String(e))
+    );
+  }
+
+  return {success: true};
+});
+
+// Scheduled: send report every day at the time stored in settings/telegramReport
+export const scheduledTelegramReport = functions.pubsub
+  .schedule("every 1 minutes")
+  .onRun(async () => {
+    const settingsSnap = await db.collection("settings").doc("telegramReport").get();
+    if (!settingsSnap.exists) return null;
+
+    const settings = settingsSnap.data()!;
+    if (!settings.enabled) return null;
+
+    const targetHour: number = settings.hour ?? 23;
+    const targetMinute: number = settings.minute ?? 0;
+
+    const now = new Date();
+    // Use UTC+5 (Tajikistan time) by offsetting
+    const tjOffset = 5 * 60;
+    const utcMinutes = now.getUTCHours() * 60 + now.getUTCMinutes();
+    const tjMinutes = (utcMinutes + tjOffset) % (24 * 60);
+    const tjHour = Math.floor(tjMinutes / 60);
+    const tjMin = tjMinutes % 60;
+
+    if (tjHour !== targetHour || tjMin !== targetMinute) return null;
+
+    // Deduplicate: record last sent date so we don't send twice in the same minute
+    const todayKey = `${now.getUTCFullYear()}-${now.getUTCMonth()}-${now.getUTCDate()}-${targetHour}-${targetMinute}`;
+    const lastSent = settings.lastSentKey;
+    if (lastSent === todayKey) {
+      console.log("Telegram report already sent for this time slot today.");
+      return null;
+    }
+
+    const text = await buildDailyReportText();
+    await sendTelegramMessage(text);
+
+    await db.collection("settings").doc("telegramReport").update({
+      lastSentKey: todayKey,
+      lastSentAt: Date.now(),
+    });
+
+    console.log("Scheduled Telegram report sent successfully.");
+    return null;
+  });

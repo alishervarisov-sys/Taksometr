@@ -11,6 +11,7 @@ import Statistics from './pages/Statistics';
 import Commission from './pages/Commission';
 import Credentials from './pages/Credentials';
 import Admins from './pages/Admins';
+import TelegramReport from './pages/TelegramReport';
 import Login from './pages/Login';
 
 const theme = createTheme({
@@ -109,6 +110,7 @@ function App() {
               {adminRole === 'SUPER_ADMIN' && (
                 <Route path="admins" element={<Admins />} />
               )}
+              <Route path="telegram-report" element={<TelegramReport adminId={adminId!} />} />
               <Route path="*" element={<Navigate to="/" />} />
             </Route>
           )}

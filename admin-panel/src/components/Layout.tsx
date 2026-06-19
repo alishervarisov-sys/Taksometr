@@ -16,7 +16,8 @@ import {
   AccountBalanceWallet as WalletIcon,
   VpnKey as KeyIcon,
   AdminPanelSettings as AdminIcon,
-  AccountTree as TreeIcon
+  AccountTree as TreeIcon,
+  Telegram as TelegramIcon
 } from '@mui/icons-material';
 
 const drawerWidth = 260;
@@ -41,6 +42,7 @@ const Layout: React.FC<LayoutProps> = ({ onLogout, isSuperAdmin }) => {
     ...(isSuperAdmin ? [{ text: 'Админы', icon: <AdminIcon />, path: '/admins' }] : []),
     { text: 'Карта', icon: <MapIcon />, path: '/map' },
     { text: 'Статистика', icon: <StatsIcon />, path: '/statistics' },
+    { text: 'Telegram Отчёт', icon: <TelegramIcon />, path: '/telegram-report' },
   ];
 
   const drawer = (
