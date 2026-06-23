@@ -6,7 +6,6 @@ import android.os.Looper
 import com.google.android.gms.location.*
 import com.google.firebase.firestore.FirebaseFirestore
 import com.zaki.taksometr.data.local.dao.RoutePointDao
-import com.zaki.taksometr.data.local.entity.RoutePointEntity
 import com.zaki.taksometr.domain.model.GeoPoint
 import com.zaki.taksometr.domain.repository.LocationRepository
 import com.zaki.taksometr.util.Constants
@@ -15,6 +14,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.tasks.await
 import javax.inject.Inject
@@ -64,7 +64,6 @@ class LocationRepositoryImpl @Inject constructor(
     }
 
     override fun getRoutePoints(): Flow<List<GeoPoint>> {
-        // This will be called with a specific delivery ID from the service
         return routePointDao.getPointsByDeliveryId("").map { entities ->
             entities.map { it.toGeoPoint() }
         }
@@ -102,4 +101,21 @@ class LocationRepositoryImpl @Inject constructor(
             // Silently fail - location update is not critical
         }
     }
+
+    @SuppressLint("MissingPermission")
+    override suspend fun getCurrentLocation(): GeoPoint? {
+        return try {
+            fusedLocationClient.lastLocation.await()?.let { location ->
+                GeoPoint(
+                    latitude = location.latitude,
+                    longitude = location.longitude,
+                    timestamp = System.currentTimeMillis(),
+                    accuracy = location.accuracy
+                )
+            } ?: getLocationUpdates().first()
+        } catch (_: Exception) {
+            null
+        }
+    }
 }
+

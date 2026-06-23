@@ -7,6 +7,7 @@ import com.zaki.taksometr.domain.model.Delivery
 import com.zaki.taksometr.domain.model.User
 import com.zaki.taksometr.domain.repository.AuthRepository
 import com.zaki.taksometr.domain.repository.DeliveryRepository
+import com.zaki.taksometr.domain.repository.LocationRepository
 import com.zaki.taksometr.domain.repository.TodayStats
 import com.zaki.taksometr.util.Constants
 import com.zaki.taksometr.util.Resource
@@ -34,6 +35,7 @@ data class HomeState(
 class HomeViewModel @Inject constructor(
     private val authRepository: AuthRepository,
     private val deliveryRepository: DeliveryRepository,
+    private val locationRepository: LocationRepository,
     private val prefs: SharedPreferences
 ) : ViewModel() {
 
@@ -83,6 +85,16 @@ class HomeViewModel @Inject constructor(
             deliveryRepository.getTodayStats(userId).collect { stats ->
                 _state.value = _state.value.copy(todayStats = stats)
             }
+        }
+    }
+
+    fun refreshCourierLocation() {
+        viewModelScope.launch {
+            val courierId = _state.value.user?.id ?: userId
+            if (courierId.isBlank()) return@launch
+
+            val point = locationRepository.getCurrentLocation() ?: return@launch
+            locationRepository.updateCourierLocation(courierId, point)
         }
     }
 

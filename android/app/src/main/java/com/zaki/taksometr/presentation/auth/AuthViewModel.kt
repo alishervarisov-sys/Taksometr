@@ -3,11 +3,13 @@ package com.zaki.taksometr.presentation.auth
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.zaki.taksometr.domain.repository.AuthRepository
+import com.zaki.taksometr.domain.repository.LocationRepository
 import com.zaki.taksometr.util.Resource
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -21,7 +23,8 @@ data class AuthState(
 
 @HiltViewModel
 class AuthViewModel @Inject constructor(
-    private val authRepository: AuthRepository
+    private val authRepository: AuthRepository,
+    private val locationRepository: LocationRepository
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(AuthState())
@@ -33,6 +36,16 @@ class AuthViewModel @Inject constructor(
 
     fun onPasswordChange(password: String) {
         _state.value = _state.value.copy(password = password, error = null)
+    }
+
+    private suspend fun updateCourierLocationAfterLogin() {
+        val courierId = authRepository.getCurrentUser().firstOrNull()?.id ?: return
+        val point = locationRepository.getCurrentLocation() ?: return
+
+        locationRepository.updateCourierLocation(
+            courierId = courierId,
+            point = point
+        )
     }
 
     fun login() {
@@ -47,6 +60,7 @@ class AuthViewModel @Inject constructor(
 
             when (val result = authRepository.login(currentState.login, currentState.password)) {
                 is Resource.Success -> {
+                    updateCourierLocationAfterLogin()
                     _state.value = _state.value.copy(isLoading = false, isSuccess = true)
                 }
                 is Resource.Error -> {

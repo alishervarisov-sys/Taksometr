@@ -10,4 +10,5 @@ interface LocationRepository {
     suspend fun clearRoute()
     fun getTotalDistance(): Flow<Double>
     suspend fun updateCourierLocation(courierId: String, point: GeoPoint)
+    suspend fun getCurrentLocation(): GeoPoint?
 }

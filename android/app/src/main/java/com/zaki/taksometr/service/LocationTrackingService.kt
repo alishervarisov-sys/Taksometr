@@ -26,6 +26,7 @@ import com.zaki.taksometr.util.LocationUtils
 import com.zaki.taksometr.widget.TaksometrWidgetProvider
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.*
+import kotlinx.coroutines.tasks.await
 import javax.inject.Inject
 
 @AndroidEntryPoint
@@ -74,7 +75,6 @@ class LocationTrackingService : Service() {
         val notification = createNotification("Отслеживание маршрута...")
         startForeground(Constants.TRACKING_NOTIFICATION_ID, notification)
 
-        // Restore state if needed
         serviceScope.launch {
             val currentDeliveryId = deliveryId
             if (currentDeliveryId.isNotEmpty()) {
@@ -90,8 +90,8 @@ class LocationTrackingService : Service() {
                     totalDistance = LocationUtils.calculateTotalDistance(points.map { it.toGeoPoint() })
                 }
             }
-            // Start widget timer (updates time + cost every second)
             startWidgetTimer()
+            sendImmediateLocationUpdateIfAvailable()
         }
 
         val locationRequest = LocationRequest.Builder(
@@ -123,8 +123,24 @@ class LocationTrackingService : Service() {
         )
     }
 
+    @SuppressLint("MissingPermission")
+    private suspend fun sendImmediateLocationUpdateIfAvailable() {
+        if (courierId.isEmpty()) return
+
+        try {
+            val location = fusedLocationClient.lastLocation.await() ?: return
+            updateCourierLocationInFirestore(
+                GeoPoint(
+                    latitude = location.latitude,
+                    longitude = location.longitude,
+                    timestamp = System.currentTimeMillis(),
+                    accuracy = location.accuracy
+                )
+            )
+        } catch (_: Exception) {}
+    }
+
     private fun processLocationUpdate(newPoint: GeoPoint) {
-        // Validate point
         if (!LocationUtils.isValidPoint(newPoint, lastValidPoint, lastValidTimestamp)) {
             return
         }
@@ -132,7 +148,6 @@ class LocationTrackingService : Service() {
         val currentDeliveryId = deliveryId
         if (currentDeliveryId.isEmpty()) return
 
-        // Calculate distance increment
         lastValidPoint?.let { lastPoint ->
             val increment = LocationUtils.haversineDistance(lastPoint, newPoint)
             totalDistance += increment
@@ -141,22 +156,18 @@ class LocationTrackingService : Service() {
         lastValidPoint = newPoint
         lastValidTimestamp = newPoint.timestamp
 
-        // Save to local DB
         serviceScope.launch {
             routePointDao.insert(
                 RoutePointEntity.fromGeoPoint(newPoint, currentDeliveryId)
             )
 
-            // Update delivery distance
             deliveryDao.getById(currentDeliveryId)?.let { entity ->
                 deliveryDao.update(entity.copy(distanceMeters = totalDistance))
             }
 
-            // Update courier location in Firestore (throttled)
             updateCourierLocationInFirestore(newPoint)
         }
 
-        // Update notification
         val distanceText = LocationUtils.formatDistance(totalDistance)
         val notification = createNotification("Маршрут: $distanceText")
         val manager = getSystemService(NOTIFICATION_SERVICE) as android.app.NotificationManager
@@ -167,7 +178,7 @@ class LocationTrackingService : Service() {
 
     private suspend fun updateCourierLocationInFirestore(point: GeoPoint) {
         val now = System.currentTimeMillis()
-        if (now - lastFirestoreUpdate < 10000) return // Update every 10 seconds max
+        if (now - lastFirestoreUpdate < 10000) return
         lastFirestoreUpdate = now
 
         try {
@@ -182,13 +193,10 @@ class LocationTrackingService : Service() {
                         )
                     )
                 )
+                .await()
         } catch (_: Exception) {}
     }
 
-    /**
-     * Periodically refreshes the home-screen widget with live time/cost,
-     * even when no new GPS point arrives (so the timer keeps ticking).
-     */
     private fun startWidgetTimer() {
         widgetTimerJob?.cancel()
         widgetTimerJob = serviceScope.launch {

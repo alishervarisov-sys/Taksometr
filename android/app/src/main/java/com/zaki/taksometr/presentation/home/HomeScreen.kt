@@ -74,6 +74,9 @@ fun HomeScreen(
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 isGpsEnabled = isLocationEnabled(context)
+                if (locationPermissions.allPermissionsGranted && isGpsEnabled) {
+                    viewModel.refreshCourierLocation()
+                }
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -84,6 +87,12 @@ fun HomeScreen(
     LaunchedEffect(Unit) {
         if (!locationPermissions.allPermissionsGranted) {
             locationPermissions.launchMultiplePermissionRequest()
+        }
+    }
+
+    LaunchedEffect(locationPermissions.allPermissionsGranted, isGpsEnabled) {
+        if (locationPermissions.allPermissionsGranted && isGpsEnabled) {
+            viewModel.refreshCourierLocation()
         }
     }
 
