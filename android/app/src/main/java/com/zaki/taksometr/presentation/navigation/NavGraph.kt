@@ -8,6 +8,7 @@ import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
+import com.zaki.taksometr.domain.model.DeliveryStatus
 import com.zaki.taksometr.presentation.auth.LoginScreen
 import com.zaki.taksometr.presentation.delivery.ActiveDeliveryScreen
 import com.zaki.taksometr.presentation.delivery.FixedPriceDeliveryScreen
@@ -116,38 +117,40 @@ fun ActiveDeliveryScreenRouter(
 ) {
     val state by viewModel.state.collectAsState()
     val delivery = state.delivery
-    val deliveryType = delivery?.deliveryType ?: "default"
     val context = androidx.compose.ui.platform.LocalContext.current
-    
+
     // Show toast for debugging
     androidx.compose.runtime.LaunchedEffect(delivery) {
         if (delivery != null) {
             android.widget.Toast.makeText(
                 context,
-                "Доставка: тип=$deliveryType, цена=${delivery.fixedPrice}",
+                "Доставка: тип=${delivery.deliveryType}, статус=${delivery.status}, цена=${delivery.fixedPrice}",
                 android.widget.Toast.LENGTH_LONG
             ).show()
         }
     }
-    
+
     // Log for debugging
     android.util.Log.d("DeliveryRouter", "=== ROUTER DEBUG ===")
     android.util.Log.d("DeliveryRouter", "Delivery: $delivery")
-    android.util.Log.d("DeliveryRouter", "DeliveryType: $deliveryType")
+    android.util.Log.d("DeliveryRouter", "DeliveryType: ${delivery?.deliveryType}")
+    android.util.Log.d("DeliveryRouter", "Status: ${delivery?.status}")
     android.util.Log.d("DeliveryRouter", "FixedPrice: ${delivery?.fixedPrice}")
     android.util.Log.d("DeliveryRouter", "==================")
-    
-    val useFixedScreen = deliveryType != "default" && delivery != null
-    
+
+    val useFixedScreen = delivery != null &&
+        delivery.deliveryType != "default" &&
+        delivery.status != DeliveryStatus.IN_PROGRESS
+
     if (useFixedScreen) {
-        // Fixed price delivery - show simple screen
+        // Fixed price delivery - show simple screen before delivery starts
         FixedPriceDeliveryScreen(
             onDeliveryComplete = onDeliveryComplete,
             onBack = onBack,
             viewModel = viewModel
         )
     } else {
-        // Regular delivery - show map and counter
+        // Active/in-progress delivery - always show map and courier movement
         ActiveDeliveryScreen(
             onDeliveryComplete = onDeliveryComplete,
             onBack = onBack,

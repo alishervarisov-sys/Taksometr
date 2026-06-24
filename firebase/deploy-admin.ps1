@@ -1,5 +1,3 @@
-<#
-  Скрипт для деплоя admin-panel
 param(
     [switch]$NoOpen
 )
@@ -92,8 +90,8 @@ Write-Host ""
 Write-Host "URL: https://zakitaksometr.web.app" -ForegroundColor Yellow
 Write-Host ""
 if (-not $NoOpen) {
-    $response = Read-Host "Открыть сайт? (y/n)"
-    if ($response -eq "y" -or $response -eq "Y") {
+    $response = Read-Host 'Открыть сайт? (y/n)'
+    if ($response -eq 'y' -or $response -eq 'Y') {
         Start-Process 'https://zakitaksometr.web.app'
     }
 }
