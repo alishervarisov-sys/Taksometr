@@ -48,6 +48,7 @@ fun HomeScreen(
 ) {
     val state by viewModel.state.collectAsState()
     val context = LocalContext.current
+    val snackbarHostState = remember { SnackbarHostState() }
     
     // Language dialog state
     var showLanguageDialog by remember { mutableStateOf(false) }
@@ -93,6 +94,7 @@ fun HomeScreen(
     LaunchedEffect(locationPermissions.allPermissionsGranted, isGpsEnabled) {
         if (locationPermissions.allPermissionsGranted && isGpsEnabled) {
             viewModel.refreshCourierLocation()
+            viewModel.syncRemoteActiveDelivery()
         }
     }
 
@@ -186,7 +188,12 @@ fun HomeScreen(
         }
     }
 
+    LaunchedEffect(state.error) {
+        state.error?.let { snackbarHostState.showSnackbar(it) }
+    }
+
     Scaffold(
+        snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = {
@@ -300,9 +307,51 @@ fun HomeScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(20.dp))
 
-            // Stats cards
+            if (state.activeDelivery == null) {
+                state.pendingMarketplaceOrder?.let { pending ->
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp)
+                        ) {
+                            Text(
+                                text = "Свободный заказ",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            if (pending.pickupAddress.isNotBlank()) Text("Откуда: ${pending.pickupAddress}")
+                            if (pending.destinationAddress.isNotBlank()) Text("Куда: ${pending.destinationAddress}")
+                            if (pending.comment.isNotBlank()) Text("Комментарий: ${pending.comment}")
+                            if (pending.clientPhone.isNotBlank()) Text("Клиент: ${pending.clientPhone}")
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Button(
+                                onClick = { viewModel.acceptPendingMarketplaceOrder() },
+                                enabled = !state.isAcceptingMarketplaceOrder,
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                if (state.isAcceptingMarketplaceOrder) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(20.dp),
+                                        strokeWidth = 2.dp,
+                                        color = MaterialTheme.colorScheme.onPrimary
+                                    )
+                                } else {
+                                    Text("Принять заказ")
+                                }
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(16.dp))
+                }
+            }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)

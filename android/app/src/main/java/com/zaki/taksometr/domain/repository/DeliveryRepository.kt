@@ -20,6 +20,9 @@ interface DeliveryRepository {
     fun getTodayStats(courierId: String): Flow<TodayStats>
     suspend fun syncDeliveryStatusFromFirestore(deliveryId: String): Resource<Delivery?>
     suspend fun clearStaleActiveDelivery()
+    suspend fun syncRemoteActiveDelivery(): Resource<Delivery?>
+    suspend fun acceptMarketplaceDelivery(deliveryId: String): Resource<Delivery>
+    suspend fun updateMarketplaceDeliveryStage(deliveryId: String, stage: String? = null, waitingAction: String? = null): Resource<Unit>
 }
 
 data class TodayStats(

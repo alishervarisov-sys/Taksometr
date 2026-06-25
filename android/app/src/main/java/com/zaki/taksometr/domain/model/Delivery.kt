@@ -13,7 +13,19 @@ data class Delivery(
     val route: List<GeoPoint> = emptyList(),
     val deliveryType: String = "default",
     val fixedPrice: Double? = null,
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    val orderKind: String = "REGULAR",
+    val adminOrderStage: String? = null,
+    val comment: String = "",
+    val pickupAddress: String = "",
+    val pickupLat: Double? = null,
+    val pickupLng: Double? = null,
+    val destinationAddress: String = "",
+    val destinationLat: Double? = null,
+    val destinationLng: Double? = null,
+    val waitingMinutes: Double = 0.0,
+    val waitingStartedAt: Long? = null,
+    val courierPhone: String = ""
 )
 
 enum class DeliveryStatus {

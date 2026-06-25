@@ -20,6 +20,18 @@ data class DeliveryEntity(
     val deliveryType: String = "default",
     val fixedPrice: Double? = null,
     val createdAt: Long,
+    val orderKind: String = "REGULAR",
+    val adminOrderStage: String? = null,
+    val comment: String = "",
+    val pickupAddress: String = "",
+    val pickupLat: Double? = null,
+    val pickupLng: Double? = null,
+    val destinationAddress: String = "",
+    val destinationLat: Double? = null,
+    val destinationLng: Double? = null,
+    val waitingMinutes: Double = 0.0,
+    val waitingStartedAt: Long? = null,
+    val courierPhone: String = "",
     val isSynced: Boolean = false
 ) {
     fun toDelivery(): Delivery = Delivery(
@@ -34,7 +46,19 @@ data class DeliveryEntity(
         cost = cost,
         deliveryType = deliveryType,
         fixedPrice = fixedPrice,
-        createdAt = createdAt
+        createdAt = createdAt,
+        orderKind = orderKind,
+        adminOrderStage = adminOrderStage,
+        comment = comment,
+        pickupAddress = pickupAddress,
+        pickupLat = pickupLat,
+        pickupLng = pickupLng,
+        destinationAddress = destinationAddress,
+        destinationLat = destinationLat,
+        destinationLng = destinationLng,
+        waitingMinutes = waitingMinutes,
+        waitingStartedAt = waitingStartedAt,
+        courierPhone = courierPhone
     )
 
     companion object {
@@ -50,7 +74,19 @@ data class DeliveryEntity(
             cost = delivery.cost,
             deliveryType = delivery.deliveryType,
             fixedPrice = delivery.fixedPrice,
-            createdAt = delivery.createdAt
+            createdAt = delivery.createdAt,
+            orderKind = delivery.orderKind,
+            adminOrderStage = delivery.adminOrderStage,
+            comment = delivery.comment,
+            pickupAddress = delivery.pickupAddress,
+            pickupLat = delivery.pickupLat,
+            pickupLng = delivery.pickupLng,
+            destinationAddress = delivery.destinationAddress,
+            destinationLat = delivery.destinationLat,
+            destinationLng = delivery.destinationLng,
+            waitingMinutes = delivery.waitingMinutes,
+            waitingStartedAt = delivery.waitingStartedAt,
+            courierPhone = delivery.courierPhone
         )
     }
 }

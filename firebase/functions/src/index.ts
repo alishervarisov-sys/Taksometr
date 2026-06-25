@@ -5,6 +5,24 @@ admin.initializeApp();
 
 const db = admin.firestore();
 
+type AdminOrderStage =
+  | "NEW"
+  | "ACCEPTED"
+  | "ARRIVED_PICKUP"
+  | "PICKED_UP"
+  | "ON_THE_WAY"
+  | "ARRIVED_DESTINATION"
+  | "COMPLETED"
+  | "CANCELLED";
+
+interface DeliveryTariffSnapshot {
+  baseCost: number;
+  baseDistanceKm: number;
+  costPerKm: number;
+  freeWaitingMinutes: number;
+  costPerWaitingMinute: number;
+}
+
 // Helper function to verify admin or super admin
 function verifyAdmin(adminId: string): Promise<void> {
   if (adminId === "SUPER_ADMIN") {
@@ -167,6 +185,66 @@ function computeCost(
     cost += (distanceKm - baseDistanceKm) * costPerKm;
   }
   return Math.max(baseCost, Math.ceil(cost));
+}
+
+function getEtaMinutes(from: any, to: any): number | null {
+  if (
+    !from ||
+    !to ||
+    typeof from.latitude !== "number" ||
+    typeof from.longitude !== "number" ||
+    typeof to.latitude !== "number" ||
+    typeof to.longitude !== "number"
+  ) {
+    return null;
+  }
+
+  const distanceMeters = haversineDistance(
+    from.latitude,
+    from.longitude,
+    to.latitude,
+    to.longitude
+  );
+  const averageSpeedMps = 8.33;
+  return Math.max(1, Math.ceil(distanceMeters / averageSpeedMps / 60));
+}
+
+async function getDefaultTariffSnapshot(): Promise<DeliveryTariffSnapshot> {
+  const tariffDoc = await db.collection("tariffs").doc("default").get();
+  const tariffData = tariffDoc.exists ? tariffDoc.data()! : {};
+
+  return {
+    baseCost: tariffData.baseCost || 5000,
+    baseDistanceKm: tariffData.baseDistanceKm ?? 3,
+    costPerKm: tariffData.costPerKm || 1500,
+    freeWaitingMinutes: tariffData.freeWaitingMinutes ?? 5,
+    costPerWaitingMinute: tariffData.costPerWaitingMinute ?? 500,
+  };
+}
+
+async function sendPushToCourier(courierData: any, payload: {
+  title: string;
+  body: string;
+  data: {[key: string]: string};
+}): Promise<void> {
+  const fcmToken = courierData?.fcmToken;
+  if (!fcmToken) return;
+
+  try {
+    await admin.messaging().send({
+      token: fcmToken,
+      notification: {
+        title: payload.title,
+        body: payload.body,
+      },
+      data: payload.data,
+      android: {
+        priority: "high",
+      },
+    });
+  } catch (e) {
+    console.error("FCM send error:", e);
+  }
 }
 
 // ============ COURIER STATUS SYNCHRONIZATION ============
@@ -650,6 +728,323 @@ export const calculateDeliveryCost = functions.https.onCall(async (data, context
   };
 });
 
+// ============ ADMIN: CREATE MARKETPLACE DELIVERY ============
+export const adminCreateMarketplaceDelivery = functions.https.onCall(async (data, context) => {
+  const {
+    adminId,
+    clientPhone,
+    comment,
+    pickup,
+    destination,
+  } = data;
+
+  await verifyAdmin(adminId);
+
+  if (!clientPhone || !pickup || !destination) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "clientPhone, pickup and destination are required"
+    );
+  }
+
+  if (
+    typeof pickup.latitude !== "number" ||
+    typeof pickup.longitude !== "number" ||
+    typeof destination.latitude !== "number" ||
+    typeof destination.longitude !== "number"
+  ) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "pickup and destination coordinates are required"
+    );
+  }
+
+  const courierDocs = await db.collection("users")
+    .where("role", "==", "COURIER")
+    .where("isBlocked", "==", false)
+    .get();
+
+  const availableCourierIds: string[] = [];
+  const availableCouriersDebug: Array<{
+    id: string;
+    name: string;
+    phone: string;
+  }> = [];
+  for (const courierDoc of courierDocs.docs) {
+    availableCourierIds.push(courierDoc.id);
+    availableCouriersDebug.push({
+      id: courierDoc.id,
+      name: courierDoc.data()?.name || "",
+      phone: courierDoc.data()?.phone || "",
+    });
+  }
+
+  const tariff = await getDefaultTariffSnapshot();
+  const deliveryRef = db.collection("deliveries").doc();
+  const now = Date.now();
+
+  await deliveryRef.set({
+    courierId: "",
+    courierName: "",
+    clientPhone: clientPhone,
+    status: "PENDING",
+    adminOrderStage: "NEW",
+    orderSource: "ADMIN_PANEL",
+    orderKind: "MARKETPLACE",
+    startTime: null,
+    acceptedAt: null,
+    endTime: null,
+    distanceMeters: 0,
+    cost: 0,
+    route: [],
+    deliveryType: "admin_marketplace",
+    fixedPrice: null,
+    createdAt: now,
+    adminCreatedAt: now,
+    adminId: adminId,
+    comment: comment || "",
+    pickup,
+    destination,
+    availableCourierIds,
+    availableCouriersDebug,
+    waitingMinutes: 0,
+    waitingCost: 0,
+    waitingStartedAt: null,
+    tariffSnapshot: tariff,
+  });
+
+  for (const courierId of availableCourierIds) {
+    const courierDoc = await db.collection("users").doc(courierId).get();
+    if (!courierDoc.exists) continue;
+    const courierData = courierDoc.data()!;
+
+    await sendPushToCourier(courierData, {
+      title: "Новый заказ",
+      body: `Заказ: ${pickup.address || "точка А"} → ${destination.address || "точка Б"}`,
+      data: {
+        type: "ADMIN_MARKETPLACE_ORDER",
+        deliveryId: deliveryRef.id,
+      },
+    });
+  }
+
+  return {
+    success: true,
+    deliveryId: deliveryRef.id,
+    availableCouriers: availableCourierIds.length,
+    availableCourierIds,
+    availableCouriersDebug,
+  };
+});
+
+export const acceptMarketplaceDelivery = functions.https.onCall(async (data, context) => {
+  const {deliveryId, courierId} = data;
+
+  if (!deliveryId || !courierId) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "deliveryId and courierId are required"
+    );
+  }
+
+  const deliveryRef = db.collection("deliveries").doc(deliveryId);
+
+  const acceptanceResult = await db.runTransaction(async (transaction) => {
+    const deliveryDoc = await transaction.get(deliveryRef);
+    if (!deliveryDoc.exists) {
+      throw new functions.https.HttpsError("not-found", "Delivery not found");
+    }
+
+    const deliveryData = deliveryDoc.data()!;
+    if (deliveryData.status !== "PENDING" || deliveryData.orderKind !== "MARKETPLACE") {
+      const acceptedBy = deliveryData.courierName || "другой курьер";
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        `Delivery is no longer available. Accepted by: ${acceptedBy}`
+      );
+    }
+
+    const availableCourierIds = deliveryData.availableCourierIds || [];
+    if (!availableCourierIds.includes(courierId)) {
+      throw new functions.https.HttpsError(
+        "permission-denied",
+        "Courier is not eligible for this order"
+      );
+    }
+
+    const courierRef = db.collection("users").doc(courierId);
+    const courierDoc = await transaction.get(courierRef);
+    if (!courierDoc.exists) {
+      throw new functions.https.HttpsError("not-found", "Courier not found");
+    }
+
+    const courierData = courierDoc.data()!;
+    if (courierData.isBlocked) {
+      throw new functions.https.HttpsError("permission-denied", "Courier is blocked");
+    }
+
+    const courierBalance = courierData.balance || 0;
+    if (courierBalance < 5) {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "Недостаточно средств на балансе. Минимум 5 сомони."
+      );
+    }
+
+    const activeDeliveries = await db.collection("deliveries")
+      .where("courierId", "==", courierId)
+      .where("status", "==", "IN_PROGRESS")
+      .get();
+    if (!activeDeliveries.empty) {
+      throw new functions.https.HttpsError("already-exists", "Courier already has an active delivery");
+    }
+
+    const activeChains = await db.collection("delivery_chains")
+      .where("courierId", "==", courierId)
+      .where("status", "==", "IN_PROGRESS")
+      .get();
+    if (!activeChains.empty) {
+      throw new functions.https.HttpsError("already-exists", "Courier already has an active chain");
+    }
+
+    const acceptedAt = Date.now();
+    transaction.update(deliveryRef, {
+      courierId,
+      courierName: courierData.name || "",
+      courierPhone: courierData.phone || "",
+      status: "IN_PROGRESS",
+      adminOrderStage: "ACCEPTED",
+      acceptedAt,
+      startTime: acceptedAt,
+      availableCourierIds: [courierId],
+    });
+
+    return {
+      courierData,
+      deliveryData,
+      acceptedAt,
+    };
+  });
+
+  await syncCourierStatus(courierId, "acceptMarketplaceDelivery: order accepted by courier");
+
+  const etaMinutes = getEtaMinutes(
+    acceptanceResult.courierData.lastLocation,
+    acceptanceResult.deliveryData.pickup
+  );
+  const courierName = acceptanceResult.courierData.name || "";
+  const courierPhone = acceptanceResult.courierData.phone || "";
+
+  let smsText = `Салом! Курьери ZaKi фармоиши шуморо қабул кард. ${courierName}`;
+  if (courierPhone) {
+    smsText += `, тел: ${courierPhone}`;
+  }
+  if (etaMinutes !== null) {
+    smsText += `. Тахминан то шумо: ${etaMinutes} дақиқа`;
+  }
+  smsText += `.`;
+
+  await sendSms(acceptanceResult.deliveryData.clientPhone, smsText);
+
+  return {
+    success: true,
+    deliveryId,
+    courierName,
+    courierPhone,
+    etaMinutes,
+  };
+});
+
+export const updateMarketplaceDeliveryStage = functions.https.onCall(async (data, context) => {
+  const {deliveryId, courierId, stage, waitingAction} = data as {
+    deliveryId: string;
+    courierId: string;
+    stage?: AdminOrderStage;
+    waitingAction?: "START" | "STOP";
+  };
+
+  if (!deliveryId || !courierId) {
+    throw new functions.https.HttpsError("invalid-argument", "deliveryId and courierId are required");
+  }
+
+  const deliveryRef = db.collection("deliveries").doc(deliveryId);
+  const deliveryDoc = await deliveryRef.get();
+  if (!deliveryDoc.exists) {
+    throw new functions.https.HttpsError("not-found", "Delivery not found");
+  }
+
+  const deliveryData = deliveryDoc.data()!;
+  if (deliveryData.courierId !== courierId) {
+    throw new functions.https.HttpsError("permission-denied", "Not authorized");
+  }
+  if (deliveryData.orderKind !== "MARKETPLACE") {
+    throw new functions.https.HttpsError("failed-precondition", "Not a marketplace delivery");
+  }
+  if (deliveryData.status !== "IN_PROGRESS") {
+    throw new functions.https.HttpsError("failed-precondition", "Delivery is not in progress");
+  }
+
+  const now = Date.now();
+  const updates: {[key: string]: any} = {};
+
+  if (stage) {
+    updates.adminOrderStage = stage;
+    updates.lastStageUpdatedAt = now;
+  }
+
+  if (waitingAction === "START") {
+    if (!deliveryData.waitingStartedAt) {
+      updates.waitingStartedAt = now;
+    }
+  }
+
+  if (waitingAction === "STOP") {
+    const waitingStartedAt = deliveryData.waitingStartedAt || 0;
+    if (waitingStartedAt > 0) {
+      const extraWaitingMinutes = (now - waitingStartedAt) / 60000;
+      updates.waitingMinutes = (deliveryData.waitingMinutes || 0) + extraWaitingMinutes;
+      updates.waitingStartedAt = null;
+    }
+  }
+
+  await deliveryRef.update(updates);
+  return {success: true};
+});
+
+export const adminCancelMarketplaceDelivery = functions.https.onCall(async (data, context) => {
+  const {adminId, deliveryId} = data;
+
+  await verifyAdmin(adminId);
+
+  if (!deliveryId) {
+    throw new functions.https.HttpsError("invalid-argument", "deliveryId is required");
+  }
+
+  const deliveryRef = db.collection("deliveries").doc(deliveryId);
+  const deliveryDoc = await deliveryRef.get();
+  if (!deliveryDoc.exists) {
+    throw new functions.https.HttpsError("not-found", "Delivery not found");
+  }
+
+  const deliveryData = deliveryDoc.data()!;
+  if (deliveryData.orderKind !== "MARKETPLACE") {
+    throw new functions.https.HttpsError("failed-precondition", "Not a marketplace delivery");
+  }
+
+  await deliveryRef.update({
+    status: "CANCELLED",
+    adminOrderStage: "CANCELLED",
+    endTime: Date.now(),
+    cancelledByAdminId: adminId,
+  });
+
+  if (deliveryData.courierId) {
+    await syncCourierStatus(deliveryData.courierId, "adminCancelMarketplaceDelivery: cancelled by admin");
+  }
+
+  return {success: true};
+});
+
 // ============ ADMIN: CREATE COURIER ============
 export const createCourier = functions.https.onCall(async (data, context) => {
   const {login, password, name, surname, birthYear, city, phone, adminId,
@@ -866,27 +1261,15 @@ export const topUpBalance = functions.https.onCall(async (data, context) => {
     createdAt: Date.now(),
   });
 
-  // Send push notification to courier
-  const fcmToken = courierData.fcmToken;
-  if (fcmToken) {
-    try {
-      await admin.messaging().send({
-        token: fcmToken,
-        notification: {
-          title: "Баланс пополнен",
-          body: `+${amount} сомони. Новый баланс: ${newBalance} сомони`,
-        },
-        data: {
-          type: "BALANCE_TOP_UP",
-          amount: String(amount),
-          newBalance: String(newBalance),
-        },
-      });
-    } catch (e) {
-      // FCM send failure is not critical
-      console.error("FCM send error:", e);
-    }
-  }
+  await sendPushToCourier(courierData, {
+    title: "Баланс пополнен",
+    body: `+${amount} сомони. Новый баланс: ${newBalance} сомони`,
+    data: {
+      type: "BALANCE_TOP_UP",
+      amount: String(amount),
+      newBalance: String(newBalance),
+    },
+  });
 
   return {
     success: true,
@@ -1636,25 +2019,14 @@ export const adminCreateDeliveryChain = functions.https.onCall(async (data, cont
     await sendSms(firstItem.clientPhone, startSmsText);
   }
 
-  // Send notification to courier
-  const fcmToken = courierData.fcmToken;
-  if (fcmToken) {
-    try {
-      await admin.messaging().send({
-        token: fcmToken,
-        notification: {
-          title: "Новая цепочка заказов",
-          body: `Вам назначена цепочка из ${items.length} заказов`,
-        },
-        data: {
-          type: "NEW_CHAIN",
-          chainId: chainRef.id,
-        },
-      });
-    } catch (e) {
-      console.error("FCM send error:", e);
-    }
-  }
+  await sendPushToCourier(courierData, {
+    title: "Новая цепочка заказов",
+    body: `Вам назначена цепочка из ${items.length} заказов`,
+    data: {
+      type: "NEW_CHAIN",
+      chainId: chainRef.id,
+    },
+  });
 
   return {success: true, chainId: chainRef.id};
 });
@@ -1730,7 +2102,8 @@ export const adminCompleteDelivery = functions.https.onCall(async (data, context
 
   const deliveryData = deliveryDoc.data()!;
 
-  if (deliveryData.status !== "IN_PROGRESS") {
+  const isMarketplacePending = deliveryData.orderKind === "MARKETPLACE" && deliveryData.status === "PENDING";
+  if (deliveryData.status !== "IN_PROGRESS" && !isMarketplacePending) {
     throw new functions.https.HttpsError(
       "failed-precondition",
       "Delivery is not in progress"

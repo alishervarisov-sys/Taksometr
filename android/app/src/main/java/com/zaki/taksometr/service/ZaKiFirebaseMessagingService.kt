@@ -48,6 +48,15 @@ class ZaKiFirebaseMessagingService : FirebaseMessagingService() {
 
         when (type) {
             "REQUEST_LOCATION" -> handleLocationRequest()
+            "ADMIN_MARKETPLACE_ORDER" -> {
+                message.data["deliveryId"]?.let { deliveryId ->
+                    prefs.edit().putString(Constants.PREF_PENDING_MARKETPLACE_DELIVERY_ID, deliveryId).apply()
+                }
+                showNotification(
+                    message.notification?.title ?: "Новый заказ",
+                    message.notification?.body ?: "Свободный заказ ожидает принятия"
+                )
+            }
             else -> {
                 val title = message.notification?.title ?: message.data["title"] ?: "ZaKi Taksometr"
                 val body = message.notification?.body ?: message.data["body"] ?: ""

@@ -18,6 +18,7 @@ import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.tasks.await
 import java.util.*
@@ -292,6 +293,114 @@ class DeliveryRepositoryImpl @Inject constructor(
         return deliveryDao.getActiveDelivery(userId).map { it?.toDelivery() }
     }
 
+    override suspend fun syncRemoteActiveDelivery(): Resource<Delivery?> {
+        return try {
+            val snapshot = firestore.collection(Constants.COLLECTION_DELIVERIES)
+                .whereEqualTo("courierId", userId)
+                .whereEqualTo("status", "IN_PROGRESS")
+                .limit(1)
+                .get()
+                .await()
+
+            val doc = snapshot.documents.firstOrNull()
+            if (doc == null) {
+                return Resource.Success(null)
+            }
+
+            val delivery = doc.toDeliveryModel()
+            deliveryDao.insert(DeliveryEntity.fromDelivery(delivery).copy(isSynced = true))
+            prefs.edit()
+                .putString(Constants.PREF_ACTIVE_DELIVERY_ID, delivery.id)
+                .remove(Constants.PREF_PENDING_MARKETPLACE_DELIVERY_ID)
+                .apply()
+            Resource.Success(delivery)
+        } catch (e: Exception) {
+            Resource.Error("Ошибка синхронизации заказа: ${e.localizedMessage}")
+        }
+    }
+
+    private suspend fun fetchDeliveryById(deliveryId: String): Resource<Delivery> {
+        return try {
+            val doc = firestore.collection(Constants.COLLECTION_DELIVERIES)
+                .document(deliveryId)
+                .get()
+                .await()
+
+            if (!doc.exists()) {
+                return Resource.Error("Заказ не найден после принятия")
+            }
+
+            val delivery = doc.toDeliveryModel()
+            if (delivery.courierId != userId || delivery.status != DeliveryStatus.IN_PROGRESS) {
+                return Resource.Error("Заказ не стал активным для текущего курьера")
+            }
+
+            deliveryDao.insert(DeliveryEntity.fromDelivery(delivery).copy(isSynced = true))
+            prefs.edit()
+                .putString(Constants.PREF_ACTIVE_DELIVERY_ID, delivery.id)
+                .remove(Constants.PREF_PENDING_MARKETPLACE_DELIVERY_ID)
+                .apply()
+
+            Resource.Success(delivery)
+        } catch (e: Exception) {
+            Resource.Error("Ошибка загрузки принятого заказа: ${e.localizedMessage}")
+        }
+    }
+
+    override suspend fun acceptMarketplaceDelivery(deliveryId: String): Resource<Delivery> {
+        return try {
+            functions.getHttpsCallable("acceptMarketplaceDelivery")
+                .call(hashMapOf(
+                    "deliveryId" to deliveryId,
+                    "courierId" to userId
+                ))
+                .await()
+
+            val fetched = fetchDeliveryById(deliveryId)
+            when (fetched) {
+                is Resource.Success -> Resource.Success(fetched.data!!)
+                is Resource.Error -> fetched
+                is Resource.Loading -> Resource.Error("Не удалось загрузить принятый заказ")
+            }
+        } catch (e: Exception) {
+            Resource.Error("Ошибка принятия заказа: ${e.localizedMessage}")
+        }
+    }
+
+    override suspend fun updateMarketplaceDeliveryStage(
+        deliveryId: String,
+        stage: String?,
+        waitingAction: String?
+    ): Resource<Unit> {
+        return try {
+            val data = hashMapOf<String, Any>(
+                "deliveryId" to deliveryId,
+                "courierId" to userId
+            )
+            if (stage != null) data["stage"] = stage
+            if (waitingAction != null) data["waitingAction"] = waitingAction
+
+            functions.getHttpsCallable("updateMarketplaceDeliveryStage")
+                .call(data)
+                .await()
+
+            val current = deliveryDao.getById(deliveryId)
+            current?.let {
+                deliveryDao.update(it.copy(
+                    adminOrderStage = stage ?: it.adminOrderStage,
+                    waitingStartedAt = when (waitingAction) {
+                        "START" -> System.currentTimeMillis()
+                        "STOP" -> null
+                        else -> it.waitingStartedAt
+                    }
+                ))
+            }
+            Resource.Success(Unit)
+        } catch (e: Exception) {
+            Resource.Error("Ошибка обновления статуса заказа: ${e.localizedMessage}")
+        }
+    }
+
     override fun getDeliveryHistory(courierId: String): Flow<List<Delivery>> {
         return deliveryDao.getDeliveriesByCourier(courierId).map { list ->
             list.map { it.toDelivery() }
@@ -338,19 +447,7 @@ class DeliveryRepositoryImpl @Inject constructor(
                     )
                 }
 
-                val delivery = Delivery(
-                    id = doc.id,
-                    courierId = doc.getString("courierId") ?: "",
-                    courierName = doc.getString("courierName") ?: "",
-                    clientPhone = doc.getString("clientPhone") ?: "",
-                    status = DeliveryStatus.valueOf(doc.getString("status") ?: "COMPLETED"),
-                    startTime = doc.getLong("startTime") ?: 0L,
-                    endTime = doc.getLong("endTime"),
-                    distanceMeters = doc.getDouble("distanceMeters") ?: 0.0,
-                    cost = doc.getDouble("cost") ?: 0.0,
-                    route = route,
-                    createdAt = doc.getLong("createdAt") ?: 0L
-                )
+                val delivery = doc.toDeliveryModel().copy(route = route)
                 Resource.Success(delivery)
             }
         } catch (e: Exception) {
@@ -435,22 +532,8 @@ class DeliveryRepositoryImpl @Inject constructor(
                         accuracy = (point["accuracy"] as? Number)?.toFloat() ?: 0f
                     )
                 }
-                
-                Delivery(
-                    id = doc.id,
-                    courierId = doc.getString("courierId") ?: "",
-                    courierName = doc.getString("courierName") ?: "",
-                    clientPhone = doc.getString("clientPhone") ?: "",
-                    status = DeliveryStatus.valueOf(firestoreStatus),
-                    startTime = doc.getLong("startTime") ?: 0L,
-                    endTime = doc.getLong("endTime"),
-                    distanceMeters = doc.getDouble("distanceMeters") ?: 0.0,
-                    cost = doc.getDouble("cost") ?: 0.0,
-                    route = route,
-                    deliveryType = doc.getString("deliveryType") ?: "default",
-                    fixedPrice = doc.getDouble("fixedPrice"),
-                    createdAt = doc.getLong("createdAt") ?: 0L
-                )
+
+                doc.toDeliveryModel().copy(route = route)
             } else null
             
             android.util.Log.d("DeliveryRepo", "=== SYNC COMPLETE ===")
@@ -466,24 +549,61 @@ class DeliveryRepositoryImpl @Inject constructor(
         try {
             val activeId = prefs.getString(Constants.PREF_ACTIVE_DELIVERY_ID, "")
             if (!activeId.isNullOrEmpty()) {
-                // Try to sync from Firestore first to check status
                 val result = syncDeliveryStatusFromFirestore(activeId)
                 if (result is Resource.Success && (result.data == null || result.data?.status != DeliveryStatus.IN_PROGRESS)) {
-                    // Delivery is no longer active, delete local record
                     deliveryDao.deleteById(activeId)
                     routePointDao.deleteByDeliveryId(activeId)
                     prefs.edit().remove(Constants.PREF_ACTIVE_DELIVERY_ID).apply()
                     android.util.Log.d("DeliveryRepo", "Cleared stale active delivery: $activeId")
                 }
             }
-            
-            // Also check for any IN_PROGRESS deliveries in local DB that don't match active ID
-            val activeLocalDelivery = deliveryDao.getActiveDeliverySync(userId)
-            if (activeLocalDelivery != null && activeLocalDelivery.id != activeId) {
-                android.util.Log.d("DeliveryRepo", "Found orphaned active delivery: ${activeLocalDelivery.id}")
+
+            val remote = syncRemoteActiveDelivery()
+            if (remote is Resource.Success && remote.data != null) {
+                android.util.Log.d("DeliveryRepo", "Synced remote active delivery: ${remote.data.id}")
             }
         } catch (e: Exception) {
             android.util.Log.e("DeliveryRepo", "Error clearing stale delivery: ${e.message}")
         }
+    }
+
+    private fun com.google.firebase.firestore.DocumentSnapshot.toDeliveryModel(): Delivery {
+        val routeList = get("route") as? List<Map<String, Any>> ?: emptyList()
+        val route = routeList.map { point ->
+            GeoPoint(
+                latitude = (point["latitude"] as? Number)?.toDouble() ?: 0.0,
+                longitude = (point["longitude"] as? Number)?.toDouble() ?: 0.0,
+                timestamp = (point["timestamp"] as? Number)?.toLong() ?: 0L,
+                accuracy = (point["accuracy"] as? Number)?.toFloat() ?: 0f
+            )
+        }
+
+        return Delivery(
+            id = id,
+            courierId = getString("courierId") ?: "",
+            courierName = getString("courierName") ?: "",
+            clientPhone = getString("clientPhone") ?: "",
+            status = DeliveryStatus.valueOf(getString("status") ?: "IN_PROGRESS"),
+            startTime = getLong("startTime") ?: 0L,
+            endTime = getLong("endTime"),
+            distanceMeters = getDouble("distanceMeters") ?: 0.0,
+            cost = getDouble("cost") ?: 0.0,
+            route = route,
+            deliveryType = getString("deliveryType") ?: "default",
+            fixedPrice = getDouble("fixedPrice"),
+            createdAt = getLong("createdAt") ?: 0L,
+            orderKind = getString("orderKind") ?: "REGULAR",
+            adminOrderStage = getString("adminOrderStage"),
+            comment = getString("comment") ?: "",
+            pickupAddress = (get("pickup") as? Map<*, *>)?.get("address") as? String ?: "",
+            pickupLat = ((get("pickup") as? Map<*, *>)?.get("latitude") as? Number)?.toDouble(),
+            pickupLng = ((get("pickup") as? Map<*, *>)?.get("longitude") as? Number)?.toDouble(),
+            destinationAddress = (get("destination") as? Map<*, *>)?.get("address") as? String ?: "",
+            destinationLat = ((get("destination") as? Map<*, *>)?.get("latitude") as? Number)?.toDouble(),
+            destinationLng = ((get("destination") as? Map<*, *>)?.get("longitude") as? Number)?.toDouble(),
+            waitingMinutes = getDouble("waitingMinutes") ?: 0.0,
+            waitingStartedAt = getLong("waitingStartedAt"),
+            courierPhone = getString("courierPhone") ?: ""
+        )
     }
 }

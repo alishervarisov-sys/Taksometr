@@ -59,12 +59,6 @@ class AuthRepositoryImpl @Inject constructor(
                 .putBoolean(Constants.PREF_IS_LOGGED_IN, true)
                 .apply()
 
-            // Update online status
-            firestore.collection(Constants.COLLECTION_USERS)
-                .document(user.id)
-                .update("isOnline", true)
-                .await()
-
             Resource.Success(user)
         } catch (e: Exception) {
             Resource.Error("Ошибка входа: ${e.localizedMessage}")
@@ -72,17 +66,11 @@ class AuthRepositoryImpl @Inject constructor(
     }
 
     override suspend fun logout() {
-        val userId = prefs.getString(Constants.PREF_USER_ID, null)
-        userId?.let {
-            firestore.collection(Constants.COLLECTION_USERS)
-                .document(it)
-                .update("isOnline", false)
-                .await()
-        }
         prefs.edit()
             .remove(Constants.PREF_USER_ID)
             .putBoolean(Constants.PREF_IS_LOGGED_IN, false)
             .remove(Constants.PREF_ACTIVE_DELIVERY_ID)
+            .remove(Constants.PREF_PENDING_MARKETPLACE_DELIVERY_ID)
             .apply()
     }
 

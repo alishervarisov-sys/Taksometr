@@ -3,6 +3,8 @@ package com.zaki.taksometr.presentation.home
 import android.content.SharedPreferences
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.ListenerRegistration
 import com.zaki.taksometr.domain.model.Delivery
 import com.zaki.taksometr.domain.model.User
 import com.zaki.taksometr.domain.repository.AuthRepository
@@ -12,14 +14,27 @@ import com.zaki.taksometr.domain.repository.TodayStats
 import com.zaki.taksometr.util.Constants
 import com.zaki.taksometr.util.Resource
 import dagger.hilt.android.lifecycle.HiltViewModel
-import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import javax.inject.Inject
+
+data class PendingMarketplaceOrder(
+    val id: String = "",
+    val clientPhone: String = "",
+    val comment: String = "",
+    val pickupAddress: String = "",
+    val destinationAddress: String = "",
+    val createdAt: Long = 0L
+)
 
 data class HomeState(
     val user: User? = null,
     val todayStats: TodayStats = TodayStats(),
     val activeDelivery: Delivery? = null,
+    val pendingMarketplaceOrder: PendingMarketplaceOrder? = null,
+    val isAcceptingMarketplaceOrder: Boolean = false,
     val clientPhone: String = "",
     val isStartingDelivery: Boolean = false,
     val showStartDialog: Boolean = false,
@@ -45,7 +60,10 @@ class HomeViewModel @Inject constructor(
     private val userId: String
         get() = prefs.getString(Constants.PREF_USER_ID, "") ?: ""
 
-        init {
+    private var userLoaded = false
+    private var pendingOrderListener: ListenerRegistration? = null
+
+    init {
         loadUserData()
         loadTodayStats()
         observeActiveDelivery()
@@ -55,29 +73,109 @@ class HomeViewModel @Inject constructor(
 
     private fun clearStaleActiveDeliveryOnStart() {
         viewModelScope.launch {
-            android.util.Log.d("HomeViewModel", "Clearing stale active deliveries on startup...")
             deliveryRepository.clearStaleActiveDelivery()
         }
     }
-
-    private var userLoaded = false
 
     private fun loadUserData() {
         viewModelScope.launch {
             authRepository.getCurrentUser().collect { user ->
                 if (user == null && userLoaded) {
-                    // User was deleted from Firestore — force logout
                     _state.value = _state.value.copy(user = null, isBlocked = true)
+                    pendingOrderListener?.remove()
+                    pendingOrderListener = null
                 } else if (user?.isBlocked == true) {
-                    // User was blocked — force logout
                     _state.value = _state.value.copy(user = user, isBlocked = true)
+                    pendingOrderListener?.remove()
+                    pendingOrderListener = null
                     authRepository.logout()
                 } else {
                     _state.value = _state.value.copy(user = user, isBlocked = false)
+                    if (user != null) {
+                        observePendingMarketplaceOrders(user.id)
+                    }
                 }
                 if (user != null) userLoaded = true
             }
         }
+    }
+
+    private fun observePendingMarketplaceOrders(courierId: String) {
+        pendingOrderListener?.remove()
+        pendingOrderListener = FirebaseFirestore.getInstance()
+            .collection("deliveries")
+            .whereEqualTo("status", "PENDING")
+            .whereEqualTo("orderKind", "MARKETPLACE")
+            .whereArrayContains("availableCourierIds", courierId)
+            .limit(1)
+            .addSnapshotListener { snapshot, _ ->
+                val doc = snapshot?.documents?.firstOrNull()
+                if (doc != null) {
+                    if (_state.value.activeDelivery != null) {
+                        _state.value = _state.value.copy(pendingMarketplaceOrder = null)
+                        return@addSnapshotListener
+                    }
+                    val pickup = doc.get("pickup") as? Map<*, *>
+                    val destination = doc.get("destination") as? Map<*, *>
+                    val pendingOrder = PendingMarketplaceOrder(
+                        id = doc.id,
+                        clientPhone = doc.getString("clientPhone") ?: "",
+                        comment = doc.getString("comment") ?: "",
+                        pickupAddress = pickup?.get("address") as? String ?: "",
+                        destinationAddress = destination?.get("address") as? String ?: "",
+                        createdAt = doc.getLong("createdAt") ?: 0L
+                    )
+                    prefs.edit().putString(Constants.PREF_PENDING_MARKETPLACE_DELIVERY_ID, doc.id).apply()
+                    _state.value = _state.value.copy(pendingMarketplaceOrder = pendingOrder)
+                } else {
+                    loadPendingMarketplaceOrderFromPrefsFallback(courierId)
+                }
+            }
+    }
+
+    private fun loadPendingMarketplaceOrderFromPrefsFallback(courierId: String) {
+        val pendingId = prefs.getString(Constants.PREF_PENDING_MARKETPLACE_DELIVERY_ID, null) ?: run {
+            _state.value = _state.value.copy(pendingMarketplaceOrder = null)
+            return
+        }
+
+        if (_state.value.activeDelivery != null) {
+            prefs.edit().remove(Constants.PREF_PENDING_MARKETPLACE_DELIVERY_ID).apply()
+            _state.value = _state.value.copy(pendingMarketplaceOrder = null)
+            return
+        }
+
+        FirebaseFirestore.getInstance().collection("deliveries").document(pendingId)
+            .get()
+            .addOnSuccessListener { doc ->
+                if (!doc.exists()) {
+                    prefs.edit().remove(Constants.PREF_PENDING_MARKETPLACE_DELIVERY_ID).apply()
+                    _state.value = _state.value.copy(pendingMarketplaceOrder = null)
+                    return@addOnSuccessListener
+                }
+
+                if (doc.getString("status") != "PENDING" || doc.getString("orderKind") != "MARKETPLACE") {
+                    prefs.edit().remove(Constants.PREF_PENDING_MARKETPLACE_DELIVERY_ID).apply()
+                    _state.value = _state.value.copy(pendingMarketplaceOrder = null)
+                    return@addOnSuccessListener
+                }
+
+                val pickup = doc.get("pickup") as? Map<*, *>
+                val destination = doc.get("destination") as? Map<*, *>
+                _state.value = _state.value.copy(
+                    pendingMarketplaceOrder = PendingMarketplaceOrder(
+                        id = doc.id,
+                        clientPhone = doc.getString("clientPhone") ?: "",
+                        comment = doc.getString("comment") ?: "",
+                        pickupAddress = pickup?.get("address") as? String ?: "",
+                        destinationAddress = destination?.get("address") as? String ?: "",
+                        createdAt = doc.getLong("createdAt") ?: 0L
+                    )
+                )
+            }
+            .addOnFailureListener {
+                _state.value = _state.value.copy(pendingMarketplaceOrder = null)
+            }
     }
 
     private fun loadTodayStats() {
@@ -106,22 +204,48 @@ class HomeViewModel @Inject constructor(
         }
     }
 
+    fun acceptPendingMarketplaceOrder() {
+        val pending = _state.value.pendingMarketplaceOrder ?: return
+        viewModelScope.launch {
+            _state.value = _state.value.copy(isAcceptingMarketplaceOrder = true, error = null)
+            when (val result = deliveryRepository.acceptMarketplaceDelivery(pending.id)) {
+                is Resource.Success -> {
+                    prefs.edit().remove(Constants.PREF_PENDING_MARKETPLACE_DELIVERY_ID).apply()
+                    _state.value = _state.value.copy(
+                        isAcceptingMarketplaceOrder = false,
+                        pendingMarketplaceOrder = null,
+                        activeDelivery = result.data
+                    )
+                }
+                is Resource.Error -> {
+                    prefs.edit().remove(Constants.PREF_PENDING_MARKETPLACE_DELIVERY_ID).apply()
+                    val message = result.message ?: "Заказ уже принял другой курьер"
+                    _state.value = _state.value.copy(
+                        isAcceptingMarketplaceOrder = false,
+                        error = if (message.contains("Accepted by:")) "Заказ уже принял другой курьер" else message,
+                        pendingMarketplaceOrder = null
+                    )
+                }
+                is Resource.Loading -> Unit
+            }
+        }
+    }
+
     fun showStartDialog() {
         _state.value = _state.value.copy(showStartDialog = true, clientPhone = "", error = null)
     }
 
     fun hideStartDialog() {
         _state.value = _state.value.copy(
-            showStartDialog = false, 
-            clientPhone = "", 
-            selectedDeliveryType = "default",  // Reset delivery type when cancelling
+            showStartDialog = false,
+            clientPhone = "",
+            selectedDeliveryType = "default",
             error = null
         )
     }
 
     fun showDeliveryTypeDialog() {
         _state.value = _state.value.copy(showDeliveryTypeDialog = true, selectedDeliveryType = "default", error = null)
-        // Reload tariffs when dialog is shown
         loadFixedTypes()
     }
 
@@ -154,7 +278,7 @@ class HomeViewModel @Inject constructor(
                             isLoadingTariff = false
                         )
                     }
-                    is Resource.Loading -> {}
+                    is Resource.Loading -> Unit
                 }
             } catch (e: Exception) {
                 _state.value = _state.value.copy(
@@ -166,7 +290,6 @@ class HomeViewModel @Inject constructor(
     }
 
     fun proceedToPhoneInput() {
-        // Keep selectedDeliveryType, just close the dialog and open phone input
         _state.value = _state.value.copy(showDeliveryTypeDialog = false, error = null)
         showStartDialog()
     }
@@ -179,42 +302,56 @@ class HomeViewModel @Inject constructor(
         }
 
         val deliveryType = _state.value.selectedDeliveryType
-        
-        android.util.Log.d("HomeViewModel", "=== START DELIVERY ===")
-        android.util.Log.d("HomeViewModel", "Phone: $phone")
-        android.util.Log.d("HomeViewModel", "Selected deliveryType: $deliveryType")
-        android.util.Log.d("HomeViewModel", "FixedTypes: ${_state.value.fixedTypes}")
-        android.util.Log.d("HomeViewModel", "======================")
 
         viewModelScope.launch {
             _state.value = _state.value.copy(isStartingDelivery = true, error = null)
 
             when (val result = deliveryRepository.createDelivery(phone, deliveryType)) {
                 is Resource.Success -> {
-                    android.util.Log.d("HomeViewModel", "Delivery created successfully: ${result.data}")
                     _state.value = _state.value.copy(
                         isStartingDelivery = false,
                         showStartDialog = false,
                         showDeliveryTypeDialog = false,
-                        selectedDeliveryType = "default",  // Reset after successful creation
+                        selectedDeliveryType = "default",
                         activeDelivery = result.data
                     )
                 }
                 is Resource.Error -> {
-                    android.util.Log.e("HomeViewModel", "Error creating delivery: ${result.message}")
                     _state.value = _state.value.copy(
                         isStartingDelivery = false,
                         error = result.message
                     )
                 }
-                is Resource.Loading -> {}
+                is Resource.Loading -> Unit
+            }
+        }
+    }
+
+    fun syncRemoteActiveDelivery() {
+        viewModelScope.launch {
+            when (val result = deliveryRepository.syncRemoteActiveDelivery()) {
+                is Resource.Success -> {
+                    _state.value = _state.value.copy(activeDelivery = result.data)
+                }
+                is Resource.Error -> {
+                    _state.value = _state.value.copy(error = result.message)
+                }
+                is Resource.Loading -> Unit
             }
         }
     }
 
     fun logout() {
         viewModelScope.launch {
+            pendingOrderListener?.remove()
+            pendingOrderListener = null
             authRepository.logout()
         }
+    }
+
+    override fun onCleared() {
+        pendingOrderListener?.remove()
+        pendingOrderListener = null
+        super.onCleared()
     }
 }

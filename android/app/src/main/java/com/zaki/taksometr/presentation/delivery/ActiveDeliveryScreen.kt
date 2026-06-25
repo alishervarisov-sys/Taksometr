@@ -151,9 +151,39 @@ fun ActiveDeliveryScreen(
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(12.dp))
 
-                    // Stats row
+                    if (state.delivery?.orderKind == "MARKETPLACE") {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = "Админ заказ",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        if (state.delivery?.pickupAddress?.isNotBlank() == true) {
+                            Text(text = "Откуда: ${state.delivery?.pickupAddress}")
+                        }
+                        if (state.delivery?.destinationAddress?.isNotBlank() == true) {
+                            Text(text = "Куда: ${state.delivery?.destinationAddress}")
+                        }
+                        if (state.delivery?.comment?.isNotBlank() == true) {
+                            Text(text = "Комментарий: ${state.delivery?.comment}")
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(onClick = { viewModel.updateMarketplaceStage(stage = "ARRIVED_PICKUP") }, modifier = Modifier.fillMaxWidth()) {
+                                Text("Прибыл к забору")
+                            }
+                            Button(onClick = { viewModel.updateMarketplaceStage(stage = "PICKED_UP") }, modifier = Modifier.fillMaxWidth()) {
+                                Text("Забрал")
+                            }
+                            Button(onClick = { viewModel.updateMarketplaceStage(stage = "ON_THE_WAY") }, modifier = Modifier.fillMaxWidth()) {
+                                Text("Еду")
+                            }
+                            Button(onClick = { viewModel.updateMarketplaceStage(stage = "ARRIVED_DESTINATION") }, modifier = Modifier.fillMaxWidth()) {
+                                Text("Прибыл клиенту")
+                            }
+                        }
+                    }
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceEvenly
