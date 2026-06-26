@@ -2,7 +2,9 @@ package com.zaki.taksometr.service
 
 import android.annotation.SuppressLint
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
 import android.content.SharedPreferences
 import android.os.Looper
 import androidx.core.app.NotificationCompat
@@ -121,11 +123,21 @@ class ZaKiFirebaseMessagingService : FirebaseMessagingService() {
     }
 
     private fun showNotification(title: String, body: String) {
+        val intent = Intent(this, com.zaki.taksometr.presentation.MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            this, 0, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
         val notification = NotificationCompat.Builder(this, ZaKiApp.NOTIFICATION_CHANNEL_ID)
             .setContentTitle(title)
             .setContentText(body)
             .setSmallIcon(R.drawable.ic_notification)
             .setAutoCancel(true)
+            .setContentIntent(pendingIntent)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
             .build()
 
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager

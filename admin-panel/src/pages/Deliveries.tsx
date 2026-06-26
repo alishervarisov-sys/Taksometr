@@ -61,6 +61,13 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
   const [createOpen, setCreateOpen] = useState(false);
   const [isCreatingOrder, setIsCreatingOrder] = useState(false);
   const [mapPickerMode, setMapPickerMode] = useState<'pickup' | 'destination' | null>(null);
+  const [mapCenter, setMapCenter] = useState<{ lat: number; lng: number }>(() => {
+    try {
+      const saved = localStorage.getItem('zaki_admin_map_center');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return { lat: 38.5598, lng: 68.7740 }; // Dushanbe fallback
+  });
   const [createForm, setCreateForm] = useState({
     clientPhone: '',
     comment: '',
@@ -243,6 +250,9 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
 
   const handleMapPick = (lat: number, lng: number) => {
     if (!mapPickerMode) return;
+    const center = { lat, lng };
+    setMapCenter(center);
+    localStorage.setItem('zaki_admin_map_center', JSON.stringify(center));
     if (mapPickerMode === 'pickup') setCreateForm(prev => ({ ...prev, pickupLat: String(lat), pickupLng: String(lng) }));
     if (mapPickerMode === 'destination') setCreateForm(prev => ({ ...prev, destinationLat: String(lat), destinationLng: String(lng) }));
   };
@@ -428,7 +438,7 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
             <Grid item xs={12}>
               {isLoaded && (
                 <Box sx={{ height: 300, borderRadius: 2, overflow: 'hidden', border: '1px solid #ddd' }}>
-                  <GoogleMap mapContainerStyle={{ width: '100%', height: '100%' }} center={{ lat: 38.5598, lng: 68.7740 }} zoom={13} options={{ streetViewControl: false, mapTypeControl: false }} onClick={(e) => { const lat = e.latLng?.lat(); const lng = e.latLng?.lng(); if (lat != null && lng != null) handleMapPick(lat, lng); }}>
+                  <GoogleMap mapContainerStyle={{ width: '100%', height: '100%' }} center={mapCenter} zoom={13} options={{ streetViewControl: false, mapTypeControl: false }} onClick={(e) => { const lat = e.latLng?.lat(); const lng = e.latLng?.lng(); if (lat != null && lng != null) handleMapPick(lat, lng); }}>
                     {createForm.pickupLat && createForm.pickupLng && <MarkerF position={{ lat: Number(createForm.pickupLat), lng: Number(createForm.pickupLng) }} label="A" />}
                     {createForm.destinationLat && createForm.destinationLng && <MarkerF position={{ lat: Number(createForm.destinationLat), lng: Number(createForm.destinationLng) }} label="B" />}
                   </GoogleMap>
