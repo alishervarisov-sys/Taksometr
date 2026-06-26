@@ -34,7 +34,7 @@ data class HomeState(
     val user: User? = null,
     val todayStats: TodayStats = TodayStats(),
     val activeDelivery: Delivery? = null,
-    val pendingMarketplaceOrder: PendingMarketplaceOrder? = null,
+    val pendingMarketplaceOrders: List<PendingMarketplaceOrder> = emptyList(),
     val isAcceptingMarketplaceOrder: Boolean = false,
     val clientPhone: String = "",
     val isStartingDelivery: Boolean = false,
@@ -122,15 +122,14 @@ class HomeViewModel @Inject constructor(
                     android.util.Log.e("HomeViewModel", "Pending orders listener error", error)
                     return@addSnapshotListener
                 }
-                val doc = snapshot?.documents?.firstOrNull()
-                if (doc != null) {
-                    if (_state.value.activeDelivery != null) {
-                        _state.value = _state.value.copy(pendingMarketplaceOrder = null)
-                        return@addSnapshotListener
-                    }
+                if (_state.value.activeDelivery != null) {
+                    _state.value = _state.value.copy(pendingMarketplaceOrders = emptyList())
+                    return@addSnapshotListener
+                }
+                val orders = snapshot?.documents?.mapNotNull { doc ->
                     val pickup = doc.get("pickup") as? Map<*, *>
                     val destination = doc.get("destination") as? Map<*, *>
-                    val pendingOrder = PendingMarketplaceOrder(
+                    PendingMarketplaceOrder(
                         id = doc.id,
                         clientPhone = doc.getString("clientPhone") ?: "",
                         comment = doc.getString("comment") ?: "",
@@ -138,24 +137,25 @@ class HomeViewModel @Inject constructor(
                         destinationAddress = destination?.get("address") as? String ?: "",
                         createdAt = doc.getLong("createdAt") ?: 0L
                     )
-                    prefs.edit().putString(Constants.PREF_PENDING_MARKETPLACE_DELIVERY_ID, doc.id).apply()
-                    _state.value = _state.value.copy(pendingMarketplaceOrder = pendingOrder)
+                } ?: emptyList()
+                if (orders.isNotEmpty()) {
+                    prefs.edit().putString(Constants.PREF_PENDING_MARKETPLACE_DELIVERY_ID, orders.first().id).apply()
                 } else {
-                    _state.value = _state.value.copy(pendingMarketplaceOrder = null)
                     prefs.edit().remove(Constants.PREF_PENDING_MARKETPLACE_DELIVERY_ID).apply()
                 }
+                _state.value = _state.value.copy(pendingMarketplaceOrders = orders)
             }
     }
 
     private fun loadPendingMarketplaceOrderFromPrefsFallback(courierId: String) {
         val pendingId = prefs.getString(Constants.PREF_PENDING_MARKETPLACE_DELIVERY_ID, null) ?: run {
-            _state.value = _state.value.copy(pendingMarketplaceOrder = null)
+            _state.value = _state.value.copy(pendingMarketplaceOrders = emptyList())
             return
         }
 
         if (_state.value.activeDelivery != null) {
             prefs.edit().remove(Constants.PREF_PENDING_MARKETPLACE_DELIVERY_ID).apply()
-            _state.value = _state.value.copy(pendingMarketplaceOrder = null)
+            _state.value = _state.value.copy(pendingMarketplaceOrders = emptyList())
             return
         }
 
@@ -164,13 +164,13 @@ class HomeViewModel @Inject constructor(
             .addOnSuccessListener { doc ->
                 if (!doc.exists()) {
                     prefs.edit().remove(Constants.PREF_PENDING_MARKETPLACE_DELIVERY_ID).apply()
-                    _state.value = _state.value.copy(pendingMarketplaceOrder = null)
+                    _state.value = _state.value.copy(pendingMarketplaceOrders = emptyList())
                     return@addOnSuccessListener
                 }
 
                 if (doc.getString("status") != "PENDING" || doc.getString("orderKind") != "MARKETPLACE") {
                     prefs.edit().remove(Constants.PREF_PENDING_MARKETPLACE_DELIVERY_ID).apply()
-                    _state.value = _state.value.copy(pendingMarketplaceOrder = null)
+                    _state.value = _state.value.copy(pendingMarketplaceOrders = emptyList())
                     return@addOnSuccessListener
                 }
 
@@ -179,25 +179,25 @@ class HomeViewModel @Inject constructor(
                     ?: emptyList()
                 if (availableCourierIds.isNotEmpty() && !availableCourierIds.contains(courierId)) {
                     prefs.edit().remove(Constants.PREF_PENDING_MARKETPLACE_DELIVERY_ID).apply()
-                    _state.value = _state.value.copy(pendingMarketplaceOrder = null)
+                    _state.value = _state.value.copy(pendingMarketplaceOrders = emptyList())
                     return@addOnSuccessListener
                 }
 
                 val pickup = doc.get("pickup") as? Map<*, *>
                 val destination = doc.get("destination") as? Map<*, *>
                 _state.value = _state.value.copy(
-                    pendingMarketplaceOrder = PendingMarketplaceOrder(
+                    pendingMarketplaceOrders = listOf(PendingMarketplaceOrder(
                         id = doc.id,
                         clientPhone = doc.getString("clientPhone") ?: "",
                         comment = doc.getString("comment") ?: "",
                         pickupAddress = pickup?.get("address") as? String ?: "",
                         destinationAddress = destination?.get("address") as? String ?: "",
                         createdAt = doc.getLong("createdAt") ?: 0L
-                    )
+                    ))
                 )
             }
             .addOnFailureListener {
-                _state.value = _state.value.copy(pendingMarketplaceOrder = null)
+                _state.value = _state.value.copy(pendingMarketplaceOrders = emptyList())
             }
     }
 
@@ -227,8 +227,8 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    fun acceptPendingMarketplaceOrder() {
-        val pending = _state.value.pendingMarketplaceOrder ?: return
+    fun acceptPendingMarketplaceOrder(orderId: String) {
+        val pending = _state.value.pendingMarketplaceOrders.firstOrNull { it.id == orderId } ?: return
         viewModelScope.launch {
             _state.value = _state.value.copy(isAcceptingMarketplaceOrder = true, error = null)
             when (val result = deliveryRepository.acceptMarketplaceDelivery(pending.id)) {
@@ -236,7 +236,7 @@ class HomeViewModel @Inject constructor(
                     prefs.edit().remove(Constants.PREF_PENDING_MARKETPLACE_DELIVERY_ID).apply()
                     _state.value = _state.value.copy(
                         isAcceptingMarketplaceOrder = false,
-                        pendingMarketplaceOrder = null,
+                        pendingMarketplaceOrders = emptyList(),
                         activeDelivery = result.data
                     )
                 }
@@ -246,7 +246,7 @@ class HomeViewModel @Inject constructor(
                     _state.value = _state.value.copy(
                         isAcceptingMarketplaceOrder = false,
                         error = if (message.contains("Accepted by:")) "Заказ уже принял другой курьер" else message,
-                        pendingMarketplaceOrder = null
+                        pendingMarketplaceOrders = emptyList()
                     )
                 }
                 is Resource.Loading -> Unit

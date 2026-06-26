@@ -20,7 +20,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
@@ -231,150 +235,181 @@ fun HomeScreen(
                 .padding(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Courier info card
+            // Combined courier info + stats card
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp),
                 elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
             ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(20.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    // Avatar
-                    Box(
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    // Courier info row
+                    Row(
                         modifier = Modifier
-                            .size(56.dp)
-                            .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.primary),
-                        contentAlignment = Alignment.Center
+                            .fillMaxWidth()
+                            .padding(horizontal = 20.dp, vertical = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            text = state.user?.name?.firstOrNull()?.uppercase() ?: str(Strings.courier).first().uppercase().toString(),
-                            style = MaterialTheme.typography.headlineMedium,
-                            color = MaterialTheme.colorScheme.onPrimary
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.width(16.dp))
-
-                    Column(modifier = Modifier.weight(1f)) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically
+                        // Avatar
+                        Box(
+                            modifier = Modifier
+                                .size(56.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.primary),
+                            contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                text = state.user?.name ?: str(Strings.courier),
-                                style = MaterialTheme.typography.titleLarge,
-                                fontWeight = FontWeight.Bold
+                                text = state.user?.name?.firstOrNull()?.uppercase() ?: str(Strings.courier).first().uppercase().toString(),
+                                style = MaterialTheme.typography.headlineMedium,
+                                color = MaterialTheme.colorScheme.onPrimary
                             )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Surface(
-                                shape = RoundedCornerShape(8.dp),
-                                color = if ((state.user?.balance ?: 0.0) >= 5.0)
-                                    AccentGreen.copy(alpha = 0.15f)
-                                else
-                                    AccentRed.copy(alpha = 0.15f)
-                            ) {
+                        }
+
+                        Spacer(modifier = Modifier.width(16.dp))
+
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
-                                    text = "${(state.user?.balance ?: 0.0).toLong()} с.",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if ((state.user?.balance ?: 0.0) >= 5.0) AccentGreen else AccentRed,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                    text = state.user?.name ?: str(Strings.courier),
+                                    style = MaterialTheme.typography.titleLarge,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = if ((state.user?.balance ?: 0.0) >= 5.0)
+                                        AccentGreen.copy(alpha = 0.15f)
+                                    else
+                                        AccentRed.copy(alpha = 0.15f)
+                                ) {
+                                    Text(
+                                        text = "${(state.user?.balance ?: 0.0).toLong()} с.",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if ((state.user?.balance ?: 0.0) >= 5.0) AccentGreen else AccentRed,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(8.dp)
+                                        .clip(CircleShape)
+                                        .background(
+                                            if (state.user?.isOnline == true) StatusOnline
+                                            else StatusOffline
+                                        )
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = if (state.user?.isOnline == true) str(Strings.online) else str(Strings.offline),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
                                 )
                             }
                         }
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(
-                                modifier = Modifier
-                                    .size(8.dp)
-                                    .clip(CircleShape)
-                                    .background(
-                                        if (state.user?.isOnline == true) StatusOnline
-                                        else StatusOffline
-                                    )
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = if (state.user?.isOnline == true) str(Strings.online) else str(Strings.offline),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
-                            )
-                        }
                     }
-                }
-            }
 
+                    // Thin divider
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(1.dp)
+                            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
+                    )
 
-            if (state.activeDelivery == null) {
-                state.pendingMarketplaceOrder?.let { pending ->
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
+                    // Stats row embedded in card
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp, vertical = 12.dp),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(16.dp)
+                            modifier = Modifier.weight(1f),
+                            horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            Text(
-                                text = "Свободный заказ",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                            if (pending.pickupAddress.isNotBlank()) Text("Откуда: ${pending.pickupAddress}")
-                            if (pending.destinationAddress.isNotBlank()) Text("Куда: ${pending.destinationAddress}")
-                            if (pending.comment.isNotBlank()) Text("Комментарий: ${pending.comment}")
-                            if (pending.clientPhone.isNotBlank()) Text("Клиент: ${pending.clientPhone}")
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Button(
-                                onClick = { viewModel.acceptPendingMarketplaceOrder() },
-                                enabled = !state.isAcceptingMarketplaceOrder,
-                                modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(12.dp)
-                            ) {
-                                if (state.isAcceptingMarketplaceOrder) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(20.dp),
-                                        strokeWidth = 2.dp,
-                                        color = MaterialTheme.colorScheme.onPrimary
-                                    )
-                                } else {
-                                    Text("Принять заказ")
-                                }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    Icons.Default.AttachMoney,
+                                    contentDescription = null,
+                                    tint = AccentGreen,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = LocationUtils.formatCost(state.todayStats.totalEarnings),
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
                             }
+                            Text(
+                                text = str(Strings.earnings),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                            )
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .width(1.dp)
+                                .height(36.dp)
+                                .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f))
+                        )
+
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    Icons.Default.DeliveryDining,
+                                    contentDescription = null,
+                                    tint = AccentBlue,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "${state.todayStats.deliveryCount}",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            Text(
+                                text = str(Strings.deliveries),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                            )
                         }
                     }
-                    Spacer(modifier = Modifier.height(16.dp))
                 }
             }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                StatCard(
-                    modifier = Modifier.weight(1f),
-                    icon = Icons.Default.AttachMoney,
-                    title = str(Strings.earnings),
-                    value = LocationUtils.formatCost(state.todayStats.totalEarnings),
-                    color = AccentGreen
-                )
-                StatCard(
-                    modifier = Modifier.weight(1f),
-                    icon = Icons.Default.DeliveryDining,
-                    title = str(Strings.deliveries),
-                    value = "${state.todayStats.deliveryCount}",
-                    color = AccentBlue
-                )
+
+            // Scrollable orders area — takes all remaining space
+            if (state.activeDelivery == null && state.pendingMarketplaceOrders.isNotEmpty()) {
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    state.pendingMarketplaceOrders.forEach { pending ->
+                        PendingOrderCard(
+                            pending = pending,
+                            isAccepting = state.isAcceptingMarketplaceOrder,
+                            onAccept = { viewModel.acceptPendingMarketplaceOrder(pending.id) }
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                }
+            } else {
+                Spacer(modifier = Modifier.weight(1f))
             }
 
-            Spacer(modifier = Modifier.weight(1f))
-
-            // Delivery chain feature removed
+            Spacer(modifier = Modifier.height(12.dp))
 
             // Start delivery button
             Button(
@@ -574,6 +609,136 @@ fun HomeScreen(
                 activity?.recreate()
             }
         )
+    }
+}
+
+@Composable
+fun PendingOrderCard(
+    pending: PendingMarketplaceOrder,
+    isAccepting: Boolean,
+    onAccept: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF8E1)),
+        border = BorderStroke(1.5.dp, Color(0xFFFFB300)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 6.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(20.dp)
+        ) {
+            // Header
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Default.LocalShipping,
+                        contentDescription = null,
+                        tint = Color(0xFFE65100),
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Свободный заказ",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFFE65100)
+                    )
+                }
+                Surface(shape = RoundedCornerShape(20.dp), color = Color(0xFFFF6F00)) {
+                    Text(
+                        text = "Новый!",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color(0xFFFFFFFF),
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                    )
+                }
+            }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 12.dp)
+                    .height(1.dp)
+                    .background(Color(0xFFFFB300).copy(alpha = 0.5f))
+            )
+
+            if (pending.pickupAddress.isNotBlank()) {
+                Row(verticalAlignment = Alignment.Top, modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Default.LocationOn, contentDescription = null, tint = AccentGreen, modifier = Modifier.size(20.dp))
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column {
+                        Text("Откуда", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                        Text(pending.pickupAddress, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                    }
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+            }
+            if (pending.destinationAddress.isNotBlank()) {
+                Row(verticalAlignment = Alignment.Top, modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Default.LocationOn, contentDescription = null, tint = AccentRed, modifier = Modifier.size(20.dp))
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column {
+                        Text("Куда", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                        Text(pending.destinationAddress, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                    }
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+            }
+            if (pending.comment.isNotBlank()) {
+                Row(verticalAlignment = Alignment.Top, modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Default.Comment, contentDescription = null, tint = AccentBlue, modifier = Modifier.size(20.dp))
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column {
+                        Text("Комментарий", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                        Text(pending.comment, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+            }
+            if (pending.clientPhone.isNotBlank()) {
+                Row(verticalAlignment = Alignment.Top, modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Default.Phone, contentDescription = null, tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f), modifier = Modifier.size(20.dp))
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column {
+                        Text("Клиент", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                        Text(pending.clientPhone, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                    }
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 12.dp)
+                    .height(1.dp)
+                    .background(Color(0xFFFFB300).copy(alpha = 0.5f))
+            )
+
+            Button(
+                onClick = onAccept,
+                enabled = !isAccepting,
+                modifier = Modifier.fillMaxWidth().height(52.dp),
+                shape = RoundedCornerShape(14.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+            ) {
+                if (isAccepting) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
+                } else {
+                    Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(20.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Принять заказ", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
     }
 }
 
