@@ -35,7 +35,9 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
+import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberMultiplePermissionsState
+import com.google.accompanist.permissions.rememberPermissionState
 import com.zaki.taksometr.presentation.theme.*
 import com.zaki.taksometr.service.LocationTrackingService
 import com.zaki.taksometr.util.LocationUtils
@@ -69,6 +71,18 @@ fun HomeScreen(
             Manifest.permission.ACCESS_COARSE_LOCATION
         )
     )
+
+    // Request POST_NOTIFICATIONS on Android 13+ (API 33+) so FCM push
+    // notifications can actually appear in the status bar.
+    val notificationPermission = if (android.os.Build.VERSION.SDK_INT >= 33) {
+        rememberPermissionState(Manifest.permission.POST_NOTIFICATIONS)
+    } else null
+
+    LaunchedEffect(Unit) {
+        notificationPermission?.let {
+            if (!it.status.isGranted) it.launchPermissionRequest()
+        }
+    }
 
     // Check if GPS is enabled
     var isGpsEnabled by remember { mutableStateOf(isLocationEnabled(context)) }
