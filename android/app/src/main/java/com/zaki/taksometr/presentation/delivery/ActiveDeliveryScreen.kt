@@ -1,5 +1,6 @@
 ﻿package com.zaki.taksometr.presentation.delivery
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -165,22 +166,100 @@ fun ActiveDeliveryScreen(
                         if (state.delivery?.destinationAddress?.isNotBlank() == true) {
                             Text(text = "Куда: ${state.delivery?.destinationAddress}")
                         }
+
+                        // Highlighted comment
                         if (state.delivery?.comment?.isNotBlank() == true) {
-                            Text(text = "Комментарий: ${state.delivery?.comment}")
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = AccentOrange.copy(alpha = 0.12f)
+                                ),
+                                border = BorderStroke(1.5.dp, AccentOrange)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        Icons.Default.Warning,
+                                        contentDescription = null,
+                                        tint = AccentOrange,
+                                        modifier = Modifier.size(22.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Text(
+                                        text = state.delivery?.comment ?: "",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = AccentOrange
+                                    )
+                                }
+                            }
                         }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        // Current stage chip
+                        val currentStage = state.delivery?.adminOrderStage
+                        val currentStageLabel = when (currentStage) {
+                            "ACCEPTED"            -> "Принят"
+                            "ARRIVED_PICKUP"      -> "У точки забора"
+                            "PICKED_UP"           -> "Товар забран"
+                            "ON_THE_WAY"          -> "В пути к клиенту"
+                            "ARRIVED_DESTINATION" -> "У клиента"
+                            "COMPLETED"           -> "Завершён"
+                            else                  -> "Принят"
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                        ) {
+                            Text(
+                                text = "Этап: $currentStageLabel",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                            )
+                        }
+
                         Spacer(modifier = Modifier.height(8.dp))
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = { viewModel.updateMarketplaceStage(stage = "ARRIVED_PICKUP") }, modifier = Modifier.fillMaxWidth()) {
-                                Text("Прибыл к забору")
-                            }
-                            Button(onClick = { viewModel.updateMarketplaceStage(stage = "PICKED_UP") }, modifier = Modifier.fillMaxWidth()) {
-                                Text("Забрал")
-                            }
-                            Button(onClick = { viewModel.updateMarketplaceStage(stage = "ON_THE_WAY") }, modifier = Modifier.fillMaxWidth()) {
-                                Text("Еду")
-                            }
-                            Button(onClick = { viewModel.updateMarketplaceStage(stage = "ARRIVED_DESTINATION") }, modifier = Modifier.fillMaxWidth()) {
-                                Text("Прибыл клиенту")
+
+                        // Single next-stage button
+                        val nextStageInfo: Pair<String, String>? = when (currentStage) {
+                            null, "ACCEPTED"      -> Pair("ARRIVED_PICKUP",      "Прибыл к забору")
+                            "ARRIVED_PICKUP"      -> Pair("PICKED_UP",           "Забрал товар")
+                            "PICKED_UP"           -> Pair("ON_THE_WAY",          "Еду к клиенту")
+                            "ON_THE_WAY"          -> Pair("ARRIVED_DESTINATION", "Прибыл к клиенту")
+                            else                  -> null
+                        }
+                        if (nextStageInfo != null) {
+                            Button(
+                                onClick = { viewModel.updateMarketplaceStage(stage = nextStageInfo.first) },
+                                enabled = !state.isUpdatingStage,
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                if (state.isUpdatingStage) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(18.dp),
+                                        strokeWidth = 2.dp,
+                                        color = MaterialTheme.colorScheme.onPrimary
+                                    )
+                                } else {
+                                    Icon(
+                                        Icons.Default.ArrowForward,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = nextStageInfo.second,
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                }
                             }
                         }
                     }

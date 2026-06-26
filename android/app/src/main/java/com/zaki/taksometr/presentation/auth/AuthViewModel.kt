@@ -2,6 +2,7 @@ package com.zaki.taksometr.presentation.auth
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.google.firebase.messaging.FirebaseMessaging
 import com.zaki.taksometr.domain.repository.AuthRepository
 import com.zaki.taksometr.domain.repository.LocationRepository
 import com.zaki.taksometr.util.Resource
@@ -60,6 +61,12 @@ class AuthViewModel @Inject constructor(
 
             when (val result = authRepository.login(currentState.login, currentState.password)) {
                 is Resource.Success -> {
+                    // Always refresh FCM token on login so push notifications work
+                    FirebaseMessaging.getInstance().token.addOnSuccessListener { token ->
+                        if (token.isNotEmpty()) {
+                            viewModelScope.launch { authRepository.updateFcmToken(token) }
+                        }
+                    }
                     updateCourierLocationAfterLogin()
                     _state.value = _state.value.copy(isLoading = false, isSuccess = true)
                 }

@@ -52,14 +52,13 @@ class ZaKiFirebaseMessagingService : FirebaseMessagingService() {
                 message.data["deliveryId"]?.let { deliveryId ->
                     prefs.edit().putString(Constants.PREF_PENDING_MARKETPLACE_DELIVERY_ID, deliveryId).apply()
                 }
-                showNotification(
-                    message.notification?.title ?: "Новый заказ",
-                    message.notification?.body ?: "Свободный заказ ожидает принятия"
-                )
+                val title = message.data["title"] ?: message.notification?.title ?: "Новый заказ"
+                val body  = message.data["body"]  ?: message.notification?.body  ?: "Свободный заказ ожидает принятия"
+                showNotification(title, body)
             }
             else -> {
-                val title = message.notification?.title ?: message.data["title"] ?: "ZaKi Taksometr"
-                val body = message.notification?.body ?: message.data["body"] ?: ""
+                val title = message.data["title"] ?: message.notification?.title ?: "ZaKi Taksometr"
+                val body  = message.data["body"]  ?: message.notification?.body  ?: ""
                 if (body.isNotEmpty()) {
                     showNotification(title, body)
                 }

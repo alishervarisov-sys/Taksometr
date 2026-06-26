@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
+import com.google.firebase.messaging.FirebaseMessaging
 import com.zaki.taksometr.domain.model.Delivery
 import com.zaki.taksometr.domain.model.User
 import com.zaki.taksometr.domain.repository.AuthRepository
@@ -69,6 +70,15 @@ class HomeViewModel @Inject constructor(
         observeActiveDelivery()
         loadFixedTypes()
         clearStaleActiveDeliveryOnStart()
+        refreshFcmToken()
+    }
+
+    private fun refreshFcmToken() {
+        FirebaseMessaging.getInstance().token.addOnSuccessListener { token ->
+            if (token.isNotEmpty()) {
+                viewModelScope.launch { authRepository.updateFcmToken(token) }
+            }
+        }
     }
 
     private fun clearStaleActiveDeliveryOnStart() {
@@ -91,7 +101,7 @@ class HomeViewModel @Inject constructor(
                     authRepository.logout()
                 } else {
                     _state.value = _state.value.copy(user = user, isBlocked = false)
-                    if (user != null) {
+                    if (user != null && pendingOrderListener == null) {
                         observePendingMarketplaceOrders(user.id)
                     }
                 }
@@ -107,8 +117,11 @@ class HomeViewModel @Inject constructor(
             .whereEqualTo("status", "PENDING")
             .whereEqualTo("orderKind", "MARKETPLACE")
             .whereArrayContains("availableCourierIds", courierId)
-            .limit(1)
-            .addSnapshotListener { snapshot, _ ->
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    android.util.Log.e("HomeViewModel", "Pending orders listener error", error)
+                    return@addSnapshotListener
+                }
                 val doc = snapshot?.documents?.firstOrNull()
                 if (doc != null) {
                     if (_state.value.activeDelivery != null) {
@@ -128,7 +141,8 @@ class HomeViewModel @Inject constructor(
                     prefs.edit().putString(Constants.PREF_PENDING_MARKETPLACE_DELIVERY_ID, doc.id).apply()
                     _state.value = _state.value.copy(pendingMarketplaceOrder = pendingOrder)
                 } else {
-                    loadPendingMarketplaceOrderFromPrefsFallback(courierId)
+                    _state.value = _state.value.copy(pendingMarketplaceOrder = null)
+                    prefs.edit().remove(Constants.PREF_PENDING_MARKETPLACE_DELIVERY_ID).apply()
                 }
             }
     }
@@ -155,6 +169,15 @@ class HomeViewModel @Inject constructor(
                 }
 
                 if (doc.getString("status") != "PENDING" || doc.getString("orderKind") != "MARKETPLACE") {
+                    prefs.edit().remove(Constants.PREF_PENDING_MARKETPLACE_DELIVERY_ID).apply()
+                    _state.value = _state.value.copy(pendingMarketplaceOrder = null)
+                    return@addOnSuccessListener
+                }
+
+                val availableCourierIds = (doc.get("availableCourierIds") as? List<*>)
+                    ?.mapNotNull { it as? String }
+                    ?: emptyList()
+                if (availableCourierIds.isNotEmpty() && !availableCourierIds.contains(courierId)) {
                     prefs.edit().remove(Constants.PREF_PENDING_MARKETPLACE_DELIVERY_ID).apply()
                     _state.value = _state.value.copy(pendingMarketplaceOrder = null)
                     return@addOnSuccessListener

@@ -31,6 +31,7 @@ data class ActiveDeliveryState(
     val isWaiting: Boolean = false,
     val totalWaitingMs: Long = 0L,
     val isCompleting: Boolean = false,
+    val isUpdatingStage: Boolean = false,
     val error: String? = null
 )
 
@@ -143,6 +144,7 @@ class ActiveDeliveryViewModel @Inject constructor(
         if (currentDeliveryId.isEmpty()) return
 
         viewModelScope.launch {
+            if (stage != null) _state.value = _state.value.copy(isUpdatingStage = true, error = null)
             when (val result = deliveryRepository.updateMarketplaceDeliveryStage(currentDeliveryId, stage, waitingAction)) {
                 is Resource.Error -> {
                     _state.value = _state.value.copy(error = result.message)
@@ -150,6 +152,7 @@ class ActiveDeliveryViewModel @Inject constructor(
                 else -> Unit
             }
             deliveryRepository.syncDeliveryStatusFromFirestore(currentDeliveryId)
+            if (stage != null) _state.value = _state.value.copy(isUpdatingStage = false)
         }
     }
 

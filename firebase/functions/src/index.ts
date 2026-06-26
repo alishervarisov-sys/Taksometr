@@ -228,16 +228,22 @@ async function sendPushToCourier(courierData: any, payload: {
   data: {[key: string]: string};
 }): Promise<void> {
   const fcmToken = courierData?.fcmToken;
-  if (!fcmToken) return;
+  if (!fcmToken) {
+    console.warn("sendPushToCourier: fcmToken is empty, skipping");
+    return;
+  }
 
   try {
+    // Send as data-only message so onMessageReceived() is always called
+    // even when the app is in the background. The Android service shows
+    // the notification itself via showNotification().
     await admin.messaging().send({
       token: fcmToken,
-      notification: {
+      data: {
+        ...payload.data,
         title: payload.title,
         body: payload.body,
       },
-      data: payload.data,
       android: {
         priority: "high",
       },
