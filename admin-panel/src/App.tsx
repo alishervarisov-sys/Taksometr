@@ -12,6 +12,7 @@ import Commission from './pages/Commission';
 import Credentials from './pages/Credentials';
 import Admins from './pages/Admins';
 import TelegramReport from './pages/TelegramReport';
+import Taxi from './pages/Taxi';
 import Login from './pages/Login';
 
 const theme = createTheme({
@@ -111,6 +112,7 @@ function App() {
                 <Route path="admins" element={<Admins />} />
               )}
               <Route path="telegram-report" element={<TelegramReport adminId={adminId!} />} />
+              <Route path="taxi" element={<Taxi adminId={adminId!} />} />
               <Route path="*" element={<Navigate to="/" />} />
             </Route>
           )}

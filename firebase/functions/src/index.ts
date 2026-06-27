@@ -2352,3 +2352,7 @@ export const scheduledTelegramReport = functions.pubsub
     console.log("Scheduled Telegram report sent successfully.");
     return null;
   });
+
+// ============ TAXI MODULE ============
+// Keep taxi logic fully isolated in taxi.ts.
+export { createTaxiOrder, taxiTelegramPoller } from "./taxi";

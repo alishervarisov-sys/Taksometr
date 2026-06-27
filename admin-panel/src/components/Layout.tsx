@@ -17,7 +17,8 @@ import {
   VpnKey as KeyIcon,
   AdminPanelSettings as AdminIcon,
   AccountTree as TreeIcon,
-  Telegram as TelegramIcon
+  Telegram as TelegramIcon,
+  LocalTaxi as TaxiIcon,
 } from '@mui/icons-material';
 
 const drawerWidth = 260;
@@ -43,6 +44,7 @@ const Layout: React.FC<LayoutProps> = ({ onLogout, isSuperAdmin }) => {
     { text: 'Карта', icon: <MapIcon />, path: '/map' },
     { text: 'Статистика', icon: <StatsIcon />, path: '/statistics' },
     { text: 'Telegram Отчёт', icon: <TelegramIcon />, path: '/telegram-report' },
+    { text: 'TAXI', icon: <TaxiIcon sx={{ color: '#FFC107' }} />, path: '/taxi', taxiItem: true },
   ];
 
   const drawer = (
@@ -65,11 +67,15 @@ const Layout: React.FC<LayoutProps> = ({ onLogout, isSuperAdmin }) => {
               sx={{
                 mx: 1,
                 borderRadius: 2,
+                ...(item.taxiItem && {
+                  '& .MuiListItemText-primary': { fontWeight: 700, color: '#FFC107' },
+                }),
                 '&.Mui-selected': {
-                  backgroundColor: 'primary.main',
-                  color: 'white',
-                  '& .MuiListItemIcon-root': { color: 'white' },
-                  '&:hover': { backgroundColor: 'primary.dark' },
+                  backgroundColor: item.taxiItem ? '#FFC107' : 'primary.main',
+                  color: item.taxiItem ? '#000' : 'white',
+                  '& .MuiListItemIcon-root': { color: item.taxiItem ? '#000' : 'white' },
+                  '& .MuiListItemText-primary': { color: item.taxiItem ? '#000' : 'white', fontWeight: 700 },
+                  '&:hover': { backgroundColor: item.taxiItem ? '#FFB300' : 'primary.dark' },
                 },
               }}
             >
