@@ -45,6 +45,7 @@ const Layout: React.FC<LayoutProps> = ({ onLogout, isSuperAdmin }) => {
     { text: 'Статистика', icon: <StatsIcon />, path: '/statistics' },
     { text: 'Telegram Отчёт', icon: <TelegramIcon />, path: '/telegram-report' },
     { text: 'TAXI', icon: <TaxiIcon sx={{ color: '#FFC107' }} />, path: '/taxi', taxiItem: true },
+    { text: 'Таксисты', icon: <PeopleIcon sx={{ color: '#FFC107' }} />, path: '/taxi-drivers', taxiItem: true },
   ];
 
   const drawer = (

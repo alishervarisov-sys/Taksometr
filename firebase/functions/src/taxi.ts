@@ -20,6 +20,7 @@
 
 import * as functions from "firebase-functions";
 import * as admin from "firebase-admin";
+import { TaxiDriverDoc } from "./taxiDrivers";
 
 // ─── Lazy DB accessor (admin.initializeApp must be called in index.ts first) ─
 
@@ -180,8 +181,8 @@ async function getTelegramUpdates(offset: number): Promise<any[]> {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           offset,
-          timeout: 0,                           // instant return
-          allowed_updates: ["callback_query"],  // only what we need
+          timeout: 0,
+          allowed_updates: ["callback_query", "message"], // messages for registration
         }),
       },
     );
@@ -231,6 +232,11 @@ interface TaxiOrderDoc {
   status: "waiting" | "accepted" | "completed" | "cancelled";
   driverTelegramId: string | null;
   driverName: string | null;
+  driverPhone: string | null;
+  driverCarBrand: string | null;
+  driverCarModel: string | null;
+  driverCarColor: string | null;
+  driverCarNumber: string | null;
   telegramMessageId: number | null;
   createdAt: number;
   acceptedAt: number | null;
@@ -245,6 +251,255 @@ async function verifyTaxiAdmin(adminId: string): Promise<void> {
     throw new functions.https.HttpsError("permission-denied", "Admins only");
   }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  BOT REGISTRATION FLOW
+//  State is stored in: taxiRegistrationSessions/{telegramId}
+//  Completed drivers are saved to: taxiDrivers/{telegramId}
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** Send a simple message to any chat (used by registration bot). */
+async function sendTaxiMessage(
+  chatId: number | string,
+  text: string,
+  replyMarkup?: any,
+): Promise<void> {
+  try {
+    await fetch(`https://api.telegram.org/bot${TAXI_BOT_TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text,
+        parse_mode: "HTML",
+        ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+      }),
+    });
+  } catch (e) {
+    console.error("[TaxiReg] sendTaxiMessage error:", e);
+  }
+}
+
+/** Download a Telegram photo and store it in Firebase Storage. Returns public URL or null. */
+async function downloadAndStorePhoto(
+  fileId: string,
+  telegramId: string,
+  fieldName: string,
+): Promise<string | null> {
+  try {
+    const fileRes = await fetch(
+      `https://api.telegram.org/bot${TAXI_BOT_TOKEN}/getFile?file_id=${encodeURIComponent(fileId)}`,
+    );
+    if (!fileRes.ok) return null;
+    const fileData: any = await fileRes.json().catch(() => ({}));
+    const filePath: string | undefined = fileData?.result?.file_path;
+    if (!filePath) return null;
+
+    const photoRes = await fetch(`https://api.telegram.org/file/bot${TAXI_BOT_TOKEN}/${filePath}`);
+    if (!photoRes.ok) return null;
+    const buffer = Buffer.from(await photoRes.arrayBuffer());
+
+    const bucket   = admin.storage().bucket();
+    const destPath = `taxi_driver_photos/${telegramId}/${fieldName}.jpg`;
+    const file     = bucket.file(destPath);
+    await file.save(buffer, { metadata: { contentType: "image/jpeg" } });
+    await file.makePublic();
+    return `https://storage.googleapis.com/${bucket.name}/${destPath}`;
+  } catch (e) {
+    console.error(`[TaxiReg] downloadAndStorePhoto(${fieldName}) error:`, e);
+    return null;
+  }
+}
+
+/** Check if a user has an active registration session. */
+async function isActiveRegistration(telegramId: string): Promise<boolean> {
+  if (!telegramId) return false;
+  const snap = await getDb().collection("taxiRegistrationSessions").doc(telegramId).get();
+  return snap.exists;
+}
+
+// Registration step definitions (18 steps total: 11 text + 7 photos)
+const REG_STEPS = [
+  { no: 1,  field: "firstName",       isPhoto: false, prompt: "📝 <b>Шаг 1/18</b>\n\nВведите ваше <b>имя</b>:" },
+  { no: 2,  field: "lastName",        isPhoto: false, prompt: "📝 <b>Шаг 2/18</b>\n\nВведите вашу <b>фамилию</b>:" },
+  { no: 3,  field: "birthYear",       isPhoto: false, prompt: "📝 <b>Шаг 3/18</b>\n\nВведите <b>год рождения</b>:" },
+  { no: 4,  field: "phone",           isPhoto: false, prompt: "📝 <b>Шаг 4/18</b>\n\nВведите ваш <b>номер телефона</b>:" },
+  { no: 5,  field: "passport",        isPhoto: false, prompt: "📝 <b>Шаг 5/18</b>\n\nВведите <b>серию и номер паспорта</b>:" },
+  { no: 6,  field: "driverLicense",   isPhoto: false, prompt: "📝 <b>Шаг 6/18</b>\n\nВведите <b>номер водительского удостоверения</b>:" },
+  { no: 7,  field: "passportLicense", isPhoto: false, prompt: "📝 <b>Шаг 7/18</b>\n\nВведите <b>номер лицензии на перевозку пассажиров</b>:" },
+  { no: 8,  field: "carBrand",        isPhoto: false, prompt: "📝 <b>Шаг 8/18</b>\n\nВведите <b>марку автомобиля</b>\n(например: <i>Toyota</i>):" },
+  { no: 9,  field: "carModel",        isPhoto: false, prompt: "📝 <b>Шаг 9/18</b>\n\nВведите <b>модель автомобиля</b>\n(например: <i>Corolla 2018</i>):" },
+  { no: 10, field: "carColor",        isPhoto: false, prompt: "📝 <b>Шаг 10/18</b>\n\nВведите <b>цвет автомобиля</b>:" },
+  { no: 11, field: "carNumber",       isPhoto: false, prompt: "📝 <b>Шаг 11/18</b>\n\nВведите <b>государственный номер автомобиля</b>\n(например: <i>1234AB01</i>):" },
+  { no: 12, field: "photoPassport",       isPhoto: true, prompt: "📸 <b>Фото 1/7</b>\n\nОтправьте <b>фото паспорта</b>:" },
+  { no: 13, field: "photoDriverLicense",  isPhoto: true, prompt: "📸 <b>Фото 2/7</b>\n\nОтправьте <b>фото водительского удостоверения</b>:" },
+  { no: 14, field: "photoLicense",        isPhoto: true, prompt: "📸 <b>Фото 3/7</b>\n\nОтправьте <b>фото лицензии на перевозку пассажиров</b>:" },
+  { no: 15, field: "photoTechPassport",   isPhoto: true, prompt: "📸 <b>Фото 4/7</b>\n\nОтправьте <b>фото техпаспорта автомобиля</b>:" },
+  { no: 16, field: "photoCarFront",       isPhoto: true, prompt: "📸 <b>Фото 5/7</b>\n\nОтправьте <b>фото автомобиля спереди</b>:" },
+  { no: 17, field: "photoCarBack",        isPhoto: true, prompt: "📸 <b>Фото 6/7</b>\n\nОтправьте <b>фото автомобиля сзади</b>:" },
+  { no: 18, field: "photoCarInterior",    isPhoto: true, prompt: "📸 <b>Фото 7/7</b>\n\nОтправьте <b>фото салона автомобиля</b>:" },
+] as const;
+
+/** Route a Telegram update to the registration bot handler. */
+async function handleTaxiBotUpdate(update: any): Promise<void> {
+  const msg       = update.message;
+  const cq        = update.callback_query;
+  const from      = msg?.from ?? cq?.from ?? {};
+  const chatId: number = msg?.chat?.id ?? from?.id;
+  const telegramId: string = String(from?.id ?? "");
+  const text: string = msg?.text?.trim() ?? "";
+
+  if (!chatId || !telegramId) return;
+
+  const driverRef  = getDb().collection("taxiDrivers").doc(telegramId);
+  const sessionRef = getDb().collection("taxiRegistrationSessions").doc(telegramId);
+
+  // ── /start command ────────────────────────────────────────────────────────
+  if (text === "/start" && !cq) {
+    const dSnap = await driverRef.get();
+    if (dSnap.exists) {
+      const s = (dSnap.data() as any).status;
+      const messages: Record<string, string> = {
+        approved: "✅ Вы уже <b>одобрены</b> как водитель ZaKi Taxi. Ожидайте заказов в группе.",
+        pending:  "⏳ Ваша заявка <b>на проверке</b>. Ожидайте ответа администратора.",
+        blocked:  "🚫 Ваш аккаунт <b>заблокирован</b>. Свяжитесь с администратором.",
+        rejected: "❌ Ваша заявка была отклонена.",
+      };
+      if (messages[s]) {
+        await sendTaxiMessage(chatId, messages[s]);
+        if (s !== "rejected") return;
+      }
+    }
+    await sendTaxiMessage(
+      chatId,
+      "👋 Добро пожаловать в <b>ZaKi Taxi</b>!\n\nНажмите кнопку ниже, чтобы зарегистрироваться как водитель:",
+      { inline_keyboard: [[{ text: "🚖 Стать водителем ZaKi Taxi", callback_data: "register_driver" }]] },
+    );
+    return;
+  }
+
+  // ── "Стать водителем" button ──────────────────────────────────────────────
+  if (cq?.data === "register_driver") {
+    try {
+      await fetch(`https://api.telegram.org/bot${TAXI_BOT_TOKEN}/answerCallbackQuery`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ callback_query_id: cq.id, text: "" }),
+      });
+    } catch (_) {}
+    await sessionRef.set({ step: 1, data: {} });
+    await sendTaxiMessage(chatId, REG_STEPS[0].prompt);
+    return;
+  }
+
+  // ── Active registration session ───────────────────────────────────────────
+  if (!msg) return;
+  const sessionSnap = await sessionRef.get();
+  if (!sessionSnap.exists) {
+    await sendTaxiMessage(chatId, "Введите /start для начала регистрации.");
+    return;
+  }
+
+  const session      = sessionSnap.data()!;
+  const currentStep  = session.step as number;
+  const stepDef      = REG_STEPS.find(s => s.no === currentStep);
+  if (!stepDef) return;
+
+  let value: string | null = null;
+
+  if (stepDef.isPhoto) {
+    const photos: any[] = msg.photo ?? [];
+    if (photos.length === 0) {
+      await sendTaxiMessage(chatId, `⚠️ Пожалуйста, отправьте <b>фотографию</b>.\n\n${stepDef.prompt}`);
+      return;
+    }
+    const bestPhoto = photos[photos.length - 1]; // highest resolution
+    const storageUrl = await downloadAndStorePhoto(bestPhoto.file_id, telegramId, stepDef.field);
+    value = storageUrl ?? bestPhoto.file_id;
+  } else {
+    if (!text) {
+      await sendTaxiMessage(chatId, `⚠️ Введите текстовое значение.\n\n${stepDef.prompt}`);
+      return;
+    }
+    value = text;
+  }
+
+  const updatedData = { ...session.data, [stepDef.field]: value };
+
+  if (currentStep < REG_STEPS.length) {
+    await sessionRef.update({ step: currentStep + 1, data: updatedData });
+    const next = REG_STEPS.find(s => s.no === currentStep + 1)!;
+    await sendTaxiMessage(chatId, next.prompt);
+  } else {
+    // All 18 steps complete — finalise registration
+    await sessionRef.delete();
+
+    // Fetch Telegram profile photo
+    let profilePhotoUrl = "";
+    try {
+      const ppRes  = await fetch(`https://api.telegram.org/bot${TAXI_BOT_TOKEN}/getUserProfilePhotos?user_id=${telegramId}&limit=1`);
+      const ppData: any = await ppRes.json().catch(() => ({}));
+      const fid    = ppData?.result?.photos?.[0]?.[0]?.file_id;
+      if (fid) profilePhotoUrl = (await downloadAndStorePhoto(fid, telegramId, "profile")) ?? "";
+    } catch (_) {}
+
+    const d = updatedData;
+    const driverDoc = {
+      telegramId,
+      telegramUsername: from.username ?? "",
+      telegramPhotoUrl: profilePhotoUrl,
+      firstName:        d.firstName        ?? "",
+      lastName:         d.lastName         ?? "",
+      birthYear:        d.birthYear        ?? "",
+      phone:            d.phone            ?? "",
+      passport:         d.passport         ?? "",
+      driverLicense:    d.driverLicense    ?? "",
+      passportLicense:  d.passportLicense  ?? "",
+      carBrand:         d.carBrand         ?? "",
+      carModel:         d.carModel         ?? "",
+      carColor:         d.carColor         ?? "",
+      carNumber:        d.carNumber        ?? "",
+      status:           "pending",
+      driverStatus:     "offline",
+      photos: {
+        passport:      d.photoPassport       ?? "",
+        driverLicense: d.photoDriverLicense  ?? "",
+        license:       d.photoLicense        ?? "",
+        techPassport:  d.photoTechPassport   ?? "",
+        carFront:      d.photoCarFront       ?? "",
+        carBack:       d.photoCarBack        ?? "",
+        carInterior:   d.photoCarInterior    ?? "",
+      },
+      completedTrips: 0, cancelledTrips: 0, missedOrders: 0,
+      totalEarnings: 0,  totalCommission: 0,
+      registeredAt: Date.now(),
+      lastActiveAt: Date.now(),
+    };
+
+    await driverRef.set(driverDoc);
+
+    await getDb().collection("taxiAuditLog").add({
+      action: "driver_registered",
+      driverId: telegramId,
+      driverName: `${driverDoc.firstName} ${driverDoc.lastName}`,
+      details: `Водитель зарегистрировался: ${driverDoc.firstName} ${driverDoc.lastName} (авто: ${driverDoc.carBrand} ${driverDoc.carModel}, ${driverDoc.carNumber})`,
+      timestamp: Date.now(),
+    });
+
+    await sendTaxiMessage(
+      chatId,
+      `✅ <b>Регистрация завершена!</b>\n\n` +
+      `Ваша заявка принята и находится на проверке.\n` +
+      `Вы получите уведомление после рассмотрения.\n\n` +
+      `👤 ${driverDoc.firstName} ${driverDoc.lastName}\n` +
+      `🚗 ${driverDoc.carBrand} ${driverDoc.carModel} — ${driverDoc.carNumber}`,
+    );
+
+    console.log(`[TaxiReg] Driver registered: ${driverDoc.firstName} ${driverDoc.lastName} (tgId=${telegramId})`);
+  }
+}
+
+
 
 // ─── Process a single callback_query ───────────────────────────────────────
 
@@ -262,6 +517,35 @@ async function processTaxiCallbackQuery(cq: any): Promise<void> {
     from.username ||
     "Водитель";
 
+  // ── Check driver is approved and not on another order ──
+  const driverSnap = await getDb().collection("taxiDrivers").doc(driverTgId).get();
+  if (driverSnap.exists) {
+    const driverData = driverSnap.data() as TaxiDriverDoc;
+    if (driverData.status !== "approved") {
+      await answerCallbackQuery(callbackQueryId, "❌ Вы не одобрены как водитель ZaKi Taxi.", true);
+      return;
+    }
+    if (driverData.driverStatus === "on_order") {
+      await answerCallbackQuery(callbackQueryId, "❌ Вы сейчас на заказе. Завершите текущий заказ перед принятием нового.", true);
+      return;
+    }
+  }
+
+  // Collect driver car info for SMS (use Firestore data if available, else fall back to name only)
+  let driverPhone    = "";
+  let driverCarBrand = "";
+  let driverCarModel = "";
+  let driverCarColor = "";
+  let driverCarNumber = "";
+  if (driverSnap.exists) {
+    const dd = driverSnap.data() as TaxiDriverDoc;
+    driverPhone     = dd.phone      ?? "";
+    driverCarBrand  = dd.carBrand   ?? "";
+    driverCarModel  = dd.carModel   ?? "";
+    driverCarColor  = dd.carColor   ?? "";
+    driverCarNumber = dd.carNumber  ?? "";
+  }
+
   const orderRef = getDb().collection("taxi_orders").doc(orderId);
 
   try {
@@ -275,7 +559,17 @@ async function processTaxiCallbackQuery(cq: any): Promise<void> {
       }
 
       const now = Date.now();
-      tx.update(orderRef, { status: "accepted", driverTelegramId: driverTgId, driverName, acceptedAt: now });
+      tx.update(orderRef, {
+        status: "accepted",
+        driverTelegramId: driverTgId,
+        driverName,
+        driverPhone,
+        driverCarBrand,
+        driverCarModel,
+        driverCarColor,
+        driverCarNumber,
+        acceptedAt: now,
+      });
       return { ok: true, data, now };
     });
 
@@ -289,6 +583,14 @@ async function processTaxiCallbackQuery(cq: any): Promise<void> {
 
     const { data: orderData, now } = txResult as { ok: true; data: TaxiOrderDoc; now: number };
     await answerCallbackQuery(callbackQueryId, "✅ Вы приняли заказ!");
+
+    // Update driver status to on_order
+    if (driverSnap.exists) {
+      await getDb().collection("taxiDrivers").doc(driverTgId).update({
+        driverStatus: "on_order",
+        lastActiveAt: Date.now(),
+      });
+    }
 
     const timeStr     = toTjTimeStr(now);
     const destDisplay = orderData.destination || "Не указано";
@@ -305,10 +607,26 @@ async function processTaxiCallbackQuery(cq: any): Promise<void> {
       await editTaxiTelegramMessage(orderData.telegramMessageId, updatedText);
     }
 
-    await sendTaxiSms(
-      orderData.customerPhone,
-      `ZaKi Taxi\nВаш водитель уже назначен.\nВодитель: ${driverName}\nСпасибо, что выбрали ZaKi Taxi.`,
-    );
+    // SMS with full car info
+    let smsText = `ZaKi Taxi\nВаш водитель уже назначен.\n`;
+    smsText += `Водитель: ${driverName}\n`;
+    if (driverPhone)     smsText += `Телефон: ${driverPhone}\n`;
+    if (driverCarBrand)  smsText += `Автомобиль: ${driverCarBrand} ${driverCarModel}\n`;
+    if (driverCarColor)  smsText += `Цвет: ${driverCarColor}\n`;
+    if (driverCarNumber) smsText += `Госномер: ${driverCarNumber}\n`;
+    smsText += `Спасибо, что выбрали ZaKi Taxi.`;
+
+    await sendTaxiSms(orderData.customerPhone, smsText);
+
+    // Audit
+    await getDb().collection("taxiAuditLog").add({
+      action: "order_accepted",
+      driverId: driverTgId,
+      driverName,
+      orderId,
+      details: `Заказ №${orderData.orderNumber} принят водителем "${driverName}"`,
+      timestamp: Date.now(),
+    });
 
     console.log(`[Taxi] Order №${orderData.orderNumber} accepted by "${driverName}" (tgId=${driverTgId})`);
   } catch (e) {
@@ -347,14 +665,19 @@ export const createTaxiOrder = functions.https.onCall(async (data) => {
   const orderDoc: TaxiOrderDoc = {
     orderNumber,
     customerPhone: customerPhone.trim(),
-    pickup: pickup.trim(),
-    destination: destination?.trim() || "",
-    status: "waiting",
+    pickup:        pickup.trim(),
+    destination:   destination?.trim() || "",
+    status:        "waiting",
     driverTelegramId: null,
-    driverName: null,
+    driverName:    null,
+    driverPhone:   null,
+    driverCarBrand:  null,
+    driverCarModel:  null,
+    driverCarColor:  null,
+    driverCarNumber: null,
     telegramMessageId: null,
-    createdAt: now,
-    acceptedAt: null,
+    createdAt:     now,
+    acceptedAt:    null,
   };
 
   await orderRef.set(orderDoc);
@@ -406,7 +729,15 @@ export const taxiTelegramPoller = functions.pubsub
 
     // Process sequentially to avoid race conditions on the same order
     for (const update of updates) {
-      if (update.callback_query) {
+      // Route registration-related updates first
+      const isRegistrationUpdate =
+        update.message?.text === "/start" ||
+        update.callback_query?.data === "register_driver" ||
+        (update.message && await isActiveRegistration(String(update.message?.from?.id ?? "")));
+
+      if (isRegistrationUpdate) {
+        await handleTaxiBotUpdate(update);
+      } else if (update.callback_query) {
         await processTaxiCallbackQuery(update.callback_query);
       }
     }
