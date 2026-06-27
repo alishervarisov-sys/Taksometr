@@ -517,34 +517,45 @@ async function processTaxiCallbackQuery(cq: any): Promise<void> {
     from.username ||
     "Водитель";
 
-  // ── Check driver is approved and not on another order ──
+  // ── Only registered & approved drivers can accept orders ──
   const driverSnap = await getDb().collection("taxiDrivers").doc(driverTgId).get();
-  if (driverSnap.exists) {
-    const driverData = driverSnap.data() as TaxiDriverDoc;
-    if (driverData.status !== "approved") {
-      await answerCallbackQuery(callbackQueryId, "❌ Вы не одобрены как водитель ZaKi Taxi.", true);
-      return;
-    }
-    if (driverData.driverStatus === "on_order") {
-      await answerCallbackQuery(callbackQueryId, "❌ Вы сейчас на заказе. Завершите текущий заказ перед принятием нового.", true);
-      return;
-    }
+
+  if (!driverSnap.exists) {
+    await answerCallbackQuery(
+      callbackQueryId,
+      "❌ Вы не зарегистрированы в ZaKi Taxi. Свяжитесь с администратором.",
+      true,
+    );
+    return;
   }
 
-  // Collect driver car info for SMS (use Firestore data if available, else fall back to name only)
-  let driverPhone    = "";
-  let driverCarBrand = "";
-  let driverCarModel = "";
-  let driverCarColor = "";
-  let driverCarNumber = "";
-  if (driverSnap.exists) {
-    const dd = driverSnap.data() as TaxiDriverDoc;
-    driverPhone     = dd.phone      ?? "";
-    driverCarBrand  = dd.carBrand   ?? "";
-    driverCarModel  = dd.carModel   ?? "";
-    driverCarColor  = dd.carColor   ?? "";
-    driverCarNumber = dd.carNumber  ?? "";
+  const driverData = driverSnap.data() as TaxiDriverDoc;
+
+  if (driverData.status !== "approved") {
+    const msgs: Record<string, string> = {
+      pending:  "⏳ Ваша заявка ещё на проверке. Ожидайте одобрения.",
+      rejected: "❌ Ваша заявка отклонена.",
+      blocked:  "🚫 Ваш аккаунт заблокирован.",
+    };
+    await answerCallbackQuery(
+      callbackQueryId,
+      msgs[driverData.status] ?? "❌ Вы не одобрены как водитель.",
+      true,
+    );
+    return;
   }
+
+  if (driverData.driverStatus === "on_order") {
+    await answerCallbackQuery(callbackQueryId, "❌ Вы сейчас на заказе. Завершите текущий перед принятием нового.", true);
+    return;
+  }
+
+  // Collect driver car info for SMS
+  const driverPhone    = driverData.phone      ?? "";
+  const driverCarBrand = driverData.carBrand   ?? "";
+  const driverCarModel = driverData.carModel   ?? "";
+  const driverCarColor = driverData.carColor   ?? "";
+  const driverCarNumber = driverData.carNumber ?? "";
 
   const orderRef = getDb().collection("taxi_orders").doc(orderId);
 
@@ -585,12 +596,10 @@ async function processTaxiCallbackQuery(cq: any): Promise<void> {
     await answerCallbackQuery(callbackQueryId, "✅ Вы приняли заказ!");
 
     // Update driver status to on_order
-    if (driverSnap.exists) {
-      await getDb().collection("taxiDrivers").doc(driverTgId).update({
-        driverStatus: "on_order",
-        lastActiveAt: Date.now(),
-      });
-    }
+    await getDb().collection("taxiDrivers").doc(driverTgId).update({
+      driverStatus: "on_order",
+      lastActiveAt: Date.now(),
+    });
 
     const timeStr     = toTjTimeStr(now);
     const destDisplay = orderData.destination || "Не указано";

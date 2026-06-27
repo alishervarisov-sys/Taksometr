@@ -2356,4 +2356,4 @@ export const scheduledTelegramReport = functions.pubsub
 // ============ TAXI MODULE ============
 // Keep taxi logic fully isolated in taxi.ts and taxiDrivers.ts.
 export { createTaxiOrder, taxiTelegramPoller } from "./taxi";
-export { approveTaxiDriver, rejectTaxiDriver, blockTaxiDriver, sendTaxiBroadcast } from "./taxiDrivers";
+export { approveTaxiDriver, rejectTaxiDriver, blockTaxiDriver, sendTaxiBroadcast, createTaxiDriverByAdmin } from "./taxiDrivers";

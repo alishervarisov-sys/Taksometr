@@ -259,3 +259,100 @@ export const sendTaxiBroadcast = functions.https.onCall(async (data) => {
 
   return { success: true, sent };
 });
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  CALLABLE: createTaxiDriverByAdmin
+//  Admin manually registers a driver — immediately approved.
+//  Telegram ID is required so the driver can receive orders.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export const createTaxiDriverByAdmin = functions.https.onCall(async (data) => {
+  const {
+    adminId, telegramId, telegramUsername,
+    firstName, lastName, birthYear, phone,
+    passport, driverLicense, passportLicense,
+    carBrand, carModel, carColor, carNumber,
+  } = data as {
+    adminId: string;
+    telegramId: string;
+    telegramUsername?: string;
+    firstName: string;
+    lastName: string;
+    birthYear?: string;
+    phone: string;
+    passport?: string;
+    driverLicense?: string;
+    passportLicense?: string;
+    carBrand: string;
+    carModel: string;
+    carColor: string;
+    carNumber: string;
+  };
+
+  await verifyAdmin(adminId);
+
+  if (!telegramId?.trim() || !firstName?.trim() || !lastName?.trim() ||
+      !phone?.trim() || !carBrand?.trim() || !carModel?.trim() ||
+      !carColor?.trim() || !carNumber?.trim()) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "telegramId, firstName, lastName, phone, carBrand, carModel, carColor, carNumber are required",
+    );
+  }
+
+  const ref = getDb().collection("taxiDrivers").doc(telegramId.trim());
+  const existing = await ref.get();
+  if (existing.exists) {
+    throw new functions.https.HttpsError(
+      "already-exists",
+      "Водитель с этим Telegram ID уже зарегистрирован",
+    );
+  }
+
+  const now = Date.now();
+  const driverDoc: TaxiDriverDoc = {
+    telegramId:       telegramId.trim(),
+    telegramUsername: telegramUsername?.trim() ?? "",
+    telegramPhotoUrl: "",
+    firstName:        firstName.trim(),
+    lastName:         lastName.trim(),
+    birthYear:        birthYear?.trim() ?? "",
+    phone:            phone.trim(),
+    passport:         passport?.trim() ?? "",
+    driverLicense:    driverLicense?.trim() ?? "",
+    passportLicense:  passportLicense?.trim() ?? "",
+    carBrand:         carBrand.trim(),
+    carModel:         carModel.trim(),
+    carColor:         carColor.trim(),
+    carNumber:        carNumber.trim(),
+    status:           "approved",
+    driverStatus:     "offline",
+    photos: { passport: "", driverLicense: "", license: "", techPassport: "", carFront: "", carBack: "", carInterior: "" },
+    completedTrips: 0, cancelledTrips: 0, missedOrders: 0,
+    totalEarnings: 0,  totalCommission: 0,
+    registeredAt:  now,
+    lastActiveAt:  now,
+    approvedBy:    adminId,
+    approvedAt:    now,
+  };
+
+  await ref.set(driverDoc);
+
+  await logAudit({
+    action:     "driver_created_by_admin",
+    driverId:   telegramId.trim(),
+    driverName: `${firstName} ${lastName}`,
+    adminId,
+    details:    `Водитель создан администратором: ${firstName} ${lastName}, авто: ${carBrand} ${carModel} ${carNumber}`,
+  });
+
+  // Notify the driver if they're already a bot member
+  try {
+    await sendMsg(
+      telegramId.trim(),
+      `✅ <b>Добро пожаловать в ZaKi Taxi!</b>\n\nВы зарегистрированы как водитель и можете принимать заказы.\n\n🚗 ${carBrand} ${carModel} — ${carNumber}`,
+    );
+  } catch (_) { /* driver may not have started the bot yet */ }
+
+  return { success: true, driverId: telegramId.trim() };
+});
