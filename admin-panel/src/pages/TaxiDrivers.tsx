@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import {
   Box, Typography, Card, CardContent, CardMedia, Grid, Button, Chip,
   Dialog, DialogTitle, DialogContent, DialogActions, TextField, Tab, Tabs,
@@ -611,20 +611,20 @@ const TaxiDrivers: React.FC<Props> = ({ adminId }) => {
         </DialogActions>
       </Dialog>
 
-      {/* \u2500\u2500 Create Driver Dialog \u2500\u2500 */}
+      {/* ── Create Driver Dialog ── */}
       <Dialog open={createOpen} onClose={() => !creating && setCreateOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <PersonAddIcon sx={{ color: '#FFC107' }} />
-          \u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u0432\u043e\u0434\u0438\u0442\u0435\u043b\u044f
+          Добавить водителя
         </DialogTitle>
         <DialogContent>
           {createError && <Alert severity="error" sx={{ mb: 2 }}>{createError}</Alert>}
 
           <Alert severity="info" sx={{ mb: 2 }}>
-            \u0422\u0435\u043b\u0435\u0433\u0440\u0430\u043c ID \u0432\u043e\u0434\u0438\u0442\u0435\u043b\u044f \u043c\u043e\u0436\u043d\u043e \u0443\u0437\u043d\u0430\u0442\u044c, \u0435\u0441\u043b\u0438 \u0432\u043e\u0434\u0438\u0442\u0435\u043b\u044c \u043d\u0430\u043f\u0438\u0448\u0435\u0442 <b>@userinfobot</b> \u0432 Telegram.
+            Телеграм ID водителя можно узнать, если водитель напишет <b>@userinfobot</b> в Telegram.
           </Alert>
 
-          <Typography variant="subtitle2" fontWeight={700} sx={{ mb: 1 }}>\ud83d\udcf1 Telegram</Typography>
+          <Typography variant="subtitle2" fontWeight={700} sx={{ mb: 1 }}>📱 Telegram</Typography>
           <Grid container spacing={1.5}>
             <Grid item xs={6}>
               <TextField label="Telegram ID *" fullWidth size="small" value={createForm.telegramId}
@@ -638,76 +638,76 @@ const TaxiDrivers: React.FC<Props> = ({ adminId }) => {
             </Grid>
           </Grid>
 
-          <Typography variant="subtitle2" fontWeight={700} sx={{ mt: 2, mb: 1 }}>\ud83d\udc64 \u041b\u0438\u0447\u043d\u044b\u0435 \u0434\u0430\u043d\u043d\u044b\u0435</Typography>
+          <Typography variant="subtitle2" fontWeight={700} sx={{ mt: 2, mb: 1 }}>👤 Личные данные</Typography>
           <Grid container spacing={1.5}>
             <Grid item xs={6}>
-              <TextField label="\u0418\u043c\u044f *" fullWidth size="small" value={createForm.firstName}
+              <TextField label="Имя *" fullWidth size="small" value={createForm.firstName}
                 onChange={e => setCreateForm(f => ({ ...f, firstName: e.target.value }))} />
             </Grid>
             <Grid item xs={6}>
-              <TextField label="\u0424\u0430\u043c\u0438\u043b\u0438\u044f *" fullWidth size="small" value={createForm.lastName}
+              <TextField label="Фамилия *" fullWidth size="small" value={createForm.lastName}
                 onChange={e => setCreateForm(f => ({ ...f, lastName: e.target.value }))} />
             </Grid>
             <Grid item xs={6}>
-              <TextField label="\u0422\u0435\u043b\u0435\u0444\u043e\u043d *" fullWidth size="small" value={createForm.phone}
+              <TextField label="Телефон *" fullWidth size="small" value={createForm.phone}
                 onChange={e => setCreateForm(f => ({ ...f, phone: e.target.value }))}
                 placeholder="+992900000000" />
             </Grid>
             <Grid item xs={6}>
-              <TextField label="\u0413\u043e\u0434 \u0440\u043e\u0436\u0434\u0435\u043d\u0438\u044f" fullWidth size="small" value={createForm.birthYear}
+              <TextField label="Год рождения" fullWidth size="small" value={createForm.birthYear}
                 onChange={e => setCreateForm(f => ({ ...f, birthYear: e.target.value }))}
                 placeholder="1990" />
             </Grid>
             <Grid item xs={6}>
-              <TextField label="\u041f\u0430\u0441\u043f\u043e\u0440\u0442" fullWidth size="small" value={createForm.passport}
+              <TextField label="Паспорт" fullWidth size="small" value={createForm.passport}
                 onChange={e => setCreateForm(f => ({ ...f, passport: e.target.value }))} />
             </Grid>
             <Grid item xs={6}>
-              <TextField label="\u0412\u043e\u0434\u0438\u0442\u0435\u043b\u044c\u0441\u043a\u043e\u0435 \u0443\u0434\u043e\u0441\u0442\u043e\u0432\u0435\u0440\u0435\u043d\u0438\u0435" fullWidth size="small" value={createForm.driverLicense}
+              <TextField label="Водительское удостоверение" fullWidth size="small" value={createForm.driverLicense}
                 onChange={e => setCreateForm(f => ({ ...f, driverLicense: e.target.value }))} />
             </Grid>
             <Grid item xs={12}>
-              <TextField label="\u041d\u043e\u043c\u0435\u0440 \u043b\u0438\u0446\u0435\u043d\u0437\u0438\u0438 \u043d\u0430 \u043f\u0435\u0440\u0435\u0432\u043e\u0437\u043a\u0443" fullWidth size="small" value={createForm.passportLicense}
+              <TextField label="Номер лицензии на перевозку" fullWidth size="small" value={createForm.passportLicense}
                 onChange={e => setCreateForm(f => ({ ...f, passportLicense: e.target.value }))} />
             </Grid>
           </Grid>
 
-          <Typography variant="subtitle2" fontWeight={700} sx={{ mt: 2, mb: 1 }}>\ud83d\ude97 \u0410\u0432\u0442\u043e\u043c\u043e\u0431\u0438\u043b\u044c</Typography>
+          <Typography variant="subtitle2" fontWeight={700} sx={{ mt: 2, mb: 1 }}>🚗 Автомобиль</Typography>
           <Grid container spacing={1.5}>
             <Grid item xs={6}>
-              <TextField label="\u041c\u0430\u0440\u043a\u0430 *" fullWidth size="small" value={createForm.carBrand}
+              <TextField label="Марка *" fullWidth size="small" value={createForm.carBrand}
                 onChange={e => setCreateForm(f => ({ ...f, carBrand: e.target.value }))}
                 placeholder="Toyota" />
             </Grid>
             <Grid item xs={6}>
-              <TextField label="\u041c\u043e\u0434\u0435\u043b\u044c *" fullWidth size="small" value={createForm.carModel}
+              <TextField label="Модель *" fullWidth size="small" value={createForm.carModel}
                 onChange={e => setCreateForm(f => ({ ...f, carModel: e.target.value }))}
                 placeholder="Corolla 2018" />
             </Grid>
             <Grid item xs={6}>
-              <TextField label="\u0426\u0432\u0435\u0442 *" fullWidth size="small" value={createForm.carColor}
+              <TextField label="Цвет *" fullWidth size="small" value={createForm.carColor}
                 onChange={e => setCreateForm(f => ({ ...f, carColor: e.target.value }))}
-                placeholder="\u0411\u0435\u043b\u044b\u0439" />
+                placeholder="Белый" />
             </Grid>
             <Grid item xs={6}>
-              <TextField label="\u0413\u043e\u0441\u043d\u043e\u043c\u0435\u0440 *" fullWidth size="small" value={createForm.carNumber}
+              <TextField label="Госномер *" fullWidth size="small" value={createForm.carNumber}
                 onChange={e => setCreateForm(f => ({ ...f, carNumber: e.target.value }))}
                 placeholder="1234AB01" />
             </Grid>
           </Grid>
         </DialogContent>
         <DialogActions sx={{ px: 2, py: 1.5 }}>
-          <Button onClick={() => setCreateOpen(false)} disabled={creating}>\u041e\u0442\u043c\u0435\u043d\u0430</Button>
+          <Button onClick={() => setCreateOpen(false)} disabled={creating}>Отмена</Button>
           <Button
             variant="contained" onClick={handleCreateDriver} disabled={creating}
             sx={{ backgroundColor: '#FFC107', color: '#000', fontWeight: 700, '&:hover': { backgroundColor: '#FFB300' } }}
           >
-            {creating ? <CircularProgress size={18} sx={{ color: '#000' }} /> : '\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c'}
+            {creating ? <CircularProgress size={18} sx={{ color: '#000' }} /> : 'Добавить'}
           </Button>
         </DialogActions>
       </Dialog>
 
-      {/* \u2500\u2500 Fullscreen photo viewer \u2500\u2500 */}
+      {/* ── Fullscreen photo viewer ── */}
       <Dialog open={!!photoUrl} onClose={() => setPhotoUrl(null)} maxWidth="md">
         <DialogContent sx={{ p: 0, display: 'flex', justifyContent: 'center', backgroundColor: '#000' }}>
           <Box

@@ -127,8 +127,8 @@ async function sendTaxiTelegramWithButton(text: string, orderId: string): Promis
   }
 }
 
-/** Replace the taxi order message text (removes the inline button). */
-async function editTaxiTelegramMessage(messageId: number, newText: string): Promise<void> {
+/** Replace the taxi order message text, optionally adding a reply_markup. */
+async function editTaxiTelegramMessage(messageId: number, newText: string, replyMarkup?: any): Promise<void> {
   if (!TAXI_BOT_TOKEN || !TAXI_TELEGRAM_CHAT_ID) return;
   try {
     const response = await fetch(
@@ -141,7 +141,7 @@ async function editTaxiTelegramMessage(messageId: number, newText: string): Prom
           message_id: messageId,
           text: newText,
           parse_mode: "HTML",
-          // No reply_markup → button disappears
+          ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
         }),
       },
     );
@@ -545,8 +545,18 @@ async function processTaxiCallbackQuery(cq: any): Promise<void> {
     return;
   }
 
-  if (driverData.driverStatus === "on_order") {
-    await answerCallbackQuery(callbackQueryId, "❌ Вы сейчас на заказе. Завершите текущий перед принятием нового.", true);
+  if (driverData.driverStatus === "offline") {
+    await answerCallbackQuery(callbackQueryId, "❌ Вы офлайн. Перейдите в онлайн для принятия заказов.", true);
+    return;
+  }
+
+  // Allow up to 3 simultaneous active orders
+  const activeOrdersSnap = await getDb().collection("taxi_orders")
+    .where("driverTelegramId", "==", driverTgId)
+    .where("status", "==", "accepted")
+    .get();
+  if (activeOrdersSnap.size >= 3) {
+    await answerCallbackQuery(callbackQueryId, `❌ У вас уже ${activeOrdersSnap.size} активных заказа. Завершите один перед принятием нового.`, true);
     return;
   }
 
@@ -593,27 +603,56 @@ async function processTaxiCallbackQuery(cq: any): Promise<void> {
     }
 
     const { data: orderData, now } = txResult as { ok: true; data: TaxiOrderDoc; now: number };
-    await answerCallbackQuery(callbackQueryId, "✅ Вы приняли заказ!");
-
-    // Update driver status to on_order
-    await getDb().collection("taxiDrivers").doc(driverTgId).update({
-      driverStatus: "on_order",
-      lastActiveAt: Date.now(),
-    });
 
     const timeStr     = toTjTimeStr(now);
     const destDisplay = orderData.destination || "Не указано";
+
+    // Show phone number ONLY to the accepting driver via popup (always works)
+    await answerCallbackQuery(
+      callbackQueryId,
+      `✅ Заказ №${orderData.orderNumber} принят!\n📞 Клиент: ${orderData.customerPhone}\n📍 Откуда: ${orderData.pickup}`,
+      true, // show_alert — popup visible only to this driver
+    );
+
+    // Update driver status and increment active order count
+    await getDb().collection("taxiDrivers").doc(driverTgId).update({
+      driverStatus: "on_order",
+      activeOrderCount: admin.firestore.FieldValue.increment(1),
+      lastActiveAt: Date.now(),
+    });
+
+    // Group message — phone hidden, only driver knows
     const updatedText =
-      `🚖 <b>Заказ №${orderData.orderNumber}</b>\n\n` +
-      `📞 <b>Клиент</b>\n${orderData.customerPhone}\n\n` +
-      `📍 <b>Откуда</b>\n${orderData.pickup}\n\n` +
-      `📍 <b>Куда</b>\n${destDisplay}\n\n` +
-      `✅ <b>Заказ принят</b>\n` +
-      `👤 <b>Водитель</b>\n${driverName}\n` +
-      `🕒 ${timeStr}`;
+      `🚖 <b>Заказ №${orderData.orderNumber}</b>  |  ✅ Принят  |  🕒 ${timeStr}\n\n` +
+      `📍 <b>Откуда:</b> ${orderData.pickup}\n` +
+      `📍 <b>Куда:</b> ${destDisplay}\n\n` +
+      `👤 <b>Водитель:</b> ${driverName}`;
 
     if (orderData.telegramMessageId) {
       await editTaxiTelegramMessage(orderData.telegramMessageId, updatedText);
+    }
+
+    // Private DM to driver with client phone (best-effort, may fail if driver hasn't started bot)
+    const dmText =
+      `✅ <b>Вы приняли заказ №${orderData.orderNumber}</b>\n\n` +
+      `📞 <b>Номер клиента:</b> <code>${orderData.customerPhone}</code>\n` +
+      `📍 <b>Откуда:</b> ${orderData.pickup}\n` +
+      `📍 <b>Куда:</b> ${destDisplay}\n\n` +
+      `🕒 ${timeStr}`;
+    try {
+      const dmRes = await fetch(`https://api.telegram.org/bot${TAXI_BOT_TOKEN}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: driverTgId, text: dmText, parse_mode: "HTML" }),
+      });
+      if (!dmRes.ok) {
+        const dmErr = await dmRes.text().catch(() => "");
+        console.warn(`[Taxi] DM to driver ${driverTgId} failed (${dmRes.status}): ${dmErr}`);
+      } else {
+        console.log(`[Taxi] DM sent to driver ${driverTgId}`);
+      }
+    } catch (dmE) {
+      console.warn(`[Taxi] DM to driver ${driverTgId} error:`, dmE);
     }
 
     // SMS with full car info
@@ -694,12 +733,9 @@ export const createTaxiOrder = functions.https.onCall(async (data) => {
   // Build Telegram notification text
   const destDisplay = orderDoc.destination || "Не указано";
   const tgText =
-    `🚖 <b>Новый заказ</b>\n\n` +
-    `🆔 №${orderNumber}\n\n` +
-    `📞 <b>Клиент</b>\n${orderDoc.customerPhone}\n\n` +
-    `📍 <b>Откуда</b>\n${orderDoc.pickup}\n\n` +
-    `📍 <b>Куда</b>\n${destDisplay}\n\n` +
-    `⏰ <b>Время</b>\n${timeStr}`;
+    `🚖 <b>Новый заказ №${orderNumber}</b>  |  ⏰ ${timeStr}\n\n` +
+    `📍 <b>Откуда:</b> ${orderDoc.pickup}\n` +
+    `📍 <b>Куда:</b> ${destDisplay}`;
 
   const messageId = await sendTaxiTelegramWithButton(tgText, orderRef.id);
   if (messageId !== null) {
