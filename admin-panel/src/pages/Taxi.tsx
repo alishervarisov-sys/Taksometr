@@ -5,9 +5,10 @@ import {
   DialogActions, TextField, Grid, Tab, Tabs, CircularProgress, Alert,
   InputAdornment,
 } from '@mui/material';
-import { LocalTaxi as TaxiIcon, Add as AddIcon } from '@mui/icons-material';
+import { LocalTaxi as TaxiIcon, Add as AddIcon, CheckCircle as DoneIcon, Cancel as CancelIcon } from '@mui/icons-material';
 import {
   collection, query, orderBy, where, onSnapshot, getDocs, limit,
+  doc, writeBatch, increment, updateDoc,
 } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../firebase';
@@ -65,6 +66,7 @@ const Taxi: React.FC<TaxiProps> = ({ adminId }) => {
   const [foundClientName, setFoundClientName] = useState<string | null>(null);
 
   const [form, setForm] = useState({ customerPhone: '', pickup: '', destination: '' });
+  const [processing, setProcessing] = useState<Set<string>>(new Set());
 
   // Real-time listener on taxi_orders collection
   useEffect(() => {
@@ -130,6 +132,68 @@ const Taxi: React.FC<TaxiProps> = ({ adminId }) => {
       setCreateError(e.message || 'Ошибка создания заказа');
     } finally {
       setCreating(false);
+    }
+  };
+
+  // ── Complete order ─────────────────────────────────────────────────────────
+  const handleCompleteOrder = async (order: TaxiOrder) => {
+    if (processing.has(order.id)) return;
+    setProcessing(prev => new Set(prev).add(order.id));
+    try {
+      const batch = writeBatch(db);
+      batch.update(doc(db, 'taxi_orders', order.id), { status: 'completed' });
+      if (order.driverTelegramId) {
+        batch.update(doc(db, 'taxiDrivers', order.driverTelegramId), {
+          activeOrderCount: increment(-1),
+          completedTrips: increment(1),
+        });
+      }
+      await batch.commit();
+      // Reset driverStatus to online if no more active orders
+      if (order.driverTelegramId) {
+        const rem = await getDocs(query(
+          collection(db, 'taxi_orders'),
+          where('driverTelegramId', '==', order.driverTelegramId),
+          where('status', '==', 'accepted'),
+        ));
+        if (rem.empty) {
+          await updateDoc(doc(db, 'taxiDrivers', order.driverTelegramId), { driverStatus: 'online' });
+        }
+      }
+    } catch (e: any) {
+      alert('Ошибка завершения: ' + e.message);
+    } finally {
+      setProcessing(prev => { const s = new Set(prev); s.delete(order.id); return s; });
+    }
+  };
+
+  // ── Cancel order ──────────────────────────────────────────────────────────
+  const handleCancelOrder = async (order: TaxiOrder) => {
+    if (processing.has(order.id)) return;
+    if (!window.confirm(`Отменить заказ №${order.orderNumber}?`)) return;
+    setProcessing(prev => new Set(prev).add(order.id));
+    try {
+      const batch = writeBatch(db);
+      batch.update(doc(db, 'taxi_orders', order.id), { status: 'cancelled' });
+      if (order.driverTelegramId && order.status === 'accepted') {
+        batch.update(doc(db, 'taxiDrivers', order.driverTelegramId), {
+          activeOrderCount: increment(-1),
+          cancelledTrips: increment(1),
+        });
+        const rem = await getDocs(query(
+          collection(db, 'taxi_orders'),
+          where('driverTelegramId', '==', order.driverTelegramId),
+          where('status', '==', 'accepted'),
+        ));
+        if (rem.size <= 1) { // <=1 because current order not yet updated
+          batch.update(doc(db, 'taxiDrivers', order.driverTelegramId), { driverStatus: 'online' });
+        }
+      }
+      await batch.commit();
+    } catch (e: any) {
+      alert('Ошибка отмены: ' + e.message);
+    } finally {
+      setProcessing(prev => { const s = new Set(prev); s.delete(order.id); return s; });
     }
   };
 
@@ -215,6 +279,7 @@ const Taxi: React.FC<TaxiProps> = ({ adminId }) => {
               <TableCell>Статус</TableCell>
               <TableCell>Дата</TableCell>
               <TableCell>Время</TableCell>
+              <TableCell>Действия</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -245,6 +310,36 @@ const Taxi: React.FC<TaxiProps> = ({ adminId }) => {
                   </TableCell>
                   <TableCell>{fmt(order.createdAt, 'date')}</TableCell>
                   <TableCell>{fmt(order.createdAt, 'time')}</TableCell>
+                  <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                    {(order.status === 'waiting' || order.status === 'accepted') && (
+                      <>
+                        {order.status === 'accepted' && (
+                          <Button
+                            size="small"
+                            variant="contained"
+                            color="success"
+                            startIcon={processing.has(order.id) ? <CircularProgress size={12} color="inherit" /> : <DoneIcon />}
+                            disabled={processing.has(order.id)}
+                            onClick={() => handleCompleteOrder(order)}
+                            sx={{ mr: 0.5, fontSize: 11, px: 1, py: 0.3 }}
+                          >
+                            Завершить
+                          </Button>
+                        )}
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          color="error"
+                          startIcon={<CancelIcon />}
+                          disabled={processing.has(order.id)}
+                          onClick={() => handleCancelOrder(order)}
+                          sx={{ fontSize: 11, px: 1, py: 0.3 }}
+                        >
+                          Отменить
+                        </Button>
+                      </>
+                    )}
+                  </TableCell>
                 </TableRow>
               ))
             )}

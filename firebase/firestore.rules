@@ -45,5 +45,35 @@ service cloud.firestore {
       allow update: if false;
       allow delete: if false;
     }
+
+    // Taxi orders collection
+    match /taxi_orders/{orderId} {
+      allow read: if true;
+      allow create: if false; // Only via Cloud Functions (createTaxiOrder)
+      allow update: if true;  // Cloud Functions + admin panel status updates
+      allow delete: if false;
+    }
+
+    // Taxi drivers collection
+    match /taxiDrivers/{driverId} {
+      allow read: if true;
+      allow create: if false; // Only via Cloud Functions (registration)
+      allow update: if true;  // Cloud Functions + admin panel approve/block
+      allow delete: if false;
+    }
+
+    // Taxi registration sessions (bot registration flow)
+    match /taxiRegistrationSessions/{sessionId} {
+      allow read: if true;
+      allow write: if true; // Managed by Cloud Functions bot
+    }
+
+    // Taxi audit log
+    match /taxiAuditLog/{entryId} {
+      allow read: if true;
+      allow create: if false; // Only via Cloud Functions
+      allow update: if false;
+      allow delete: if false;
+    }
   }
 }
