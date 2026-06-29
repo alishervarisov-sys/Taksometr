@@ -45,6 +45,7 @@ class LocationTrackingService : Service() {
     private var lastValidPoint: GeoPoint? = null
     private var lastValidTimestamp: Long? = null
     private var totalDistance: Double = 0.0
+    private var isMarketplaceOrder: Boolean = false
     private var startTime: Long = 0L
     private var clientPhone: String = ""
     private var widgetTimerJob: Job? = null
@@ -81,13 +82,20 @@ class LocationTrackingService : Service() {
                 deliveryDao.getById(currentDeliveryId)?.let { entity ->
                     startTime = entity.startTime
                     clientPhone = entity.clientPhone
+                    isMarketplaceOrder = entity.orderKind == "MARKETPLACE"
                 }
                 val points = routePointDao.getPointsByDeliveryIdSync(currentDeliveryId)
                 if (points.isNotEmpty()) {
                     val lastPoint = points.last()
                     lastValidPoint = lastPoint.toGeoPoint()
                     lastValidTimestamp = lastPoint.timestamp
-                    totalDistance = LocationUtils.calculateTotalDistance(points.map { it.toGeoPoint() })
+                    val distancePoints = if (isMarketplaceOrder) {
+                        val onTheWayAt = prefs.getLong(Constants.PREF_ON_THE_WAY_STARTED_AT, 0L)
+                        if (onTheWayAt > 0) points.filter { it.timestamp >= onTheWayAt } else emptyList()
+                    } else {
+                        points
+                    }
+                    totalDistance = LocationUtils.calculateTotalDistance(distancePoints.map { it.toGeoPoint() })
                 }
             }
             startWidgetTimer()
@@ -149,8 +157,12 @@ class LocationTrackingService : Service() {
         if (currentDeliveryId.isEmpty()) return
 
         lastValidPoint?.let { lastPoint ->
-            val increment = LocationUtils.haversineDistance(lastPoint, newPoint)
-            totalDistance += increment
+            val onTheWayAt = prefs.getLong(Constants.PREF_ON_THE_WAY_STARTED_AT, 0L)
+            val shouldCountDistance = !isMarketplaceOrder || (onTheWayAt > 0 && newPoint.timestamp >= onTheWayAt)
+            if (shouldCountDistance) {
+                val increment = LocationUtils.haversineDistance(lastPoint, newPoint)
+                totalDistance += increment
+            }
         }
 
         lastValidPoint = newPoint

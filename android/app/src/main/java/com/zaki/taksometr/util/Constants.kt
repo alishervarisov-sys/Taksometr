@@ -20,6 +20,7 @@ object Constants {
     const val PREF_IS_LOGGED_IN = "is_logged_in"
     const val PREF_ACTIVE_DELIVERY_ID = "active_delivery_id"
     const val PREF_PENDING_MARKETPLACE_DELIVERY_ID = "pending_marketplace_delivery_id"
+    const val PREF_ON_THE_WAY_STARTED_AT = "on_the_way_started_at"
 
     // Notification
     const val TRACKING_NOTIFICATION_ID = 1001

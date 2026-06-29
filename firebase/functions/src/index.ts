@@ -1014,6 +1014,35 @@ export const updateMarketplaceDeliveryStage = functions.https.onCall(async (data
   }
 
   await deliveryRef.update(updates);
+
+  // Send SMS on stage transitions
+  if (stage === "PICKED_UP" || stage === "ON_THE_WAY") {
+    const clientPhone: string = deliveryData.clientPhone || "";
+    const courierName: string = deliveryData.courierName || "";
+
+    if (stage === "PICKED_UP") {
+      const smsText =
+        `Салом! Курьери ZaKi молатонро гирифт ва` +
+        ` ба зудӣ назди шумо хоҳад омад.` +
+        (courierName ? ` Курьер: ${courierName}.` : "");
+      await sendSms(clientPhone, smsText);
+    } else if (stage === "ON_THE_WAY") {
+      // Calculate ETA from courier's last location to delivery destination
+      const courierDoc = await db.collection("users").doc(courierId).get();
+      const courierLocation = courierDoc.exists ? courierDoc.data()!.lastLocation : null;
+      const destination = deliveryData.destination || null;
+      const etaMinutes = getEtaMinutes(courierLocation, destination);
+
+      let smsText =
+        `Салом! Курьери ZaKi ба тарафи шумо меравад` +
+        (courierName ? `, ${courierName}` : "") + `.`;
+      if (etaMinutes !== null) {
+        smsText += ` Тахминан тавассути ${etaMinutes} дақиқа назди шумо хоҳад буд.`;
+      }
+      await sendSms(clientPhone, smsText);
+    }
+  }
+
   return {success: true};
 });
 

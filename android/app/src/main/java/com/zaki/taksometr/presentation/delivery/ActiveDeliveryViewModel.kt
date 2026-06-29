@@ -82,7 +82,17 @@ class ActiveDeliveryViewModel @Inject constructor(
         viewModelScope.launch {
             routePointDao.getPointsByDeliveryId(currentDeliveryId).collect { entities ->
                 val points = entities.map { it.toGeoPoint() }
-                val distance = LocationUtils.calculateTotalDistance(points)
+
+                // For MARKETPLACE orders, count km only from the ON_THE_WAY stage
+                val isMarketplace = _state.value.delivery?.orderKind == "MARKETPLACE"
+                val distancePoints = if (isMarketplace) {
+                    val onTheWayAt = prefs.getLong(Constants.PREF_ON_THE_WAY_STARTED_AT, 0L)
+                    if (onTheWayAt > 0L) points.filter { it.timestamp >= onTheWayAt } else emptyList()
+                } else {
+                    points
+                }
+
+                val distance = LocationUtils.calculateTotalDistance(distancePoints)
                 val cost = tariffRepository.calculateCost(distance)
 
                 _state.value = _state.value.copy(
@@ -148,6 +158,12 @@ class ActiveDeliveryViewModel @Inject constructor(
             when (val result = deliveryRepository.updateMarketplaceDeliveryStage(currentDeliveryId, stage, waitingAction)) {
                 is Resource.Error -> {
                     _state.value = _state.value.copy(error = result.message)
+                }
+                is Resource.Success -> {
+                    // When courier starts driving to client, reset km/cost counter to 0 immediately
+                    if (stage == "ON_THE_WAY") {
+                        _state.value = _state.value.copy(distanceMeters = 0.0, currentCost = 0.0)
+                    }
                 }
                 else -> Unit
             }

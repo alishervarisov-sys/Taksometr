@@ -190,8 +190,18 @@ class DeliveryRepositoryImpl @Inject constructor(
             // Get route points from local DB
             val points = routePointDao.getPointsByDeliveryIdSync(deliveryId)
             android.util.Log.d("DeliveryRepo", "Route points count: ${points.size}")
-            
-            val routeData = points.map { point ->
+
+            // For MARKETPLACE orders only count route from ON_THE_WAY stage
+            val isMarketplace = deliveryDao.getById(deliveryId)?.orderKind == "MARKETPLACE"
+            val onTheWayAt = prefs.getLong(Constants.PREF_ON_THE_WAY_STARTED_AT, 0L)
+            val routePoints = if (isMarketplace && onTheWayAt > 0) {
+                points.filter { it.timestamp >= onTheWayAt }
+            } else {
+                points
+            }
+            android.util.Log.d("DeliveryRepo", "Route points for cost (filtered): ${routePoints.size}")
+
+            val routeData = routePoints.map { point ->
                 hashMapOf(
                     "latitude" to point.latitude,
                     "longitude" to point.longitude,
@@ -241,7 +251,10 @@ class DeliveryRepositoryImpl @Inject constructor(
             deliveryDao.update(DeliveryEntity.fromDelivery(delivery).copy(isSynced = true))
 
             // Clear active delivery
-            prefs.edit().remove(Constants.PREF_ACTIVE_DELIVERY_ID).apply()
+            prefs.edit()
+                .remove(Constants.PREF_ACTIVE_DELIVERY_ID)
+                .remove(Constants.PREF_ON_THE_WAY_STARTED_AT)
+                .apply()
 
             android.util.Log.d("DeliveryRepo", "=== COMPLETE DELIVERY SUCCESS ===")
             Resource.Success(delivery)
@@ -278,7 +291,10 @@ class DeliveryRepositoryImpl @Inject constructor(
 
             // Clear route points
             routePointDao.deleteByDeliveryId(deliveryId)
-            prefs.edit().remove(Constants.PREF_ACTIVE_DELIVERY_ID).apply()
+            prefs.edit()
+                .remove(Constants.PREF_ACTIVE_DELIVERY_ID)
+                .remove(Constants.PREF_ON_THE_WAY_STARTED_AT)
+                .apply()
 
             android.util.Log.d("DeliveryRepo", "=== CANCEL DELIVERY SUCCESS ===")
             Resource.Success(Unit)
@@ -394,6 +410,11 @@ class DeliveryRepositoryImpl @Inject constructor(
                         else -> it.waitingStartedAt
                     }
                 ))
+            }
+            if (stage == "ON_THE_WAY") {
+                prefs.edit()
+                    .putLong(Constants.PREF_ON_THE_WAY_STARTED_AT, System.currentTimeMillis())
+                    .apply()
             }
             Resource.Success(Unit)
         } catch (e: Exception) {
