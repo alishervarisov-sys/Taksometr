@@ -34,6 +34,13 @@ class HistoryViewModel @Inject constructor(
 
     init {
         loadHistory()
+        syncHistoryFromFirestore()
+    }
+
+    private fun syncHistoryFromFirestore() {
+        viewModelScope.launch {
+            deliveryRepository.syncHistoryFromFirestore(userId)
+        }
     }
 
     private fun loadHistory() {

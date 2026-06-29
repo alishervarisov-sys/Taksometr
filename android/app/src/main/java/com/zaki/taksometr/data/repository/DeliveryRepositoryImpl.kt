@@ -407,6 +407,32 @@ class DeliveryRepositoryImpl @Inject constructor(
         }
     }
 
+    override suspend fun syncHistoryFromFirestore(courierId: String): Resource<Unit> {
+        return try {
+            val docs = firestore.collection(Constants.COLLECTION_DELIVERIES)
+                .whereEqualTo("courierId", courierId)
+                .orderBy("createdAt", Query.Direction.DESCENDING)
+                .limit(200)
+                .get()
+                .await()
+
+            docs.documents.forEach { doc ->
+                try {
+                    val delivery = doc.toDeliveryModel()
+                    deliveryDao.insert(DeliveryEntity.fromDelivery(delivery).copy(isSynced = true))
+                } catch (e: Exception) {
+                    android.util.Log.w("DeliveryRepo", "Skipping malformed delivery doc ${doc.id}", e)
+                }
+            }
+
+            android.util.Log.d("DeliveryRepo", "Synced ${docs.size()} deliveries from Firestore for courier $courierId")
+            Resource.Success(Unit)
+        } catch (e: Exception) {
+            android.util.Log.e("DeliveryRepo", "Error syncing history from Firestore", e)
+            Resource.Error("Ошибка загрузки истории: ${e.localizedMessage}")
+        }
+    }
+
     override fun searchDeliveries(phone: String): Flow<List<Delivery>> {
         return deliveryDao.searchByPhone(phone, userId).map { list ->
             list.map { it.toDelivery() }

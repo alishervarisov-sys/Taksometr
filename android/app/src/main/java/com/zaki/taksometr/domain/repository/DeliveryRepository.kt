@@ -23,6 +23,7 @@ interface DeliveryRepository {
     suspend fun syncRemoteActiveDelivery(): Resource<Delivery?>
     suspend fun acceptMarketplaceDelivery(deliveryId: String): Resource<Delivery>
     suspend fun updateMarketplaceDeliveryStage(deliveryId: String, stage: String? = null, waitingAction: String? = null): Resource<Unit>
+    suspend fun syncHistoryFromFirestore(courierId: String): Resource<Unit>
 }
 
 data class TodayStats(
