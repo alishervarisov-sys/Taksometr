@@ -17,6 +17,7 @@ interface CourierStat {
   count: number;
   revenue: number;
   commission: number;
+  distance: number;
 }
 
 interface StatsData {
@@ -126,11 +127,12 @@ const Statistics: React.FC<StatisticsProps> = () => {
 
         const cId = data.courierId || 'unknown';
         if (!courierStats[cId]) {
-          courierStats[cId] = { id: cId, count: 0, revenue: 0, commission: 0, name: data.courierName || 'Неизвестный' };
+          courierStats[cId] = { id: cId, count: 0, revenue: 0, commission: 0, distance: 0, name: data.courierName || 'Неизвестный' };
         }
         courierStats[cId].count++;
         courierStats[cId].revenue += cost;
         courierStats[cId].commission += commission;
+        courierStats[cId].distance += data.distanceMeters || 0;
       });
 
       const topCouriers = Object.values(courierStats)
@@ -266,7 +268,7 @@ const Statistics: React.FC<StatisticsProps> = () => {
       </Grid>
 
       {/* Couriers table with commission */}
-      <Card>
+      <Card sx={{ mb: 3 }}>
         <CardContent>
           <Typography variant="h6" sx={{ mb: 2 }}>Курьеры за период</Typography>
           <TableContainer>
@@ -303,6 +305,52 @@ const Statistics: React.FC<StatisticsProps> = () => {
                 {(!stats?.topCouriers || stats.topCouriers.length === 0) && (
                   <TableRow>
                     <TableCell colSpan={6} align="center">
+                      Нет данных
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        </CardContent>
+      </Card>
+
+      {/* Couriers distance table */}
+      <Card>
+        <CardContent>
+          <Typography variant="h6" sx={{ mb: 2 }}>Пробег курьеров за период</Typography>
+          <TableContainer>
+            <Table>
+              <TableHead>
+                <TableRow>
+                  <TableCell>#</TableCell>
+                  <TableCell>Курьер</TableCell>
+                  <TableCell>Доставки</TableCell>
+                  <TableCell>Общий пробег</TableCell>
+                  <TableCell>Ср. пробег / доставку</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {stats?.topCouriers
+                  ?.slice()
+                  .sort((a, b) => b.distance - a.distance)
+                  .map((courier, index) => (
+                    <TableRow key={courier.id}>
+                      <TableCell>{index + 1}</TableCell>
+                      <TableCell sx={{ fontWeight: 600 }}>{courier.name}</TableCell>
+                      <TableCell>{courier.count}</TableCell>
+                      <TableCell sx={{ fontWeight: 600, color: '#2196F3' }}>
+                        {(courier.distance / 1000).toFixed(2)} км
+                      </TableCell>
+                      <TableCell>
+                        {courier.count > 0 ? `${(courier.distance / 1000 / courier.count).toFixed(2)} км` : '—'}
+                      </TableCell>
+                    </TableRow>
+                  ))
+                }
+                {(!stats?.topCouriers || stats.topCouriers.length === 0) && (
+                  <TableRow>
+                    <TableCell colSpan={5} align="center">
                       Нет данных
                     </TableCell>
                   </TableRow>
