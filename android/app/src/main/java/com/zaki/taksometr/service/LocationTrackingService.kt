@@ -49,6 +49,9 @@ class LocationTrackingService : Service() {
     private var startTime: Long = 0L
     private var clientPhone: String = ""
     private var widgetTimerJob: Job? = null
+    private var currentSpeedKmh: Float = 0f
+    private var maxSpeedKmh: Float = 0f
+    private var lastDeliverySpeedUpdate = 0L
 
     private val deliveryId: String
         get() = prefs.getString(Constants.PREF_ACTIVE_DELIVERY_ID, "") ?: ""
@@ -113,6 +116,11 @@ class LocationTrackingService : Service() {
         locationCallback = object : LocationCallback() {
             override fun onLocationResult(result: LocationResult) {
                 result.lastLocation?.let { location ->
+                    if (location.hasSpeed() && location.speed >= 0f) {
+                        val speedKmh = location.speed * 3.6f
+                        currentSpeedKmh = speedKmh
+                        if (speedKmh > maxSpeedKmh) maxSpeedKmh = speedKmh
+                    }
                     val newPoint = GeoPoint(
                         latitude = location.latitude,
                         longitude = location.longitude,
@@ -178,6 +186,7 @@ class LocationTrackingService : Service() {
             }
 
             updateCourierLocationInFirestore(newPoint)
+            updateDeliverySpeedInFirestore(currentDeliveryId)
         }
 
         val distanceText = LocationUtils.formatDistance(totalDistance)
@@ -187,6 +196,24 @@ class LocationTrackingService : Service() {
     }
 
     private var lastFirestoreUpdate = 0L
+
+    private suspend fun updateDeliverySpeedInFirestore(currentDeliveryId: String) {
+        val now = System.currentTimeMillis()
+        if (now - lastDeliverySpeedUpdate < 10000) return
+        lastDeliverySpeedUpdate = now
+        if (currentDeliveryId.isEmpty()) return
+        try {
+            firestore.collection(Constants.COLLECTION_DELIVERIES)
+                .document(currentDeliveryId)
+                .update(
+                    mapOf(
+                        "currentSpeedKmh" to currentSpeedKmh,
+                        "maxSpeedKmh" to maxSpeedKmh
+                    )
+                )
+                .await()
+        } catch (_: Exception) {}
+    }
 
     private suspend fun updateCourierLocationInFirestore(point: GeoPoint) {
         val now = System.currentTimeMillis()
@@ -265,6 +292,9 @@ class LocationTrackingService : Service() {
         totalDistance = 0.0
         startTime = 0L
         clientPhone = ""
+        currentSpeedKmh = 0f
+        maxSpeedKmh = 0f
+        lastDeliverySpeedUpdate = 0L
         releaseWakeLock()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()

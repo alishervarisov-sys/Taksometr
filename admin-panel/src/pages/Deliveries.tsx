@@ -32,6 +32,8 @@ interface Delivery {
   courierPhone?: string;
   pickup?: { address?: string; latitude: number; longitude: number };
   destination?: { address?: string; latitude: number; longitude: number };
+  currentSpeedKmh?: number;
+  maxSpeedKmh?: number;
 }
 
 interface CourierOption {
@@ -313,6 +315,13 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
     const mins = Math.floor(((end || Date.now()) - start) / 60000);
     return mins >= 60 ? `${Math.floor(mins / 60)} ч ${mins % 60} мин` : `${mins} мин`;
   };
+  const formatSpeed = (distanceMeters: number, startTime: number, endTime: number | null) => {
+    if (!distanceMeters || !startTime || !endTime) return '—';
+    const durationMs = endTime - startTime;
+    if (durationMs <= 0) return '—';
+    const speedKmh = (distanceMeters / 1000) / (durationMs / 3600000);
+    return `${speedKmh.toFixed(1)} км/ч`;
+  };
   const getMapCenter = (route: Array<{ latitude: number; longitude: number }>) => {
     if (!route || route.length === 0) return { lat: 38.5598, lng: 68.7740 };
     const mid = route[Math.floor(route.length / 2)];
@@ -399,7 +408,7 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
           <Table>
             <TableHead>
               <TableRow>
-                <TableCell>Дата</TableCell><TableCell>Курьер</TableCell><TableCell>Клиент</TableCell><TableCell>Тип</TableCell><TableCell>Расстояние</TableCell><TableCell>Стоимость</TableCell><TableCell>Статус</TableCell>
+                <TableCell>Дата</TableCell><TableCell>Курьер</TableCell><TableCell>Клиент</TableCell><TableCell>Тип</TableCell><TableCell>Расстояние</TableCell><TableCell>Скорость</TableCell><TableCell>Стоимость</TableCell><TableCell>Статус</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -410,6 +419,7 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
                   <TableCell>{delivery.clientPhone}</TableCell>
                   <TableCell>{delivery.orderKind === 'MARKETPLACE' ? 'Админ заказ' : 'Обычный'}</TableCell>
                   <TableCell>{formatDistance(delivery.distanceMeters)}</TableCell>
+                  <TableCell>{formatSpeed(delivery.distanceMeters, delivery.startTime, delivery.endTime)}</TableCell>
                   <TableCell>{formatCost(delivery.cost || 0)}</TableCell>
                   <TableCell>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -505,6 +515,11 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
                 <Grid item xs={3}><Typography variant="body2" color="text.secondary">Стоимость</Typography><Typography fontWeight={600} color="green">{formatCost(selectedDelivery.cost || 0)}</Typography></Grid>
                 <Grid item xs={3}><Typography variant="body2" color="text.secondary">Комиссия</Typography><Typography fontWeight={600} color="orange">{formatCost(selectedDelivery.commission || 0)}</Typography></Grid>
                 <Grid item xs={3}><Typography variant="body2" color="text.secondary">Ожидание</Typography><Typography fontWeight={600}>{selectedDelivery.waitingMinutes ? `${Math.ceil(selectedDelivery.waitingMinutes)} мин (${formatCost(selectedDelivery.waitingCost || 0)})` : '—'}</Typography></Grid>
+                <Grid item xs={3}><Typography variant="body2" color="text.secondary">Ср. скорость</Typography><Typography fontWeight={600} color="primary">{formatSpeed(selectedDelivery.distanceMeters, selectedDelivery.startTime, selectedDelivery.endTime)}</Typography></Grid>
+                <Grid item xs={3}><Typography variant="body2" color="text.secondary">Макс. скорость</Typography><Typography fontWeight={600} color="error">{selectedDelivery.maxSpeedKmh != null ? `${selectedDelivery.maxSpeedKmh.toFixed(1)} км/ч` : '—'}</Typography></Grid>
+                {selectedDelivery.status === 'IN_PROGRESS' && selectedDelivery.currentSpeedKmh != null && (
+                  <Grid item xs={3}><Typography variant="body2" color="text.secondary">Тек. скорость</Typography><Typography fontWeight={600} color="success.main">{`${selectedDelivery.currentSpeedKmh.toFixed(1)} км/ч`}</Typography></Grid>
+                )}
               </Grid>
             </Box>
           )}

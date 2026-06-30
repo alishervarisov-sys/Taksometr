@@ -25,7 +25,9 @@ data class Delivery(
     val destinationLng: Double? = null,
     val waitingMinutes: Double = 0.0,
     val waitingStartedAt: Long? = null,
-    val courierPhone: String = ""
+    val courierPhone: String = "",
+    val currentSpeedKmh: Float? = null,
+    val maxSpeedKmh: Float? = null
 )
 
 enum class DeliveryStatus {
