@@ -461,6 +461,10 @@ export const createDelivery = functions.https.onCall(async (data, context) => {
     startSmsText += ` Навъи хидмат: ${deliveryTypeName}. Нархи қатъӣ: ${formatCostForSms(fixedPrice)} сомонӣ.`;
   }
 
+  // Append real-time tracking link so the client can follow the courier on Google Maps
+  const trackingUrl = `https://zakitaksometr.web.app/track?d=${deliveryRef.id}`;
+  startSmsText += ` Расонандаро дар харита пайгирӣ кунед: ${trackingUrl}`;
+
   await sendSms(clientPhone, startSmsText);
 
   return {
