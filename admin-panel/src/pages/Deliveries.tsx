@@ -408,7 +408,7 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
           <Table>
             <TableHead>
               <TableRow>
-                <TableCell>Дата</TableCell><TableCell>Курьер</TableCell><TableCell>Клиент</TableCell><TableCell>Тип</TableCell><TableCell>Расстояние</TableCell><TableCell>Скорость</TableCell><TableCell>Стоимость</TableCell><TableCell>Статус</TableCell>
+                <TableCell>Дата</TableCell><TableCell>Курьер</TableCell><TableCell>Клиент</TableCell><TableCell>Тип</TableCell><TableCell>Расстояние</TableCell><TableCell>Скорость</TableCell><TableCell>Длительность</TableCell><TableCell>Стоимость</TableCell><TableCell>Статус</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -420,6 +420,7 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
                   <TableCell>{delivery.orderKind === 'MARKETPLACE' ? 'Админ заказ' : 'Обычный'}</TableCell>
                   <TableCell>{formatDistance(delivery.distanceMeters)}</TableCell>
                   <TableCell>{formatSpeed(delivery.distanceMeters, delivery.startTime, delivery.endTime)}</TableCell>
+                  <TableCell>{delivery.status === 'COMPLETED' && delivery.startTime && delivery.endTime ? formatDuration(delivery.startTime, delivery.endTime) : '—'}</TableCell>
                   <TableCell>{formatCost(delivery.cost || 0)}</TableCell>
                   <TableCell>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
