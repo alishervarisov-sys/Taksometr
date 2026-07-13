@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import {
   Grid, Card, CardContent, Typography, Box, Table, TableBody,
   TableCell, TableContainer, TableHead, TableRow, Button, Avatar,
-  Chip
+  Chip, TextField, Stack
 } from '@mui/material';
 import {
   People as PeopleIcon,
@@ -34,7 +34,7 @@ interface CourierStats {
   commission: number;
 }
 
-type LeaderboardPeriod = 'week' | 'month' | 'year' | 'all';
+type LeaderboardPeriod = 'week' | 'month' | 'year' | 'all' | 'custom';
 
 const Dashboard: React.FC<DashboardProps> = ({ adminId }) => {
   const [stats, setStats] = useState<Stats>({
@@ -47,6 +47,8 @@ const Dashboard: React.FC<DashboardProps> = ({ adminId }) => {
   const [leaderboard, setLeaderboard] = useState<CourierStats[]>([]);
   const [leaderboardPeriod, setLeaderboardPeriod] = useState<LeaderboardPeriod>('month');
   const [loadingLeaderboard, setLoadingLeaderboard] = useState(false);
+  const [customStart, setCustomStart] = useState('');
+  const [customEnd, setCustomEnd] = useState('');
 
   useEffect(() => {
     loadStats();
@@ -96,6 +98,17 @@ const Dashboard: React.FC<DashboardProps> = ({ adminId }) => {
       case 'all':
         start = 0;
         break;
+      case 'custom': {
+        if (customStart && customEnd) {
+          const s = new Date(customStart);
+          const e = new Date(customEnd);
+          const startTs = new Date(s.getFullYear(), s.getMonth(), s.getDate()).getTime();
+          const endTs = new Date(e.getFullYear(), e.getMonth(), e.getDate(), 23, 59, 59, 999).getTime();
+          return { start: startTs, end: endTs };
+        }
+        // Если даты не выбраны — по умолчанию последние сутки
+        return { start: now - 86400000, end: now };
+      }
     }
     
     return { start, end: now };
@@ -167,7 +180,18 @@ const Dashboard: React.FC<DashboardProps> = ({ adminId }) => {
 
   const handlePeriodChange = (period: LeaderboardPeriod) => {
     setLeaderboardPeriod(period);
+    // Для произвольного периода ждём выбор дат и нажатие «Показать»
+    if (period === 'custom') {
+      if (customStart && customEnd) loadLeaderboard('custom');
+      return;
+    }
     loadLeaderboard(period);
+  };
+
+  const handleCustomSearch = () => {
+    if (customStart && customEnd) {
+      loadLeaderboard('custom');
+    }
   };
 
   const getMedalColor = (place: number): string => {
@@ -280,8 +304,49 @@ const Dashboard: React.FC<DashboardProps> = ({ adminId }) => {
               >
                 Всё время
               </Button>
+              <Button
+                variant={leaderboardPeriod === 'custom' ? 'contained' : 'outlined'}
+                size="small"
+                onClick={() => handlePeriodChange('custom')}
+              >
+                Период
+              </Button>
             </Box>
           </Box>
+
+          {leaderboardPeriod === 'custom' && (
+            <Stack
+              direction={{ xs: 'column', sm: 'row' }}
+              spacing={2}
+              alignItems={{ xs: 'stretch', sm: 'center' }}
+              sx={{ mb: 3 }}
+            >
+              <TextField
+                type="date"
+                label="От"
+                size="small"
+                InputLabelProps={{ shrink: true }}
+                value={customStart}
+                onChange={(e) => setCustomStart(e.target.value)}
+              />
+              <TextField
+                type="date"
+                label="До"
+                size="small"
+                InputLabelProps={{ shrink: true }}
+                value={customEnd}
+                onChange={(e) => setCustomEnd(e.target.value)}
+              />
+              <Button
+                variant="contained"
+                size="small"
+                onClick={handleCustomSearch}
+                disabled={!customStart || !customEnd}
+              >
+                Показать
+              </Button>
+            </Stack>
+          )}
 
           {loadingLeaderboard ? (
             <Typography align="center" color="text.secondary" sx={{ py: 4 }}>
