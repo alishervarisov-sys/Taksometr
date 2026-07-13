@@ -33,6 +33,9 @@ object LocationUtils {
         if (points.size < 2) return 0.0
         var totalDistance = 0.0
         for (i in 1 until points.size) {
+            // Skip the segment ending at a gap point (resume after pause):
+            // that stretch was travelled while serving another order.
+            if (points[i].isGap) continue
             totalDistance += haversineDistance(points[i - 1], points[i])
         }
         return totalDistance

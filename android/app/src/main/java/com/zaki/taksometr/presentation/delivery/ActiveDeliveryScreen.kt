@@ -9,6 +9,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -103,6 +104,129 @@ fun ActiveDeliveryScreen(
                             state = MarkerState(position = LatLng(it.latitude, it.longitude)),
                             title = str(Strings.delivery)
                         )
+                    }
+                }
+            }
+
+            // Paused order (the other active order) — tap to resume its meter.
+            state.pausedDelivery?.let { paused ->
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp)
+                        .padding(top = 12.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = AccentOrange.copy(alpha = 0.12f)),
+                    border = BorderStroke(1.dp, AccentOrange)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.PauseCircle,
+                            contentDescription = null,
+                            tint = AccentOrange,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "${str(Strings.pausedOrder)} · ${str(Strings.onPause)}",
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = AccentOrange
+                            )
+                            if (paused.clientPhone.isNotBlank()) {
+                                Text(
+                                    text = paused.clientPhone,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                                )
+                            }
+                        }
+                        Button(
+                            onClick = { viewModel.switchTo(paused.id) },
+                            enabled = !state.isSwitching,
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = AccentOrange)
+                        ) {
+                            Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(str(Strings.resumeOrder))
+                        }
+                    }
+                }
+            }
+
+            // New order offer — accept as a second (concurrent) order.
+            if (state.canAcceptMore) {
+                state.pendingOrder?.let { pending ->
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp)
+                            .padding(top = 12.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF8E1)),
+                        border = BorderStroke(1.5.dp, Color(0xFFFFB300))
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    Icons.Default.LocalShipping,
+                                    contentDescription = null,
+                                    tint = Color(0xFFE65100),
+                                    modifier = Modifier.size(22.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = str(Strings.newOrderAvailable),
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFFE65100)
+                                )
+                            }
+                            if (pending.pickupAddress.isNotBlank()) {
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text(text = "Откуда: ${pending.pickupAddress}", style = MaterialTheme.typography.bodySmall)
+                            }
+                            if (pending.destinationAddress.isNotBlank()) {
+                                Text(text = "Куда: ${pending.destinationAddress}", style = MaterialTheme.typography.bodySmall)
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = str(Strings.secondOrderHint),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                            )
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Button(
+                                onClick = { viewModel.acceptPendingOrder(pending.id) },
+                                enabled = !state.isAcceptingOrder,
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(10.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE65100))
+                            ) {
+                                if (state.isAcceptingOrder) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(18.dp),
+                                        strokeWidth = 2.dp,
+                                        color = MaterialTheme.colorScheme.onPrimary
+                                    )
+                                } else {
+                                    Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(str(Strings.acceptOrder))
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -238,7 +362,7 @@ fun ActiveDeliveryScreen(
                         if (nextStageInfo != null) {
                             Button(
                                 onClick = { viewModel.updateMarketplaceStage(stage = nextStageInfo.first) },
-                                enabled = !state.isUpdatingStage,
+                                enabled = !state.isUpdatingStage && state.delivery?.isPaused != true,
                                 modifier = Modifier.fillMaxWidth(),
                                 shape = RoundedCornerShape(12.dp)
                             ) {
@@ -309,9 +433,12 @@ fun ActiveDeliveryScreen(
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    // Waiting button
+                    val isPaused = state.delivery?.isPaused == true
+
+                    // Waiting button (disabled while the order is paused)
                     Button(
                         onClick = { viewModel.toggleWaiting() },
+                        enabled = !isPaused,
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(12.dp),
                         colors = ButtonDefaults.buttonColors(
@@ -331,6 +458,54 @@ fun ActiveDeliveryScreen(
                             text = if (state.isWaiting) str(Strings.stopWaiting) else str(Strings.startWaiting),
                             style = MaterialTheme.typography.bodyMedium
                         )
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Pause / Resume the current order's meter
+                    if (isPaused) {
+                        Button(
+                            onClick = { viewModel.resumeCurrent() },
+                            enabled = !state.isSwitching,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = AccentGreen)
+                        ) {
+                            Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(str(Strings.resumeOrder), style = MaterialTheme.typography.bodyMedium)
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.PauseCircle,
+                                contentDescription = null,
+                                tint = AccentOrange,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = str(Strings.pausedNote),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = AccentOrange
+                            )
+                        }
+                    } else {
+                        OutlinedButton(
+                            onClick = { viewModel.pauseCurrent() },
+                            enabled = !state.isSwitching,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = AccentOrange)
+                        ) {
+                            Icon(Icons.Default.PauseCircle, contentDescription = null, modifier = Modifier.size(20.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(str(Strings.pauseOrder), style = MaterialTheme.typography.bodyMedium)
+                        }
                     }
 
                     Spacer(modifier = Modifier.height(16.dp))

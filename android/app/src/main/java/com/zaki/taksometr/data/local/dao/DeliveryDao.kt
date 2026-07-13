@@ -28,6 +28,12 @@ interface DeliveryDao {
     @Query("SELECT * FROM deliveries WHERE courierId = :courierId AND status = 'IN_PROGRESS' LIMIT 1")
     suspend fun getActiveDeliverySync(courierId: String): DeliveryEntity?
 
+    @Query("SELECT * FROM deliveries WHERE courierId = :courierId AND status = 'IN_PROGRESS' ORDER BY startTime ASC")
+    fun getActiveDeliveries(courierId: String): Flow<List<DeliveryEntity>>
+
+    @Query("SELECT * FROM deliveries WHERE courierId = :courierId AND status = 'IN_PROGRESS' ORDER BY startTime ASC")
+    suspend fun getActiveDeliveriesSync(courierId: String): List<DeliveryEntity>
+
     @Query("SELECT * FROM deliveries WHERE courierId = :courierId ORDER BY startTime DESC")
     fun getDeliveriesByCourier(courierId: String): Flow<List<DeliveryEntity>>
 

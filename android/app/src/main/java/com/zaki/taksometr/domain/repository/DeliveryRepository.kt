@@ -11,6 +11,19 @@ interface DeliveryRepository {
     suspend fun cancelDelivery(deliveryId: String): Resource<Unit>
     suspend fun getFixedDeliveryTypes(): Resource<Map<String, Double>>
     fun getActiveDelivery(): Flow<Delivery?>
+    /** All of the courier's IN_PROGRESS deliveries (up to the concurrency limit). */
+    fun getActiveDeliveries(): Flow<List<Delivery>>
+    /** Id of the delivery whose meter is currently running (others are paused). */
+    fun getCurrentActiveDeliveryId(): String
+    /**
+     * Makes [deliveryId] the current (running) delivery and freezes the meter of
+     * the previously-current one (accumulates its running waiting time).
+     */
+    suspend fun setCurrentActiveDelivery(deliveryId: String)
+    /** Persists waiting start/stop for a specific delivery (accumulates on stop). */
+    suspend fun setDeliveryWaiting(deliveryId: String, waiting: Boolean)
+    /** Explicitly pauses/resumes a delivery's meter (freezes distance & waiting). */
+    suspend fun setDeliveryPaused(deliveryId: String, paused: Boolean)
     fun getDeliveryHistory(courierId: String): Flow<List<Delivery>>
     fun searchDeliveries(phone: String): Flow<List<Delivery>>
     fun getDeliveriesByDateRange(startDate: Long, endDate: Long): Flow<List<Delivery>>

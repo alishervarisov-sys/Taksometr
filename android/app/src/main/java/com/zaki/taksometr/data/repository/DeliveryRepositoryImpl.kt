@@ -80,10 +80,9 @@ class DeliveryRepositoryImpl @Inject constructor(
             // Save locally
             deliveryDao.insert(DeliveryEntity.fromDelivery(delivery))
 
-            // Save active delivery ID
-            prefs.edit()
-                .putString(Constants.PREF_ACTIVE_DELIVERY_ID, deliveryId)
-                .apply()
+            // Make this the current (running) delivery; freezes the meter of the
+            // previously-current one if the courier already had an active order.
+            makeCurrent(deliveryId)
 
             Resource.Success(delivery)
         } catch (e: Exception) {
@@ -158,8 +157,8 @@ class DeliveryRepositoryImpl @Inject constructor(
                             ))
                         }
                         
-                        // Clear active delivery
-                        prefs.edit().remove(Constants.PREF_ACTIVE_DELIVERY_ID).apply()
+                        // Switch to remaining active (paused) delivery if any, else clear.
+                        switchToRemainingActiveOrClear(deliveryId)
                         
                         val delivery = Delivery(
                             id = deliveryId,
@@ -191,9 +190,13 @@ class DeliveryRepositoryImpl @Inject constructor(
             val points = routePointDao.getPointsByDeliveryIdSync(deliveryId)
             android.util.Log.d("DeliveryRepo", "Route points count: ${points.size}")
 
-            // For MARKETPLACE orders only count route from ON_THE_WAY stage
-            val isMarketplace = deliveryDao.getById(deliveryId)?.orderKind == "MARKETPLACE"
-            val onTheWayAt = prefs.getLong(Constants.PREF_ON_THE_WAY_STARTED_AT, 0L)
+            // For MARKETPLACE orders only count route from ON_THE_WAY stage.
+            // Prefer the per-delivery timestamp; fall back to the legacy global
+            // pref for orders that reached ON_THE_WAY before this update.
+            val completingEntity = deliveryDao.getById(deliveryId)
+            val isMarketplace = completingEntity?.orderKind == "MARKETPLACE"
+            val onTheWayAt = completingEntity?.onTheWayStartedAt
+                ?: prefs.getLong(Constants.PREF_ON_THE_WAY_STARTED_AT, 0L)
             val routePoints = if (isMarketplace && onTheWayAt > 0) {
                 points.filter { it.timestamp >= onTheWayAt }
             } else {
@@ -206,7 +209,9 @@ class DeliveryRepositoryImpl @Inject constructor(
                     "latitude" to point.latitude,
                     "longitude" to point.longitude,
                     "timestamp" to point.timestamp,
-                    "accuracy" to point.accuracy
+                    "accuracy" to point.accuracy,
+                    // Skip the segment ending at a resume/gap point on the server too.
+                    "gap" to point.isGap
                 )
             }
 
@@ -250,11 +255,9 @@ class DeliveryRepositoryImpl @Inject constructor(
             // Update local DB
             deliveryDao.update(DeliveryEntity.fromDelivery(delivery).copy(isSynced = true))
 
-            // Clear active delivery
-            prefs.edit()
-                .remove(Constants.PREF_ACTIVE_DELIVERY_ID)
-                .remove(Constants.PREF_ON_THE_WAY_STARTED_AT)
-                .apply()
+            // If the courier still has another active (paused) delivery, make it
+            // the current one; otherwise clear the active-delivery prefs.
+            switchToRemainingActiveOrClear(deliveryId)
 
             android.util.Log.d("DeliveryRepo", "=== COMPLETE DELIVERY SUCCESS ===")
             Resource.Success(delivery)
@@ -291,10 +294,8 @@ class DeliveryRepositoryImpl @Inject constructor(
 
             // Clear route points
             routePointDao.deleteByDeliveryId(deliveryId)
-            prefs.edit()
-                .remove(Constants.PREF_ACTIVE_DELIVERY_ID)
-                .remove(Constants.PREF_ON_THE_WAY_STARTED_AT)
-                .apply()
+            // Switch to the remaining active (paused) delivery if any, else clear.
+            switchToRemainingActiveOrClear(deliveryId)
 
             android.util.Log.d("DeliveryRepo", "=== CANCEL DELIVERY SUCCESS ===")
             Resource.Success(Unit)
@@ -306,30 +307,172 @@ class DeliveryRepositoryImpl @Inject constructor(
     }
 
     override fun getActiveDelivery(): Flow<Delivery?> {
-        return deliveryDao.getActiveDelivery(userId).map { it?.toDelivery() }
+        // Return the delivery whose meter is currently running (the one stored in
+        // PREF_ACTIVE_DELIVERY_ID). Fall back to the first active one if the pref
+        // is missing/stale (e.g. after completing the previous current delivery).
+        return deliveryDao.getActiveDeliveries(userId).map { list ->
+            val currentId = prefs.getString(Constants.PREF_ACTIVE_DELIVERY_ID, "") ?: ""
+            val current = list.firstOrNull { it.id == currentId } ?: list.firstOrNull()
+            current?.toDelivery()
+        }
+    }
+
+    override fun getActiveDeliveries(): Flow<List<Delivery>> {
+        return deliveryDao.getActiveDeliveries(userId).map { list -> list.map { it.toDelivery() } }
+    }
+
+    override fun getCurrentActiveDeliveryId(): String {
+        return prefs.getString(Constants.PREF_ACTIVE_DELIVERY_ID, "") ?: ""
+    }
+
+    override suspend fun setCurrentActiveDelivery(deliveryId: String) {
+        makeCurrent(deliveryId)
+    }
+
+    override suspend fun setDeliveryPaused(deliveryId: String, paused: Boolean) {
+        val entity = deliveryDao.getById(deliveryId) ?: return
+        // When pausing, also freeze any running waiting timer (accumulate it).
+        if (paused && entity.waitingStartedAt != null) {
+            val add = (System.currentTimeMillis() - entity.waitingStartedAt).coerceAtLeast(0L)
+            deliveryDao.update(
+                entity.copy(
+                    isPaused = true,
+                    waitingAccumulatedMs = entity.waitingAccumulatedMs + add,
+                    waitingStartedAt = null
+                )
+            )
+        } else {
+            deliveryDao.update(entity.copy(isPaused = paused))
+        }
+    }
+
+    override suspend fun setDeliveryWaiting(deliveryId: String, waiting: Boolean) {
+        val entity = deliveryDao.getById(deliveryId) ?: return
+        val now = System.currentTimeMillis()
+        if (waiting) {
+            // Start waiting (only if not already running).
+            if (entity.waitingStartedAt == null) {
+                deliveryDao.update(entity.copy(waitingStartedAt = now))
+            }
+        } else {
+            // Stop waiting: accumulate the running interval into the frozen total.
+            val startedAt = entity.waitingStartedAt
+            if (startedAt != null) {
+                val add = (now - startedAt).coerceAtLeast(0L)
+                deliveryDao.update(
+                    entity.copy(
+                        waitingAccumulatedMs = entity.waitingAccumulatedMs + add,
+                        waitingStartedAt = null
+                    )
+                )
+            }
+        }
+    }
+
+    /**
+     * Sets [deliveryId] as the current running delivery and freezes the meter of
+     * the previously-current delivery by stopping (accumulating) its running
+     * waiting time. Also keeps the legacy global ON_THE_WAY pref in sync with the
+     * new current delivery for backward compatibility.
+     */
+    private suspend fun makeCurrent(deliveryId: String) {
+        val previousId = prefs.getString(Constants.PREF_ACTIVE_DELIVERY_ID, "") ?: ""
+        if (previousId.isNotEmpty() && previousId != deliveryId) {
+            val previous = deliveryDao.getById(previousId)
+            if (previous != null && previous.status == DeliveryStatus.IN_PROGRESS.name) {
+                // Freeze waiting on the delivery being paused.
+                val startedAt = previous.waitingStartedAt
+                if (startedAt != null) {
+                    val add = (System.currentTimeMillis() - startedAt).coerceAtLeast(0L)
+                    deliveryDao.update(
+                        previous.copy(
+                            waitingAccumulatedMs = previous.waitingAccumulatedMs + add,
+                            waitingStartedAt = null
+                        )
+                    )
+                    // For marketplace orders, tell the server to stop the waiting timer too.
+                    if (previous.orderKind == "MARKETPLACE") {
+                        runCatching { updateMarketplaceDeliveryStage(previousId, null, "STOP") }
+                    }
+                }
+            }
+        }
+
+        val current = deliveryDao.getById(deliveryId)
+        // A delivery that becomes current runs — clear any explicit pause flag.
+        if (current != null && current.isPaused) {
+            deliveryDao.update(current.copy(isPaused = false))
+        }
+        val editor = prefs.edit().putString(Constants.PREF_ACTIVE_DELIVERY_ID, deliveryId)
+        // Keep the legacy global pref aligned with the new current delivery so
+        // marketplace distance filtering stays correct when switching.
+        val onTheWay = current?.onTheWayStartedAt
+        if (onTheWay != null && onTheWay > 0) {
+            editor.putLong(Constants.PREF_ON_THE_WAY_STARTED_AT, onTheWay)
+        } else {
+            editor.remove(Constants.PREF_ON_THE_WAY_STARTED_AT)
+        }
+        editor.apply()
+    }
+
+    /**
+     * After a delivery is completed/cancelled, promote any remaining IN_PROGRESS
+     * delivery to be the current (running) one, or clear the active prefs when the
+     * courier has no more active deliveries.
+     */
+    private suspend fun switchToRemainingActiveOrClear(finishedDeliveryId: String) {
+        val remaining = deliveryDao.getActiveDeliveriesSync(userId)
+            .firstOrNull { it.id != finishedDeliveryId }
+        if (remaining != null) {
+            makeCurrent(remaining.id)
+        } else {
+            prefs.edit()
+                .remove(Constants.PREF_ACTIVE_DELIVERY_ID)
+                .remove(Constants.PREF_ON_THE_WAY_STARTED_AT)
+                .apply()
+        }
     }
 
     override suspend fun syncRemoteActiveDelivery(): Resource<Delivery?> {
         return try {
+            // Fetch up to the concurrency limit of active deliveries and mirror
+            // them locally so both a current and a paused order survive an app
+            // restart / re-login.
             val snapshot = firestore.collection(Constants.COLLECTION_DELIVERIES)
                 .whereEqualTo("courierId", userId)
                 .whereEqualTo("status", "IN_PROGRESS")
-                .limit(1)
+                .limit(Constants.MAX_CONCURRENT_DELIVERIES.toLong())
                 .get()
                 .await()
 
-            val doc = snapshot.documents.firstOrNull()
-            if (doc == null) {
+            val remote = snapshot.documents.mapNotNull { runCatching { it.toDeliveryModel() }.getOrNull() }
+            if (remote.isEmpty()) {
                 return Resource.Success(null)
             }
 
-            val delivery = doc.toDeliveryModel()
-            deliveryDao.insert(DeliveryEntity.fromDelivery(delivery).copy(isSynced = true))
-            prefs.edit()
-                .putString(Constants.PREF_ACTIVE_DELIVERY_ID, delivery.id)
-                .remove(Constants.PREF_PENDING_MARKETPLACE_DELIVERY_ID)
-                .apply()
-            Resource.Success(delivery)
+            remote.forEach { delivery ->
+                // Preserve locally-tracked pause/meter fields that don't live on
+                // the server document.
+                val local = deliveryDao.getById(delivery.id)
+                val merged = DeliveryEntity.fromDelivery(delivery).copy(
+                    isSynced = true,
+                    waitingAccumulatedMs = local?.waitingAccumulatedMs ?: 0L,
+                    onTheWayStartedAt = local?.onTheWayStartedAt ?: delivery.onTheWayStartedAt
+                )
+                deliveryDao.insert(merged)
+            }
+            prefs.edit().remove(Constants.PREF_PENDING_MARKETPLACE_DELIVERY_ID).apply()
+
+            // Only set the current delivery if none is validly set yet, so we don't
+            // override the courier's current selection when two orders are active.
+            val currentId = prefs.getString(Constants.PREF_ACTIVE_DELIVERY_ID, "") ?: ""
+            val currentStillActive = remote.any { it.id == currentId }
+            if (!currentStillActive) {
+                makeCurrent(remote.first().id)
+            }
+
+            val current = remote.firstOrNull { it.id == getCurrentActiveDeliveryId() } ?: remote.first()
+            Resource.Success(current)
         } catch (e: Exception) {
             Resource.Error("Ошибка синхронизации заказа: ${e.localizedMessage}")
         }
@@ -353,9 +496,11 @@ class DeliveryRepositoryImpl @Inject constructor(
 
             deliveryDao.insert(DeliveryEntity.fromDelivery(delivery).copy(isSynced = true))
             prefs.edit()
-                .putString(Constants.PREF_ACTIVE_DELIVERY_ID, delivery.id)
                 .remove(Constants.PREF_PENDING_MARKETPLACE_DELIVERY_ID)
                 .apply()
+            // Make the newly accepted order the current one; this pauses (freezes)
+            // the previously-current delivery if the courier already had one.
+            makeCurrent(delivery.id)
 
             Resource.Success(delivery)
         } catch (e: Exception) {
@@ -400,20 +545,36 @@ class DeliveryRepositoryImpl @Inject constructor(
                 .call(data)
                 .await()
 
+            val now = System.currentTimeMillis()
             val current = deliveryDao.getById(deliveryId)
             current?.let {
+                // Maintain persisted waiting so it survives pausing/switching.
+                var accumulated = it.waitingAccumulatedMs
+                var waitingStartedAt = it.waitingStartedAt
+                when (waitingAction) {
+                    "START" -> if (waitingStartedAt == null) waitingStartedAt = now
+                    "STOP" -> if (waitingStartedAt != null) {
+                        accumulated += (now - waitingStartedAt).coerceAtLeast(0L)
+                        waitingStartedAt = null
+                    }
+                }
+                val onTheWayStartedAt = if (stage == "ON_THE_WAY" && it.onTheWayStartedAt == null) {
+                    now
+                } else {
+                    it.onTheWayStartedAt
+                }
                 deliveryDao.update(it.copy(
                     adminOrderStage = stage ?: it.adminOrderStage,
-                    waitingStartedAt = when (waitingAction) {
-                        "START" -> System.currentTimeMillis()
-                        "STOP" -> null
-                        else -> it.waitingStartedAt
-                    }
+                    waitingStartedAt = waitingStartedAt,
+                    waitingAccumulatedMs = accumulated,
+                    onTheWayStartedAt = onTheWayStartedAt
                 ))
             }
             if (stage == "ON_THE_WAY") {
+                // Keep the legacy global pref for backward compatibility (used as a
+                // fallback for deliveries that reached ON_THE_WAY before this update).
                 prefs.edit()
-                    .putLong(Constants.PREF_ON_THE_WAY_STARTED_AT, System.currentTimeMillis())
+                    .putLong(Constants.PREF_ON_THE_WAY_STARTED_AT, now)
                     .apply()
             }
             Resource.Success(Unit)

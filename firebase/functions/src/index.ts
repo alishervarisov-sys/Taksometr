@@ -159,9 +159,19 @@ function toRad(deg: number): number {
   return deg * (Math.PI / 180);
 }
 
-function calculateRouteDistance(route: Array<{latitude: number; longitude: number}>): number {
+// Maximum number of deliveries a courier may have IN_PROGRESS at once. One is
+// the "current" (meter running) order; the rest are paused. Keep in sync with
+// the Android app's Constants.MAX_CONCURRENT_DELIVERIES.
+const MAX_CONCURRENT_DELIVERIES = 2;
+
+function calculateRouteDistance(
+  route: Array<{latitude: number; longitude: number; gap?: boolean}>
+): number {
   let totalDistance = 0;
   for (let i = 1; i < route.length; i++) {
+    // Skip the segment ending at a "gap" point (recorded when a paused delivery
+    // is resumed) so travel done while serving another order isn't counted.
+    if (route[i] && route[i].gap) continue;
     totalDistance += haversineDistance(
       route[i - 1].latitude, route[i - 1].longitude,
       route[i].latitude, route[i].longitude
@@ -370,10 +380,10 @@ export const createDelivery = functions.https.onCall(async (data, context) => {
     .where("status", "==", "IN_PROGRESS")
     .get();
 
-  if (!activeDeliveries.empty) {
+  if (activeDeliveries.size >= MAX_CONCURRENT_DELIVERIES) {
     throw new functions.https.HttpsError(
       "already-exists",
-      "Courier already has an active delivery"
+      "Courier already has the maximum number of active deliveries"
     );
   }
 
@@ -905,8 +915,11 @@ export const acceptMarketplaceDelivery = functions.https.onCall(async (data, con
       .where("courierId", "==", courierId)
       .where("status", "==", "IN_PROGRESS")
       .get();
-    if (!activeDeliveries.empty) {
-      throw new functions.https.HttpsError("already-exists", "Courier already has an active delivery");
+    if (activeDeliveries.size >= MAX_CONCURRENT_DELIVERIES) {
+      throw new functions.https.HttpsError(
+        "already-exists",
+        "Courier already has the maximum number of active deliveries"
+      );
     }
 
     const activeChains = await db.collection("delivery_chains")

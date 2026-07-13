@@ -34,6 +34,7 @@ data class HomeState(
     val user: User? = null,
     val todayStats: TodayStats = TodayStats(),
     val activeDelivery: Delivery? = null,
+    val activeCount: Int = 0,
     val pendingMarketplaceOrders: List<PendingMarketplaceOrder> = emptyList(),
     val isAcceptingMarketplaceOrder: Boolean = false,
     val clientPhone: String = "",
@@ -122,11 +123,13 @@ class HomeViewModel @Inject constructor(
                     android.util.Log.e("HomeViewModel", "Pending orders listener error", error)
                     return@addSnapshotListener
                 }
-                if (_state.value.activeDelivery != null) {
+                if (_state.value.activeCount >= Constants.MAX_CONCURRENT_DELIVERIES) {
                     _state.value = _state.value.copy(pendingMarketplaceOrders = emptyList())
                     return@addSnapshotListener
                 }
-                val orders = snapshot?.documents?.mapNotNull { doc ->
+                val orders = snapshot?.documents
+                    ?.filter { it.id != deliveryRepository.getCurrentActiveDeliveryId() }
+                    ?.mapNotNull { doc ->
                     val pickup = doc.get("pickup") as? Map<*, *>
                     val destination = doc.get("destination") as? Map<*, *>
                     PendingMarketplaceOrder(
@@ -223,6 +226,11 @@ class HomeViewModel @Inject constructor(
         viewModelScope.launch {
             deliveryRepository.getActiveDelivery().collect { delivery ->
                 _state.value = _state.value.copy(activeDelivery = delivery)
+            }
+        }
+        viewModelScope.launch {
+            deliveryRepository.getActiveDeliveries().collect { list ->
+                _state.value = _state.value.copy(activeCount = list.size)
             }
         }
     }

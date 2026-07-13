@@ -13,13 +13,18 @@ data class RoutePointEntity(
     val longitude: Double,
     val accuracy: Float,
     val timestamp: Long,
-    val isSynced: Boolean = false
+    val isSynced: Boolean = false,
+    // Marks the first point recorded after resuming a paused delivery. The
+    // distance segment ending at this point is skipped so travel done while
+    // the delivery was paused (serving another order) isn't counted.
+    val isGap: Boolean = false
 ) {
     fun toGeoPoint(): GeoPoint = GeoPoint(
         latitude = latitude,
         longitude = longitude,
         timestamp = timestamp,
-        accuracy = accuracy
+        accuracy = accuracy,
+        isGap = isGap
     )
 
     companion object {
@@ -29,7 +34,8 @@ data class RoutePointEntity(
                 latitude = point.latitude,
                 longitude = point.longitude,
                 accuracy = point.accuracy,
-                timestamp = point.timestamp
+                timestamp = point.timestamp,
+                isGap = point.isGap
             )
     }
 }

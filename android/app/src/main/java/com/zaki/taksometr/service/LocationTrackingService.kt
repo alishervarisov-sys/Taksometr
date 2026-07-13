@@ -46,6 +46,12 @@ class LocationTrackingService : Service() {
     private var lastValidTimestamp: Long? = null
     private var totalDistance: Double = 0.0
     private var isMarketplaceOrder: Boolean = false
+    // When true, the next recorded point re-anchors the meter after a switch/resume
+    // and is stored as a gap so the jump from the pause location isn't counted.
+    private var pendingGapAnchor: Boolean = false
+    // When true, the current delivery is explicitly paused: we keep reporting the
+    // courier's location (for the admin map) but freeze distance/route recording.
+    private var paused: Boolean = false
     private var startTime: Long = 0L
     private var clientPhone: String = ""
     private var widgetTimerJob: Job? = null
@@ -70,6 +76,7 @@ class LocationTrackingService : Service() {
         when (intent?.action) {
             ACTION_START -> startTracking()
             ACTION_STOP -> stopTracking()
+            ACTION_SWITCH -> switchTracking()
         }
         return START_STICKY
     }
@@ -79,31 +86,12 @@ class LocationTrackingService : Service() {
         val notification = createNotification("Отслеживание маршрута...")
         startForeground(Constants.TRACKING_NOTIFICATION_ID, notification)
 
-        serviceScope.launch {
-            val currentDeliveryId = deliveryId
-            if (currentDeliveryId.isNotEmpty()) {
-                deliveryDao.getById(currentDeliveryId)?.let { entity ->
-                    startTime = entity.startTime
-                    clientPhone = entity.clientPhone
-                    isMarketplaceOrder = entity.orderKind == "MARKETPLACE"
-                }
-                val points = routePointDao.getPointsByDeliveryIdSync(currentDeliveryId)
-                if (points.isNotEmpty()) {
-                    val lastPoint = points.last()
-                    lastValidPoint = lastPoint.toGeoPoint()
-                    lastValidTimestamp = lastPoint.timestamp
-                    val distancePoints = if (isMarketplaceOrder) {
-                        val onTheWayAt = prefs.getLong(Constants.PREF_ON_THE_WAY_STARTED_AT, 0L)
-                        if (onTheWayAt > 0) points.filter { it.timestamp >= onTheWayAt } else emptyList()
-                    } else {
-                        points
-                    }
-                    totalDistance = LocationUtils.calculateTotalDistance(distancePoints.map { it.toGeoPoint() })
-                }
-            }
-            startWidgetTimer()
-            sendImmediateLocationUpdateIfAvailable()
-        }
+        // Load the state of whichever delivery is currently active (gap-aware).
+        loadCurrentDeliveryState()
+
+        // Make (re)starting idempotent: drop any previous callback before
+        // registering a new one so we never accumulate duplicate location streams.
+        locationCallback?.let { fusedLocationClient.removeLocationUpdates(it) }
 
         val locationRequest = LocationRequest.Builder(
             Priority.PRIORITY_HIGH_ACCURACY,
@@ -156,7 +144,79 @@ class LocationTrackingService : Service() {
         } catch (_: Exception) {}
     }
 
+    /**
+     * Re-initialises the tracked delivery (whichever is now in
+     * PREF_ACTIVE_DELIVERY_ID) without stopping the running location updates.
+     * Used when the courier switches/resumes between concurrent deliveries.
+     * The paused delivery's distance is frozen because we stop recording points
+     * for it, and the next point for the resumed delivery is anchored as a gap so
+     * the travel done while it was paused isn't counted.
+     */
+    private fun switchTracking() {
+        if (deliveryId.isEmpty()) {
+            stopTracking()
+            return
+        }
+        // Location updates are already running; just re-anchor to the new current
+        // delivery. If they are not running (edge case), fall back to a full start.
+        if (locationCallback == null) {
+            startTracking()
+        } else {
+            loadCurrentDeliveryState()
+        }
+    }
+
+    /**
+     * Loads the state for the delivery in PREF_ACTIVE_DELIVERY_ID and re-anchors
+     * the meter. The paused delivery's distance is frozen because we stop
+     * recording points for it; the first point after (re)starting/resuming a
+     * delivery that already has recorded points is marked as a gap so the jump
+     * from the pause/interruption location isn't counted.
+     */
+    private fun loadCurrentDeliveryState() {
+        serviceScope.launch {
+            lastValidPoint = null
+            lastValidTimestamp = null
+            currentSpeedKmh = 0f
+            maxSpeedKmh = 0f
+            totalDistance = 0.0
+            pendingGapAnchor = false
+
+            val currentDeliveryId = deliveryId
+            if (currentDeliveryId.isNotEmpty()) {
+                deliveryDao.getById(currentDeliveryId)?.let { entity ->
+                    startTime = entity.startTime
+                    clientPhone = entity.clientPhone
+                    isMarketplaceOrder = entity.orderKind == "MARKETPLACE"
+                    // Restore the explicit pause state so it survives app/service restarts.
+                    paused = entity.isPaused
+                }
+                val points = routePointDao.getPointsByDeliveryIdSync(currentDeliveryId)
+                val distancePoints = if (isMarketplaceOrder) {
+                    val onTheWayAt = prefs.getLong(Constants.PREF_ON_THE_WAY_STARTED_AT, 0L)
+                    if (onTheWayAt > 0) points.filter { it.timestamp >= onTheWayAt } else emptyList()
+                } else {
+                    points
+                }
+                totalDistance = LocationUtils.calculateTotalDistance(distancePoints.map { it.toGeoPoint() })
+                // Continue an existing route with a gap anchor so interrupted travel
+                // (app restart, pause/switch) isn't wrongly added to this delivery.
+                pendingGapAnchor = points.isNotEmpty()
+            }
+
+            startWidgetTimer()
+            sendImmediateLocationUpdateIfAvailable()
+        }
+    }
+
     private fun processLocationUpdate(newPoint: GeoPoint) {
+        // While explicitly paused, keep the courier visible on the admin map but
+        // freeze the meter: don't record route points or accumulate distance.
+        if (paused) {
+            serviceScope.launch { updateCourierLocationInFirestore(newPoint) }
+            return
+        }
+
         if (!LocationUtils.isValidPoint(newPoint, lastValidPoint, lastValidTimestamp)) {
             return
         }
@@ -164,21 +224,28 @@ class LocationTrackingService : Service() {
         val currentDeliveryId = deliveryId
         if (currentDeliveryId.isEmpty()) return
 
-        lastValidPoint?.let { lastPoint ->
-            val onTheWayAt = prefs.getLong(Constants.PREF_ON_THE_WAY_STARTED_AT, 0L)
-            val shouldCountDistance = !isMarketplaceOrder || (onTheWayAt > 0 && newPoint.timestamp >= onTheWayAt)
-            if (shouldCountDistance) {
-                val increment = LocationUtils.haversineDistance(lastPoint, newPoint)
-                totalDistance += increment
+        val isGapAnchor = pendingGapAnchor
+        if (!isGapAnchor) {
+            lastValidPoint?.let { lastPoint ->
+                val onTheWayAt = prefs.getLong(Constants.PREF_ON_THE_WAY_STARTED_AT, 0L)
+                val shouldCountDistance = !isMarketplaceOrder || (onTheWayAt > 0 && newPoint.timestamp >= onTheWayAt)
+                if (shouldCountDistance) {
+                    val increment = LocationUtils.haversineDistance(lastPoint, newPoint)
+                    totalDistance += increment
+                }
             }
         }
+        // The gap anchor is consumed by this first post-resume point.
+        pendingGapAnchor = false
 
         lastValidPoint = newPoint
         lastValidTimestamp = newPoint.timestamp
 
+        val pointToStore = if (isGapAnchor) newPoint.copy(isGap = true) else newPoint
+
         serviceScope.launch {
             routePointDao.insert(
-                RoutePointEntity.fromGeoPoint(newPoint, currentDeliveryId)
+                RoutePointEntity.fromGeoPoint(pointToStore, currentDeliveryId)
             )
 
             deliveryDao.getById(currentDeliveryId)?.let { entity ->
@@ -290,6 +357,8 @@ class LocationTrackingService : Service() {
         lastValidPoint = null
         lastValidTimestamp = null
         totalDistance = 0.0
+        pendingGapAnchor = false
+        paused = false
         startTime = 0L
         clientPhone = ""
         currentSpeedKmh = 0f
@@ -348,6 +417,7 @@ class LocationTrackingService : Service() {
     companion object {
         const val ACTION_START = "ACTION_START_TRACKING"
         const val ACTION_STOP = "ACTION_STOP_TRACKING"
+        const val ACTION_SWITCH = "ACTION_SWITCH_TRACKING"
 
         fun startService(context: Context) {
             val intent = Intent(context, LocationTrackingService::class.java).apply {
@@ -361,6 +431,17 @@ class LocationTrackingService : Service() {
                 action = ACTION_STOP
             }
             context.startService(intent)
+        }
+
+        /**
+         * Re-anchor tracking to the delivery currently stored in
+         * PREF_ACTIVE_DELIVERY_ID. Call after switching/resuming between orders.
+         */
+        fun switchService(context: Context) {
+            val intent = Intent(context, LocationTrackingService::class.java).apply {
+                action = ACTION_SWITCH
+            }
+            context.startForegroundService(intent)
         }
     }
 }

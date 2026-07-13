@@ -29,4 +29,8 @@ object Constants {
     // WorkManager
     const val SYNC_WORK_NAME = "route_sync_work"
     const val LOCATION_WORK_NAME = "location_work"
+
+    // Maximum number of deliveries a courier can have IN_PROGRESS at once.
+    // One is "current" (meter running); the others are paused.
+    const val MAX_CONCURRENT_DELIVERIES = 2
 }

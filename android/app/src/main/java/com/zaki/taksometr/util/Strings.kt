@@ -277,6 +277,73 @@ object Strings {
         "ru" to "Остановить ожидание",
         "en" to "Stop waiting"
     )
+
+    // Concurrent deliveries (pause / resume / accept second order)
+    val pausedOrder = mapOf(
+        "tg" to "Фармоиш дар таваққуф",
+        "ru" to "Заказ на паузе",
+        "en" to "Paused order"
+    )
+
+    val resumeOrder = mapOf(
+        "tg" to "Давом додан",
+        "ru" to "Продолжить",
+        "en" to "Resume"
+    )
+
+    val onPause = mapOf(
+        "tg" to "Дар таваққуф",
+        "ru" to "На паузе",
+        "en" to "Paused"
+    )
+
+    val newOrderAvailable = mapOf(
+        "tg" to "Фармоиши нав",
+        "ru" to "Новый заказ",
+        "en" to "New order"
+    )
+
+    val acceptOrder = mapOf(
+        "tg" to "Қабул кардан",
+        "ru" to "Принять",
+        "en" to "Accept"
+    )
+
+    val secondOrderHint = mapOf(
+        "tg" to "Ҳисобкунаки фармоиши ҷорӣ таваққуф мешавад",
+        "ru" to "Счётчик текущего заказа встанет на паузу",
+        "en" to "The current order's meter will be paused"
+    )
+
+    val pauseOrder = mapOf(
+        "tg" to "Таваққуф",
+        "ru" to "Пауза",
+        "en" to "Pause"
+    )
+
+    val pausedNote = mapOf(
+        "tg" to "Фармоиш дар таваққуф — ҳисобкунак истодааст",
+        "ru" to "Заказ на паузе — счётчик остановлен",
+        "en" to "Order paused — meter stopped"
+    )
+
+    val activeDeliveryTitle = mapOf(
+        "tg" to "Расондани фаъол",
+        "ru" to "Активная доставка",
+        "en" to "Active delivery"
+    )
+
+    val meterRunning = mapOf(
+        "tg" to "Ҳисобкунак кор мекунад — зер кунед",
+        "ru" to "Счётчик идёт — нажмите, чтобы открыть",
+        "en" to "Meter running — tap to open"
+    )
+
+    val meterPaused = mapOf(
+        "tg" to "Дар таваққуф — зер кунед",
+        "ru" to "На паузе — нажмите, чтобы открыть",
+        "en" to "Paused — tap to open"
+    )
     
     val complete = mapOf(
         "tg" to "Анҷом додан",

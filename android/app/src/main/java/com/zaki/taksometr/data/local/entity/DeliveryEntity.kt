@@ -32,7 +32,10 @@ data class DeliveryEntity(
     val waitingMinutes: Double = 0.0,
     val waitingStartedAt: Long? = null,
     val courierPhone: String = "",
-    val isSynced: Boolean = false
+    val isSynced: Boolean = false,
+    val waitingAccumulatedMs: Long = 0L,
+    val onTheWayStartedAt: Long? = null,
+    val isPaused: Boolean = false
 ) {
     fun toDelivery(): Delivery = Delivery(
         id = id,
@@ -58,7 +61,10 @@ data class DeliveryEntity(
         destinationLng = destinationLng,
         waitingMinutes = waitingMinutes,
         waitingStartedAt = waitingStartedAt,
-        courierPhone = courierPhone
+        courierPhone = courierPhone,
+        waitingAccumulatedMs = waitingAccumulatedMs,
+        onTheWayStartedAt = onTheWayStartedAt,
+        isPaused = isPaused
     )
 
     companion object {
@@ -86,7 +92,10 @@ data class DeliveryEntity(
             destinationLng = delivery.destinationLng,
             waitingMinutes = delivery.waitingMinutes,
             waitingStartedAt = delivery.waitingStartedAt,
-            courierPhone = delivery.courierPhone
+            courierPhone = delivery.courierPhone,
+            waitingAccumulatedMs = delivery.waitingAccumulatedMs,
+            onTheWayStartedAt = delivery.onTheWayStartedAt,
+            isPaused = delivery.isPaused
         )
     }
 }

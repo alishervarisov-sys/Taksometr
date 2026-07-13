@@ -18,7 +18,7 @@ import com.zaki.taksometr.data.local.entity.RoutePointEntity
         DeliveryChainEntity::class,
         ChainDeliveryItemEntity::class
     ],
-    version = 3,
+    version = 5,
     exportSchema = false
 )
 abstract class ZaKiDatabase : RoomDatabase() {

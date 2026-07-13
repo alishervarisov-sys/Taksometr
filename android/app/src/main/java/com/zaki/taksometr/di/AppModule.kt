@@ -68,7 +68,7 @@ object AppModule {
         ZaKiDatabase::class.java,
         "zaki_database"
     )
-        .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+        .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
         .fallbackToDestructiveMigration()
         .build()
 
@@ -117,6 +117,25 @@ object AppModule {
             db.execSQL(
                 "CREATE INDEX IF NOT EXISTS index_chain_delivery_items_chainId ON chain_delivery_items(chainId)"
             )
+        }
+    }
+
+    // Adds per-delivery pause/resume state (persisted waiting time and
+    // per-delivery ON_THE_WAY timestamp) and a route-point gap marker.
+    // Uses ALTER TABLE ADD COLUMN so existing in-progress deliveries and their
+    // recorded route points are preserved (no data loss for active couriers).
+    private val MIGRATION_3_4 = object : androidx.room.migration.Migration(3, 4) {
+        override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE deliveries ADD COLUMN waitingAccumulatedMs INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE deliveries ADD COLUMN onTheWayStartedAt INTEGER")
+            db.execSQL("ALTER TABLE route_points ADD COLUMN isGap INTEGER NOT NULL DEFAULT 0")
+        }
+    }
+
+    // Adds an explicit per-delivery pause flag (meter frozen while IN_PROGRESS).
+    private val MIGRATION_4_5 = object : androidx.room.migration.Migration(4, 5) {
+        override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE deliveries ADD COLUMN isPaused INTEGER NOT NULL DEFAULT 0")
         }
     }
 

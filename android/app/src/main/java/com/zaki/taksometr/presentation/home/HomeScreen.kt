@@ -17,6 +17,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -198,9 +199,15 @@ fun HomeScreen(
         }
     }
 
-    // If there's an active delivery, navigate to it
-    LaunchedEffect(state.activeDelivery) {
-        if (state.activeDelivery != null) {
+    // Auto-open the active delivery screen only when a delivery *newly* becomes
+    // active (started/accepted/first sync). We remember the last id we already
+    // opened, so returning to Home (back button) while the meter is running does
+    // NOT bounce the courier straight back — they can stay here to take a 2nd order.
+    var lastOpenedActiveId by rememberSaveable { mutableStateOf<String?>(null) }
+    LaunchedEffect(state.activeDelivery?.id) {
+        val activeId = state.activeDelivery?.id
+        if (activeId != null && activeId != lastOpenedActiveId) {
+            lastOpenedActiveId = activeId
             LocationTrackingService.startService(context)
             onStartDelivery()
         }
@@ -400,8 +407,85 @@ fun HomeScreen(
                 }
             }
 
-            // Scrollable orders area — takes all remaining space
-            if (state.activeDelivery == null && state.pendingMarketplaceOrders.isNotEmpty()) {
+            // Active delivery card — lets the courier return to the running meter
+            // (auto-open no longer forces them back, so they can take a 2nd order).
+            state.activeDelivery?.let { active ->
+                Spacer(modifier = Modifier.height(12.dp))
+                val paused = active.isPaused
+                val accent = if (paused) AccentOrange else AccentGreen
+                Card(
+                    onClick = {
+                        LocationTrackingService.startService(context)
+                        onStartDelivery()
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = accent.copy(alpha = 0.12f)),
+                    border = BorderStroke(1.5.dp, accent),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            if (paused) Icons.Default.PauseCircle else Icons.Default.DeliveryDining,
+                            contentDescription = null,
+                            tint = accent,
+                            modifier = Modifier.size(28.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = str(Strings.activeDeliveryTitle),
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                if (state.activeCount > 1) {
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = accent.copy(alpha = 0.2f)
+                                    ) {
+                                        Text(
+                                            text = "${state.activeCount}",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            color = accent,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+                            }
+                            Text(
+                                text = if (paused) str(Strings.meterPaused) else str(Strings.meterRunning),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = accent
+                            )
+                            if (active.clientPhone.isNotBlank()) {
+                                Text(
+                                    text = active.clientPhone,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                                )
+                            }
+                        }
+                        Icon(
+                            Icons.Default.ChevronRight,
+                            contentDescription = null,
+                            tint = accent
+                        )
+                    }
+                }
+            }
+
+            // Scrollable orders area — takes all remaining space. Pending orders
+            // are shown while the courier is below the concurrent-order limit
+            // (the list is already gated by the view model).
+            if (state.pendingMarketplaceOrders.isNotEmpty()) {
                 Column(
                     modifier = Modifier
                         .weight(1f)
