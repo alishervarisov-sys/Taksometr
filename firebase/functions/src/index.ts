@@ -375,19 +375,6 @@ export const createDelivery = functions.https.onCall(async (data, context) => {
     );
   }
 
-  // Check for active delivery
-  const activeDeliveries = await db.collection("deliveries")
-    .where("courierId", "==", courierId)
-    .where("status", "==", "IN_PROGRESS")
-    .get();
-
-  if (activeDeliveries.size >= MAX_CONCURRENT_DELIVERIES) {
-    throw new functions.https.HttpsError(
-      "already-exists",
-      "Courier already has the maximum number of active deliveries"
-    );
-  }
-
   // Validate delivery type and get fixed price if applicable
   let fixedPrice: number | null = null;
   let deliveryTypeName = "";
@@ -436,26 +423,43 @@ export const createDelivery = functions.https.onCall(async (data, context) => {
   console.log("Final: actualDeliveryType=", actualDeliveryType, "fixedPrice=", fixedPrice);
   console.log("=============================");
 
-  // Create delivery
+  // ---- TRANSACTION: atomically check active count and create delivery ----
+  // This prevents the race condition where two simultaneous requests both
+  // pass the active-delivery check and create duplicate records.
   const deliveryRef = db.collection("deliveries").doc();
-  const deliveryData = {
-    courierId: courierId,
-    courierName: courierData.name || "",
-    clientPhone: clientPhone,
-    status: "IN_PROGRESS",
-    startTime: Date.now(),
-    endTime: null,
-    distanceMeters: 0,
-    cost: 0,
-    route: [],
-    deliveryType: actualDeliveryType,
-    fixedPrice: fixedPrice,
-    createdAt: Date.now(),
-  };
-  
-    console.log("Saving delivery to Firestore:", deliveryData);
 
-  await deliveryRef.set(deliveryData);
+  await db.runTransaction(async (transaction) => {
+    const activeDeliveries = await transaction.get(
+      db.collection("deliveries")
+        .where("courierId", "==", courierId)
+        .where("status", "==", "IN_PROGRESS")
+    );
+
+    if (activeDeliveries.size >= MAX_CONCURRENT_DELIVERIES) {
+      throw new functions.https.HttpsError(
+        "already-exists",
+        "Courier already has the maximum number of active deliveries"
+      );
+    }
+
+    const deliveryData = {
+      courierId: courierId,
+      courierName: courierData.name || "",
+      clientPhone: clientPhone,
+      status: "IN_PROGRESS",
+      startTime: Date.now(),
+      endTime: null,
+      distanceMeters: 0,
+      cost: 0,
+      route: [],
+      deliveryType: actualDeliveryType,
+      fixedPrice: fixedPrice,
+      createdAt: Date.now(),
+    };
+
+    console.log("Saving delivery to Firestore (inside transaction):", deliveryData);
+    transaction.set(deliveryRef, deliveryData);
+  });
 
   // ---- Sync courier status: delivery IN_PROGRESS → courier must be ONLINE ----
   await syncCourierStatus(courierId, "createDelivery: new delivery set to IN_PROGRESS");

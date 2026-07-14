@@ -545,7 +545,9 @@ fun HomeScreen(
             title = { Text(str(Strings.selectDeliveryType)) },
             text = {
                 Column(
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
                 ) {
                     DeliveryTypeOption(
                         selected = state.selectedDeliveryType == "default",
