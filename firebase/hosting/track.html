@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ZaKi - Пайгирии расонанда</title>
+  <link rel="icon" type="image/png" href="/favicon.png" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f5f5f5;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    .header {
+      background: #2e7d32;
+      color: white;
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+      z-index: 10;
+    }
+    .header h1 {
+      font-size: 18px;
+      font-weight: 600;
+    }
+    .header .logo {
+      width: 28px;
+      height: 28px;
+      background: white;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: bold;
+      color: #2e7d32;
+      font-size: 12px;
+    }
+    #map {
+      flex: 1;
+      width: 100%;
+    }
+    .info-bar {
+      background: white;
+      padding: 12px 16px;
+      border-top: 1px solid #e0e0e0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .info-bar .status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .info-bar .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #4caf50;
+      animation: pulse 1.5s infinite;
+    }
+    .info-bar .status-dot.completed {
+      background: #9e9e9e;
+      animation: none;
+    }
+    .info-bar .status-text {
+      font-size: 14px;
+      color: #333;
+    }
+    .info-bar .courier-name {
+      font-size: 13px;
+      color: #666;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.6; transform: scale(1.3); }
+    }
+    .loading, .error-page {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 32px;
+      text-align: center;
+    }
+    .loading .spinner {
+      width: 40px;
+      height: 40px;
+      border: 4px solid #e0e0e0;
+      border-top-color: #2e7d32;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-bottom: 16px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .loading p { color: #666; font-size: 15px; }
+    .error-page .icon { font-size: 48px; margin-bottom: 16px; }
+    .error-page h2 { color: #333; margin-bottom: 8px; }
+    .error-page p { color: #666; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="logo">Z</div>
+    <h1>ZaKi - Пайгирии расонанда</h1>
+  </div>
+
+  <div id="loading" class="loading">
+    <div class="spinner"></div>
+    <p>Боркунии...</p>
+  </div>
+
+  <div id="error-page" class="error-page" style="display:none;">
+    <div class="icon">📦</div>
+    <h2 id="error-title">Расонанда ёфт нашуд</h2>
+    <p id="error-message">Ин фармоиш вуҷуд надорад ё аллакай анҷом ёфтааст.</p>
+  </div>
+
+  <div id="map" style="display:none;"></div>
+  <div id="info-bar" class="info-bar" style="display:none;">
+    <div class="status">
+      <div class="status-dot" id="status-dot"></div>
+      <span class="status-text" id="status-text">Дар роҳ</span>
+    </div>
+    <span class="courier-name" id="courier-name"></span>
+  </div>
+
+  <!-- Firebase SDK (compat for simplicity in standalone page) -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+  <script>
+    firebase.initializeApp({
+      apiKey: "AIzaSyCPRo5_sfkPMOIDdAP1MWFCSLbCO7HqHA0",
+      authDomain: "auva-70253.firebaseapp.com",
+      projectId: "auva-70253",
+      storageBucket: "auva-70253.firebasestorage.app",
+      messagingSenderId: "286896671827",
+      appId: "1:286896671827:android:8ef70dcf8e82063cdc0aa6"
+    });
+
+    const db = firebase.firestore();
+    const MAPS_API_KEY = "AIzaSyAk3WuUNwz0PNu73HAFPW7knrzPmxrjXzo";
+
+    // Get delivery ID from URL
+    const params = new URLSearchParams(window.location.search);
+    const deliveryId = params.get('d');
+
+    if (!deliveryId) {
+      showError("Хатои пайванд", "Рақами фармоиш дар пайванд мавҷуд нест.");
+    } else {
+      startTracking(deliveryId);
+    }
+
+    function showError(title, message) {
+      document.getElementById('loading').style.display = 'none';
+      document.getElementById('error-page').style.display = 'flex';
+      document.getElementById('error-title').textContent = title;
+      document.getElementById('error-message').textContent = message;
+    }
+
+    function startTracking(id) {
+      db.collection('deliveries').doc(id).onSnapshot(function(doc) {
+        if (!doc.exists) {
+          showError("Расонанда ёфт нашуд", "Ин фармоиш вуҷуд надорад.");
+          return;
+        }
+
+        const data = doc.data();
+        const route = data.route || [];
+        const status = data.status;
+        const courierName = data.courierName || "";
+
+        if (status === 'COMPLETED') {
+          document.getElementById('status-dot').classList.add('completed');
+          document.getElementById('status-text').textContent = "Анҷом ёфт";
+        } else if (status === 'CANCELLED') {
+          showError("Фармоиш бекор шуд", "Ин фармоиш бекор карда шудааст.");
+          return;
+        } else {
+          document.getElementById('status-dot').classList.remove('completed');
+          document.getElementById('status-text').textContent = "Дар роҳ";
+        }
+
+        if (courierName) {
+          document.getElementById('courier-name').textContent = "Расонанда: " + courierName;
+        }
+
+        if (route.length === 0) {
+          // No route yet, show loading with message
+          document.getElementById('loading').style.display = 'flex';
+          document.querySelector('#loading p').textContent = 'Интизори маълумоти ҷойгиршавӣ...';
+          return;
+        }
+
+        // We have route data - show map
+        document.getElementById('loading').style.display = 'none';
+        document.getElementById('map').style.display = 'block';
+        document.getElementById('info-bar').style.display = 'flex';
+
+        if (!window.mapInitialized) {
+          loadGoogleMaps(function() {
+            initMap(route);
+          });
+        } else {
+          updateMap(route);
+        }
+      }, function(error) {
+        console.error("Firestore error:", error);
+        showError("Хато", "Хатои пайвастшавӣ. Лутфан саҳифаро аз нав кушоед.");
+      });
+    }
+
+    function loadGoogleMaps(callback) {
+      if (window.google && window.google.maps) {
+        callback();
+        return;
+      }
+      const script = document.createElement('script');
+      script.src = "https://maps.googleapis.com/maps/api/js?key=" + MAPS_API_KEY + "&callback=__gmapsCallback";
+      script.async = true;
+      window.__gmapsCallback = callback;
+      document.head.appendChild(script);
+    }
+
+    let map, marker, polyline;
+
+    function initMap(route) {
+      window.mapInitialized = true;
+      const lastPoint = route[route.length - 1];
+      const center = { lat: lastPoint.latitude, lng: lastPoint.longitude };
+
+      map = new google.maps.Map(document.getElementById('map'), {
+        center: center,
+        zoom: 15,
+        disableDefaultUI: true,
+        zoomControl: true,
+        mapTypeControl: false,
+        streetViewControl: false,
+        fullscreenControl: false,
+        styles: [
+          { featureType: "poi", stylers: [{ visibility: "off" }] }
+        ]
+      });
+
+      // Courier marker
+      marker = new google.maps.Marker({
+        position: center,
+        map: map,
+        icon: {
+          path: google.maps.SymbolPath.CIRCLE,
+          scale: 12,
+          fillColor: '#2e7d32',
+          fillOpacity: 1,
+          strokeColor: '#ffffff',
+          strokeWeight: 3,
+        },
+        title: 'Расонанда'
+      });
+
+      // Route polyline
+      const path = route
+        .filter(function(p) { return !p.gap; })
+        .map(function(p) { return { lat: p.latitude, lng: p.longitude }; });
+      
+      polyline = new google.maps.Polyline({
+        path: path,
+        geodesic: true,
+        strokeColor: '#2e7d32',
+        strokeOpacity: 0.8,
+        strokeWeight: 4,
+        map: map
+      });
+    }
+
+    function updateMap(route) {
+      if (!map || !marker) return;
+
+      const lastPoint = route[route.length - 1];
+      const pos = { lat: lastPoint.latitude, lng: lastPoint.longitude };
+      
+      marker.setPosition(pos);
+      map.panTo(pos);
+
+      // Update polyline
+      const path = route
+        .filter(function(p) { return !p.gap; })
+        .map(function(p) { return { lat: p.latitude, lng: p.longitude }; });
+      
+      if (polyline) {
+        polyline.setPath(path);
+      }
+    }
+  </script>
+</body>
+</html>
