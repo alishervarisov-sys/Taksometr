@@ -5,5 +5,5 @@ import kotlinx.coroutines.flow.Flow
 
 interface TariffRepository {
     fun getCurrentTariff(): Flow<Tariff>
-    suspend fun calculateCost(distanceMeters: Double): Double
+    suspend fun calculateCost(distanceMeters: Double, deliveryType: String = "default"): Double
 }

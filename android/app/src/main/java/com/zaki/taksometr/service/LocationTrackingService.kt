@@ -54,6 +54,7 @@ class LocationTrackingService : Service() {
     private var paused: Boolean = false
     private var startTime: Long = 0L
     private var clientPhone: String = ""
+    private var currentDeliveryType: String = "default"
     private var widgetTimerJob: Job? = null
     private var currentSpeedKmh: Float = 0f
     private var maxSpeedKmh: Float = 0f
@@ -318,10 +319,11 @@ class LocationTrackingService : Service() {
             deliveryDao.getById(deliveryId)?.let {
                 startTime = it.startTime
                 clientPhone = it.clientPhone
+                currentDeliveryType = it.deliveryType
             }
         }
         val elapsed = if (startTime > 0) System.currentTimeMillis() - startTime else 0L
-        val cost = tariffRepository.calculateCost(totalDistance)
+        val cost = tariffRepository.calculateCost(totalDistance, currentDeliveryType)
 
         val widgetPrefs = getSharedPreferences(
             TaksometrWidgetProvider.WIDGET_PREFS, Context.MODE_PRIVATE

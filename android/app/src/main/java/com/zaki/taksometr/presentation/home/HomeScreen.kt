@@ -555,6 +555,14 @@ fun HomeScreen(
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     
+                    DeliveryTypeOption(
+                        selected = state.selectedDeliveryType == "heavyCargoMeter",
+                        onClick = { viewModel.onDeliveryTypeSelected("heavyCargoMeter") },
+                        title = str(Strings.heavyCargoMeter),
+                        subtitle = str(Strings.heavyCargoMeterSubtitle)
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    
                     val fixedTypes = state.fixedTypes
                     if (fixedTypes.isNotEmpty()) {
                         if (fixedTypes["coal"] ?: 0.0 > 0) {

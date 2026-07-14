@@ -17,6 +17,11 @@ const Tariffs: React.FC<TariffsProps> = ({ adminId }) => {
   const [freeWaitingMinutes, setFreeWaitingMinutes] = useState('5');
   const [costPerWaitingMinute, setCostPerWaitingMinute] = useState('500');
   
+  // Heavy cargo metered tariff
+  const [heavyCargoBaseCost, setHeavyCargoBaseCost] = useState('15');
+  const [heavyCargoBaseDistanceKm, setHeavyCargoBaseDistanceKm] = useState('3');
+  const [heavyCargoCostPerKm, setHeavyCargoCostPerKm] = useState('4');
+  
   // Fixed delivery types
   const [fixedTypes, setFixedTypes] = useState({
     coal: '0',           // Уголь
@@ -45,6 +50,11 @@ const Tariffs: React.FC<TariffsProps> = ({ adminId }) => {
         setCostPerKm(String(data.costPerKm ?? 1500));
         setFreeWaitingMinutes(String(data.freeWaitingMinutes ?? 5));
         setCostPerWaitingMinute(String(data.costPerWaitingMinute ?? 500));
+        
+        // Load heavy cargo metered tariff
+        setHeavyCargoBaseCost(String(data.heavyCargoMeter?.baseCost ?? 15));
+        setHeavyCargoBaseDistanceKm(String(data.heavyCargoMeter?.baseDistanceKm ?? 3));
+        setHeavyCargoCostPerKm(String(data.heavyCargoMeter?.costPerKm ?? 4));
         
         // Load fixed types
         setFixedTypes({
@@ -75,6 +85,11 @@ const Tariffs: React.FC<TariffsProps> = ({ adminId }) => {
         costPerKm: Number(costPerKm),
         freeWaitingMinutes: Number(freeWaitingMinutes),
         costPerWaitingMinute: Number(costPerWaitingMinute),
+        heavyCargoMeter: {
+          baseCost: Number(heavyCargoBaseCost),
+          baseDistanceKm: Number(heavyCargoBaseDistanceKm),
+          costPerKm: Number(heavyCargoCostPerKm),
+        },
         fixedTypes: {
           coal: Number(fixedTypes.coal),
           gas15: Number(fixedTypes.gas15),
@@ -97,6 +112,18 @@ const Tariffs: React.FC<TariffsProps> = ({ adminId }) => {
     const base = Number(baseCost);
     const threshold = Number(baseDistanceKm);
     const perKm = Number(costPerKm);
+    let cost = base;
+    if (km > threshold) {
+      cost += (km - threshold) * perKm;
+    }
+    return Math.max(base, Math.ceil(cost));
+  };
+
+  // Preview heavy cargo metered cost
+  const previewHeavyCargoCost = (km: number) => {
+    const base = Number(heavyCargoBaseCost);
+    const threshold = Number(heavyCargoBaseDistanceKm);
+    const perKm = Number(heavyCargoCostPerKm);
     let cost = base;
     if (km > threshold) {
       cost += (km - threshold) * perKm;
@@ -172,6 +199,41 @@ const Tariffs: React.FC<TariffsProps> = ({ adminId }) => {
                 onChange={(e) => setCostPerWaitingMinute(e.target.value)}
                 margin="normal"
                 helperText="Берётся за каждую минуту после бесплатного времени"
+              />
+
+              <Typography variant="h6" sx={{ mt: 3, mb: 1 }}>Тариф тяжёлых грузов (по счётчику)</Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                Курьер выбирает этот тип — счётчик работает с отдельным тарифом
+              </Typography>
+
+              <TextField
+                fullWidth
+                label="Базовая стоимость (сомони)"
+                type="number"
+                value={heavyCargoBaseCost}
+                onChange={(e) => setHeavyCargoBaseCost(e.target.value)}
+                margin="normal"
+                helperText="Минимальная стоимость доставки тяжёлых грузов"
+              />
+
+              <TextField
+                fullWidth
+                label="Базовое расстояние (км)"
+                type="number"
+                value={heavyCargoBaseDistanceKm}
+                onChange={(e) => setHeavyCargoBaseDistanceKm(e.target.value)}
+                margin="normal"
+                helperText="До этого расстояния действует только базовая цена"
+              />
+
+              <TextField
+                fullWidth
+                label="Стоимость за километр (сомони)"
+                type="number"
+                value={heavyCargoCostPerKm}
+                onChange={(e) => setHeavyCargoCostPerKm(e.target.value)}
+                margin="normal"
+                helperText="Берётся за каждый км сверх базового расстояния"
               />
 
               <Typography variant="h6" sx={{ mt: 3, mb: 1 }}>Фиксированные типы доставки</Typography>
@@ -277,10 +339,20 @@ const Tariffs: React.FC<TariffsProps> = ({ adminId }) => {
                 <Typography>30 мин: <strong>{previewWaitingCost(30).toLocaleString()} сомони</strong></Typography>
               </Box>
 
+              <Typography variant="subtitle2" sx={{ mt: 2, mb: 1, color: 'text.secondary' }}>Тяжёлые грузы (по счётчику):</Typography>
+              <Box sx={{ '& > *': { mb: 1.5 } }}>
+                <Typography>1 км: <strong>{previewHeavyCargoCost(1).toLocaleString()} сомони</strong></Typography>
+                <Typography>3 км: <strong>{previewHeavyCargoCost(3).toLocaleString()} сомони</strong></Typography>
+                <Typography>5 км: <strong>{previewHeavyCargoCost(5).toLocaleString()} сомони</strong></Typography>
+                <Typography>10 км: <strong>{previewHeavyCargoCost(10).toLocaleString()} сомони</strong></Typography>
+                <Typography>20 км: <strong>{previewHeavyCargoCost(20).toLocaleString()} сомони</strong></Typography>
+              </Box>
+
               <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
                 Базовая цена ({Number(baseCost).toLocaleString()} сомони) действует до {baseDistanceKm} км.
                 Далее +{Number(costPerKm).toLocaleString()} сомони за каждый км.
                 Ожидание бесплатно первые {freeWaitingMinutes} мин, далее +{Number(costPerWaitingMinute).toLocaleString()} сомони/мин.
+                Тяжёлые грузы: базовая {Number(heavyCargoBaseCost).toLocaleString()} сомони до {heavyCargoBaseDistanceKm} км, далее +{Number(heavyCargoCostPerKm).toLocaleString()} сомони/км.
               </Typography>
             </CardContent>
           </Card>

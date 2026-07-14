@@ -192,6 +192,18 @@ object Strings {
         "en" to "Heavy cargo"
     )
     
+    val heavyCargoMeter = mapOf(
+        "tg" to "Бори вазнин (аз рӯи ҳисобгар)",
+        "ru" to "Тяжёлые грузы (по счётчику)",
+        "en" to "Heavy cargo (metered)"
+    )
+    
+    val heavyCargoMeterSubtitle = mapOf(
+        "tg" to "Пардохт аз рӯи километр (тарифи вазнин)",
+        "ru" to "Оплата по километражу (тариф тяжёлых грузов)",
+        "en" to "Payment by kilometer (heavy cargo tariff)"
+    )
+    
     val fixedPrice = mapOf(
         "tg" to "Нархи қатъӣ",
         "ru" to "Фиксированная цена",

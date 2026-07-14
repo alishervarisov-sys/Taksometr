@@ -42,7 +42,7 @@ class TariffRepositoryImpl @Inject constructor(
         awaitClose { listener.remove() }
     }
 
-    override suspend fun calculateCost(distanceMeters: Double): Double {
+    override suspend fun calculateCost(distanceMeters: Double, deliveryType: String): Double {
         // Local calculation with distance threshold for real-time display.
         // Final cost is always re-computed on the server in completeDelivery.
         return try {
@@ -51,9 +51,22 @@ class TariffRepositoryImpl @Inject constructor(
                 .get()
                 .await()
 
-            val baseCost = tariffDoc.getDouble("baseCost") ?: 5000.0
-            val baseDistanceKm = tariffDoc.getDouble("baseDistanceKm") ?: 3.0
-            val costPerKm = tariffDoc.getDouble("costPerKm") ?: 1500.0
+            val baseCost: Double
+            val baseDistanceKm: Double
+            val costPerKm: Double
+
+            if (deliveryType == "heavyCargoMeter") {
+                @Suppress("UNCHECKED_CAST")
+                val hcm = tariffDoc.get("heavyCargoMeter") as? Map<String, Any> ?: emptyMap()
+                baseCost = (hcm["baseCost"] as? Number)?.toDouble() ?: 15.0
+                baseDistanceKm = (hcm["baseDistanceKm"] as? Number)?.toDouble() ?: 3.0
+                costPerKm = (hcm["costPerKm"] as? Number)?.toDouble() ?: 4.0
+            } else {
+                baseCost = tariffDoc.getDouble("baseCost") ?: 5000.0
+                baseDistanceKm = tariffDoc.getDouble("baseDistanceKm") ?: 3.0
+                costPerKm = tariffDoc.getDouble("costPerKm") ?: 1500.0
+            }
+
             val distanceKm = distanceMeters / 1000.0
 
             // Round to 2 decimal places for exact diram display

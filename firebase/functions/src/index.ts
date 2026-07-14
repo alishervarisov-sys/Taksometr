@@ -401,7 +401,12 @@ export const createDelivery = functions.https.onCall(async (data, context) => {
     const tariffDoc = await db.collection("tariffs").doc("default").get();
     console.log("Tariff doc exists:", tariffDoc.exists);
     
-    if (tariffDoc.exists) {
+    if (deliveryType === "heavyCargoMeter") {
+      // Heavy cargo metered delivery — works like "default" but with its own tariff
+      // No fixed price; cost is calculated by meter using heavyCargoMeter tariff settings
+      deliveryTypeName = "Бори вазнин (аз рӯи ҳисобгар)";
+      console.log("Heavy cargo metered delivery — no fixedPrice, meter will use separate tariff");
+    } else if (tariffDoc.exists) {
       const fixedTypes = tariffDoc.data()!.fixedTypes || {};
       console.log("Fixed types:", fixedTypes);
       console.log("Looking for:", deliveryType);
@@ -470,6 +475,8 @@ export const createDelivery = functions.https.onCall(async (data, context) => {
   
   if (fixedPrice !== null && fixedPrice > 0) {
     startSmsText += ` Навъи хидмат: ${deliveryTypeName}. Нархи қатъӣ: ${formatCostForSms(fixedPrice)} сомонӣ.`;
+  } else if (actualDeliveryType === "heavyCargoMeter") {
+    startSmsText += ` Навъи хидмат: ${deliveryTypeName}. Пардохт аз рӯи ҳисобгар.`;
   }
 
   // Append real-time tracking link so the client can follow the courier on Google Maps
@@ -530,7 +537,7 @@ export const completeDelivery = functions.https.onCall(async (data, context) => 
   let waitingCost = 0;
   let roundedCost = 0;
   
-  if (deliveryType !== "default" && fixedPrice !== null && fixedPrice !== undefined) {
+  if (deliveryType !== "default" && deliveryType !== "heavyCargoMeter" && fixedPrice !== null && fixedPrice !== undefined) {
     // Fixed price delivery - no calculation needed
     totalCost = fixedPrice;
     distanceMeters = 0;
@@ -547,9 +554,19 @@ export const completeDelivery = functions.https.onCall(async (data, context) => 
 
     if (tariffDoc.exists) {
       const tariffData = tariffDoc.data()!;
-      baseCost = tariffData.baseCost || 5000;
-      baseDistanceKm = tariffData.baseDistanceKm ?? 3;
-      costPerKm = tariffData.costPerKm || 1500;
+      
+      if (deliveryType === "heavyCargoMeter") {
+        // Use heavy cargo metered tariff
+        const hcm = tariffData.heavyCargoMeter || {};
+        baseCost = hcm.baseCost ?? 15;
+        baseDistanceKm = hcm.baseDistanceKm ?? 3;
+        costPerKm = hcm.costPerKm ?? 4;
+      } else {
+        // Default metered tariff
+        baseCost = tariffData.baseCost || 5000;
+        baseDistanceKm = tariffData.baseDistanceKm ?? 3;
+        costPerKm = tariffData.costPerKm || 1500;
+      }
     }
 
     // Calculate cost: base covers baseDistanceKm, then costPerKm beyond
@@ -1165,7 +1182,7 @@ export const createCourier = functions.https.onCall(async (data, context) => {
 
 // ============ ADMIN: UPDATE TARIFF ============
 export const updateTariff = functions.https.onCall(async (data, context) => {
-  const {adminId, baseCost, baseDistanceKm, costPerKm, fixedTypes} = data;
+  const {adminId, baseCost, baseDistanceKm, costPerKm, fixedTypes, heavyCargoMeter} = data;
 
   // Verify admin
   await verifyAdmin(adminId);
@@ -1183,6 +1200,11 @@ export const updateTariff = functions.https.onCall(async (data, context) => {
     costPerKm: costPerKm,
     freeWaitingMinutes: data.freeWaitingMinutes ?? 5,
     costPerWaitingMinute: data.costPerWaitingMinute ?? 500,
+    heavyCargoMeter: {
+      baseCost: heavyCargoMeter?.baseCost ?? 15,
+      baseDistanceKm: heavyCargoMeter?.baseDistanceKm ?? 3,
+      costPerKm: heavyCargoMeter?.costPerKm ?? 4,
+    },
     fixedTypes: fixedTypes || {
       coal: 0,
       gas15: 0,

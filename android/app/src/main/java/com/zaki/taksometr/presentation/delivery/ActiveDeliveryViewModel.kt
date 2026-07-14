@@ -142,7 +142,7 @@ class ActiveDeliveryViewModel @Inject constructor(
                 }
 
                 val distance = LocationUtils.calculateTotalDistance(distancePoints)
-                val cost = tariffRepository.calculateCost(distance)
+                val cost = tariffRepository.calculateCost(distance, current?.deliveryType ?: "default")
 
                 _state.value = _state.value.copy(
                     routePoints = points,

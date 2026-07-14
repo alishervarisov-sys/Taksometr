@@ -120,6 +120,7 @@ fun ActiveDeliveryScreenRouter(
 
     val useFixedScreen = delivery != null &&
         delivery.deliveryType != "default" &&
+        delivery.deliveryType != "heavyCargoMeter" &&
         delivery.status != DeliveryStatus.IN_PROGRESS
 
     if (useFixedScreen) {
