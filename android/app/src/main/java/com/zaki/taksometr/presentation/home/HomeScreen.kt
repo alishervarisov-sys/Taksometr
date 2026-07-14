@@ -303,7 +303,7 @@ fun HomeScreen(
                                         AccentRed.copy(alpha = 0.15f)
                                 ) {
                                     Text(
-                                        text = "${(state.user?.balance ?: 0.0).toLong()} с.",
+                                        text = LocationUtils.formatCost(state.user?.balance ?: 0.0),
                                         style = MaterialTheme.typography.labelMedium,
                                         fontWeight = FontWeight.Bold,
                                         color = if ((state.user?.balance ?: 0.0) >= 5.0) AccentGreen else AccentRed,
@@ -562,7 +562,7 @@ fun HomeScreen(
                                 selected = state.selectedDeliveryType == "coal",
                                 onClick = { viewModel.onDeliveryTypeSelected("coal") },
                                 title = str(Strings.coal),
-                                subtitle = "${str(Strings.fixedPrice)}: ${fixedTypes["coal"]?.toLong() ?: 0} ${str(Strings.somoni)}"
+                                subtitle = "${str(Strings.fixedPrice)}: ${LocationUtils.formatCost(fixedTypes["coal"] ?: 0.0)}"
                             )
                             Spacer(modifier = Modifier.height(8.dp))
                         }
@@ -578,7 +578,7 @@ fun HomeScreen(
                                     selected = state.selectedDeliveryType == "gas15",
                                     onClick = { viewModel.onDeliveryTypeSelected("gas15") },
                                     title = str(Strings.gas15),
-                                    subtitle = "${str(Strings.fixedPrice)}: ${fixedTypes["gas15"]?.toLong() ?: 0} ${str(Strings.somoni)}"
+                                    subtitle = "${str(Strings.fixedPrice)}: ${LocationUtils.formatCost(fixedTypes["gas15"] ?: 0.0)}"
                                 )
                                 Spacer(modifier = Modifier.height(8.dp))
                             }
@@ -588,7 +588,7 @@ fun HomeScreen(
                                     selected = state.selectedDeliveryType == "gas30",
                                     onClick = { viewModel.onDeliveryTypeSelected("gas30") },
                                     title = str(Strings.gas30),
-                                    subtitle = "${str(Strings.fixedPrice)}: ${fixedTypes["gas30"]?.toLong() ?: 0} ${str(Strings.somoni)}"
+                                    subtitle = "${str(Strings.fixedPrice)}: ${LocationUtils.formatCost(fixedTypes["gas30"] ?: 0.0)}"
                                 )
                                 Spacer(modifier = Modifier.height(8.dp))
                             }
@@ -598,7 +598,7 @@ fun HomeScreen(
                                     selected = state.selectedDeliveryType == "gas30plus",
                                     onClick = { viewModel.onDeliveryTypeSelected("gas30plus") },
                                     title = str(Strings.gas30plus),
-                                    subtitle = "${str(Strings.fixedPrice)}: ${fixedTypes["gas30plus"]?.toLong() ?: 0} ${str(Strings.somoni)}"
+                                    subtitle = "${str(Strings.fixedPrice)}: ${LocationUtils.formatCost(fixedTypes["gas30plus"] ?: 0.0)}"
                                 )
                                 Spacer(modifier = Modifier.height(8.dp))
                             }
@@ -609,7 +609,7 @@ fun HomeScreen(
                                 selected = state.selectedDeliveryType == "errands",
                                 onClick = { viewModel.onDeliveryTypeSelected("errands") },
                                 title = str(Strings.errands),
-                                subtitle = "${str(Strings.fixedPrice)}: ${fixedTypes["errands"]?.toLong() ?: 0} ${str(Strings.somoni)}"
+                                subtitle = "${str(Strings.fixedPrice)}: ${LocationUtils.formatCost(fixedTypes["errands"] ?: 0.0)}"
                             )
                             Spacer(modifier = Modifier.height(8.dp))
                         }
@@ -619,7 +619,7 @@ fun HomeScreen(
                                 selected = state.selectedDeliveryType == "heavyCargo",
                                 onClick = { viewModel.onDeliveryTypeSelected("heavyCargo") },
                                 title = str(Strings.heavyCargo),
-                                subtitle = "${str(Strings.fixedPrice)}: ${fixedTypes["heavyCargo"]?.toLong() ?: 0} ${str(Strings.somoni)}"
+                                subtitle = "${str(Strings.fixedPrice)}: ${LocationUtils.formatCost(fixedTypes["heavyCargo"] ?: 0.0)}"
                             )
                         }
                     }

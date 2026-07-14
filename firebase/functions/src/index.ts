@@ -194,7 +194,8 @@ function computeCost(
   if (distanceKm > baseDistanceKm) {
     cost += (distanceKm - baseDistanceKm) * costPerKm;
   }
-  return Math.max(baseCost, Math.ceil(cost));
+  // Round to 2 decimal places for exact diram precision
+  return Math.max(baseCost, Math.round(cost * 100) / 100);
 }
 
 function getEtaMinutes(from: any, to: any): number | null {
@@ -564,7 +565,7 @@ export const completeDelivery = functions.https.onCall(async (data, context) => 
 
     const actualWaitingMinutes = waitingMinutes || 0;
     if (actualWaitingMinutes > freeWaitingMinutes) {
-      waitingCost = Math.ceil((actualWaitingMinutes - freeWaitingMinutes) * costPerWaitingMinute);
+      waitingCost = Math.round((actualWaitingMinutes - freeWaitingMinutes) * costPerWaitingMinute * 100) / 100;
     }
 
     totalCost = roundedCost + waitingCost;
@@ -588,7 +589,8 @@ export const completeDelivery = functions.https.onCall(async (data, context) => 
       ? (settingsDoc.data()!.percent || 0)
       : 0;
   }
-  const commissionAmount = Math.ceil(totalCost * commissionPercent / 100);
+  // Exact commission — no rounding, preserve dirams for transparency
+  const commissionAmount = Math.round((totalCost * commissionPercent / 100) * 100) / 100;
 
   // Deduct commission from courier balance
   const currentBalance = courierData2.balance || 0;
@@ -1776,7 +1778,7 @@ export const completeChainDelivery = functions.https.onCall(async (data, context
 
     const actualWaitingMinutes = waitingMinutes || 0;
     if (actualWaitingMinutes > freeWaitingMinutes) {
-      waitingCost = Math.ceil((actualWaitingMinutes - freeWaitingMinutes) * costPerWaitingMinute);
+      waitingCost = Math.round((actualWaitingMinutes - freeWaitingMinutes) * costPerWaitingMinute * 100) / 100;
     }
 
     totalCost = roundedCost + waitingCost;
@@ -1794,7 +1796,8 @@ export const completeChainDelivery = functions.https.onCall(async (data, context
     const settingsDoc = await db.collection("settings").doc("commission").get();
     commissionPercent = settingsDoc.exists ? (settingsDoc.data()!.percent || 0) : 0;
   }
-  const commissionAmount = Math.ceil(totalCost * commissionPercent / 100);
+  // Exact commission — no rounding, preserve dirams for transparency
+  const commissionAmount = Math.round((totalCost * commissionPercent / 100) * 100) / 100;
 
   // Deduct commission
   const currentBalance = courierData.balance || 0;
@@ -2203,7 +2206,8 @@ export const adminCompleteDelivery = functions.https.onCall(async (data, context
     const settingsDoc = await db.collection("settings").doc("commission").get();
     commissionPercent = settingsDoc.exists ? (settingsDoc.data()!.percent || 0) : 0;
   }
-  const commissionAmount = Math.ceil(totalCost * commissionPercent / 100);
+  // Exact commission — no rounding, preserve dirams for transparency
+  const commissionAmount = Math.round((totalCost * commissionPercent / 100) * 100) / 100;
 
   // Deduct commission
   const currentBalance = courierData.balance || 0;

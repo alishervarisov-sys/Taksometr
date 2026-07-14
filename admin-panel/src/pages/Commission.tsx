@@ -162,6 +162,15 @@ const Commission: React.FC<CommissionProps> = ({ adminId }) => {
 
   const formatDate = (ts: number) => new Date(ts).toLocaleString('ru-RU');
 
+  const formatCost = (cost: number) => {
+    const abs = Math.abs(cost);
+    const somoni = Math.floor(abs);
+    const diram = Math.round((abs - somoni) * 100);
+    const sign = cost < 0 ? '-' : '';
+    if (diram > 0) return `${sign}${somoni.toLocaleString()}.${String(diram).padStart(2, '0')} сомони`;
+    return `${sign}${somoni.toLocaleString()} сомони`;
+  };
+
   return (
     <Box>
       <Typography variant="h5" sx={{ fontWeight: 700, mb: 3 }}>Комиссия и баланс</Typography>
@@ -278,7 +287,7 @@ const Commission: React.FC<CommissionProps> = ({ adminId }) => {
                         </TableCell>
                         <TableCell>
                           <Chip
-                            label={`${courier.balance.toLocaleString()} сомони`}
+                            label={formatCost(courier.balance)}
                             color={courier.balance >= 0 ? 'success' : 'error'}
                             size="small"
                           />
@@ -335,9 +344,9 @@ const Commission: React.FC<CommissionProps> = ({ adminId }) => {
                           />
                         </TableCell>
                         <TableCell sx={{ color: tx.amount >= 0 ? 'green' : 'red', fontWeight: 600 }}>
-                          {tx.amount >= 0 ? '+' : ''}{tx.amount.toLocaleString()} сомони
+                          {tx.amount >= 0 ? '+' : ''}{formatCost(tx.amount)}
                         </TableCell>
-                        <TableCell>{tx.balanceAfter?.toLocaleString()} сомони</TableCell>
+                        <TableCell>{formatCost(tx.balanceAfter)}</TableCell>
                         <TableCell>{tx.description}</TableCell>
                       </TableRow>
                     ))}
@@ -359,7 +368,7 @@ const Commission: React.FC<CommissionProps> = ({ adminId }) => {
         <DialogTitle>Пополнить баланс: {selectedCourier?.name}</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            Текущий баланс: {selectedCourier?.balance?.toLocaleString()} сомони
+            Текущий баланс: {formatCost(selectedCourier?.balance || 0)}
           </Typography>
           <TextField
             fullWidth

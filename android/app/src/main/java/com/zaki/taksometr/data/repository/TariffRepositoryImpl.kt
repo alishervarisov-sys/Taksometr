@@ -56,11 +56,13 @@ class TariffRepositoryImpl @Inject constructor(
             val costPerKm = tariffDoc.getDouble("costPerKm") ?: 1500.0
             val distanceKm = distanceMeters / 1000.0
 
-            var cost = baseCost
-            if (distanceKm > baseDistanceKm) {
-                cost += (distanceKm - baseDistanceKm) * costPerKm
+            // Round to 2 decimal places for exact diram display
+            val rawCost = if (distanceKm > baseDistanceKm) {
+                baseCost + (distanceKm - baseDistanceKm) * costPerKm
+            } else {
+                baseCost
             }
-            kotlin.math.max(baseCost, kotlin.math.ceil(cost))
+            kotlin.math.max(baseCost, kotlin.math.round(rawCost * 100.0) / 100.0)
         } catch (e: Exception) {
             0.0
         }

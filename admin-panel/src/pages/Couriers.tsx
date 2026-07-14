@@ -103,6 +103,15 @@ const Couriers: React.FC<CouriersProps> = ({ adminId }) => {
     loadCouriers();
   }, []);
 
+  const formatCost = (cost: number) => {
+    const abs = Math.abs(cost);
+    const somoni = Math.floor(abs);
+    const diram = Math.round((abs - somoni) * 100);
+    const sign = cost < 0 ? '-' : '';
+    if (diram > 0) return `${sign}${somoni.toLocaleString()}.${String(diram).padStart(2, '0')} сомони`;
+    return `${sign}${somoni.toLocaleString()} сомони`;
+  };
+
   const loadCouriers = async () => {
     const q = query(collection(db, 'users'), where('role', '==', 'COURIER'));
     const snapshot = await getDocs(q);
@@ -405,7 +414,7 @@ const Couriers: React.FC<CouriersProps> = ({ adminId }) => {
                   <TableCell>{courier.phone}</TableCell>
                   <TableCell>
                     <Chip
-                      label={`${(courier.balance || 0).toLocaleString()} сомони`}
+                      label={formatCost(courier.balance || 0)}
                       color={(courier.balance || 0) >= 5 ? 'success' : 'error'}
                       size="small"
                     />
@@ -518,7 +527,7 @@ const Couriers: React.FC<CouriersProps> = ({ adminId }) => {
         <DialogContent>
           <Box sx={{ mb: 3 }}>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-              Текущий баланс: <strong>{(historyCourier?.balance || 0).toLocaleString()} сомони</strong>
+              Текущий баланс: <strong>{formatCost(historyCourier?.balance || 0)}</strong>
             </Typography>
             
             {/* Period selector */}
@@ -561,7 +570,7 @@ const Couriers: React.FC<CouriersProps> = ({ adminId }) => {
                   <Card sx={{ bgcolor: 'success.main', color: 'white' }}>
                     <CardContent sx={{ textAlign: 'center', py: 2 }}>
                       <Typography variant="h5" sx={{ fontWeight: 700 }}>
-                        {historyStats.totalEarnings.toLocaleString()}
+                        {formatCost(historyStats.totalEarnings)}
                       </Typography>
                       <Typography variant="body2">
                         Заработок
@@ -573,7 +582,7 @@ const Couriers: React.FC<CouriersProps> = ({ adminId }) => {
                   <Card sx={{ bgcolor: 'warning.main', color: 'white' }}>
                     <CardContent sx={{ textAlign: 'center', py: 2 }}>
                       <Typography variant="h5" sx={{ fontWeight: 700 }}>
-                        {historyStats.totalCommission.toLocaleString()}
+                        {formatCost(historyStats.totalCommission)}
                       </Typography>
                       <Typography variant="body2">
                         Комиссия
@@ -585,7 +594,7 @@ const Couriers: React.FC<CouriersProps> = ({ adminId }) => {
                   <Card sx={{ bgcolor: 'info.main', color: 'white' }}>
                     <CardContent sx={{ textAlign: 'center', py: 2 }}>
                       <Typography variant="h5" sx={{ fontWeight: 700 }}>
-                        {historyStats.netEarnings.toLocaleString()}
+                        {formatCost(historyStats.netEarnings)}
                       </Typography>
                       <Typography variant="body2">
                         Чистый заработок
@@ -623,13 +632,13 @@ const Couriers: React.FC<CouriersProps> = ({ adminId }) => {
                             : '—'}
                         </TableCell>
                         <TableCell sx={{ color: 'success.main', fontWeight: 600 }}>
-                          {(delivery.cost || 0).toLocaleString()} с
+                          {formatCost(delivery.cost || 0)}
                         </TableCell>
                         <TableCell sx={{ color: 'warning.main', fontWeight: 600 }}>
-                          {(delivery.commission || 0).toLocaleString()} с
+                          {formatCost(delivery.commission || 0)}
                         </TableCell>
                         <TableCell sx={{ color: 'info.main', fontWeight: 600 }}>
-                          {((delivery.cost || 0) - (delivery.commission || 0)).toLocaleString()} с
+                          {formatCost((delivery.cost || 0) - (delivery.commission || 0))}
                         </TableCell>
                       </TableRow>
                     ))}
