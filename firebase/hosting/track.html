@@ -165,6 +165,18 @@
       document.getElementById('error-message').textContent = message;
     }
 
+    // Shared tracking state. The delivery document's `route` array is only
+    // written by a periodic background worker (every ~15 min) and at completion,
+    // so it stays empty for most of an active trip. The courier's live position,
+    // however, is pushed to users/{courierId}.lastLocation every ~10s. We use
+    // that as the primary source for the live marker and draw the `route` trail
+    // whenever it becomes available.
+    let latestRoute = [];
+    let latestCourierPos = null;
+    let deliveryFinished = false;
+    let courierSubscribed = false;
+    let sawAnyPosition = false;
+
     function startTracking(id) {
       db.collection('deliveries').doc(id).onSnapshot(function(doc) {
         if (!doc.exists) {
@@ -173,17 +185,20 @@
         }
 
         const data = doc.data();
-        const route = data.route || [];
+        latestRoute = data.route || [];
         const status = data.status;
         const courierName = data.courierName || "";
+        const courierId = data.courierId || "";
 
         if (status === 'COMPLETED') {
+          deliveryFinished = true;
           document.getElementById('status-dot').classList.add('completed');
           document.getElementById('status-text').textContent = "Анҷом ёфт";
         } else if (status === 'CANCELLED') {
           showError("Фармоиш бекор шуд", "Ин фармоиш бекор карда шудааст.");
           return;
         } else {
+          deliveryFinished = false;
           document.getElementById('status-dot').classList.remove('completed');
           document.getElementById('status-text').textContent = "Дар роҳ";
         }
@@ -192,29 +207,70 @@
           document.getElementById('courier-name').textContent = "Расонанда: " + courierName;
         }
 
-        if (route.length === 0) {
-          // No route yet, show loading with message
-          document.getElementById('loading').style.display = 'flex';
-          document.querySelector('#loading p').textContent = 'Интизори маълумоти ҷойгиршавӣ...';
-          return;
+        // Subscribe once to the courier's live location for real-time tracking.
+        if (courierId && !courierSubscribed) {
+          courierSubscribed = true;
+          subscribeToCourierLocation(courierId);
         }
 
-        // We have route data - show map
-        document.getElementById('loading').style.display = 'none';
-        document.getElementById('map').style.display = 'block';
-        document.getElementById('info-bar').style.display = 'flex';
-
-        if (!window.mapInitialized) {
-          loadGoogleMaps(function() {
-            initMap(route);
-          });
-        } else {
-          updateMap(route);
-        }
+        render();
       }, function(error) {
         console.error("Firestore error:", error);
         showError("Хато", "Хатои пайвастшавӣ. Лутфан саҳифаро аз нав кушоед.");
       });
+    }
+
+    function subscribeToCourierLocation(courierId) {
+      db.collection('users').doc(courierId).onSnapshot(function(doc) {
+        if (!doc.exists) return;
+        const loc = doc.data().lastLocation;
+        if (loc && typeof loc.latitude === 'number' && typeof loc.longitude === 'number') {
+          latestCourierPos = { latitude: loc.latitude, longitude: loc.longitude };
+          render();
+        }
+      }, function(error) {
+        console.error("Courier location error:", error);
+      });
+    }
+
+    // Decide what to draw from whatever data we currently have. The live marker
+    // prefers the courier's real-time position; the trail comes from the route.
+    function render() {
+      const routePath = (latestRoute || [])
+        .filter(function(p) { return !p.gap && typeof p.latitude === 'number'; })
+        .map(function(p) { return { lat: p.latitude, lng: p.longitude }; });
+
+      let markerPos = null;
+      if (latestCourierPos) {
+        markerPos = { lat: latestCourierPos.latitude, lng: latestCourierPos.longitude };
+      } else if (routePath.length > 0) {
+        markerPos = routePath[routePath.length - 1];
+      }
+
+      if (!markerPos) {
+        // No position from either source yet — keep the client informed.
+        document.getElementById('loading').style.display = 'flex';
+        document.getElementById('map').style.display = 'none';
+        document.getElementById('info-bar').style.display = 'none';
+        document.querySelector('#loading p').textContent = 'Интизори маълумоти ҷойгиршавӣ...';
+        return;
+      }
+
+      sawAnyPosition = true;
+      document.getElementById('loading').style.display = 'none';
+      document.getElementById('map').style.display = 'block';
+      document.getElementById('info-bar').style.display = 'flex';
+
+      if (window.mapInitialized) {
+        updateMap(markerPos, routePath);
+      } else if (!window.mapLoading) {
+        // Guard: render() fires from two snapshot listeners, so make sure we
+        // only kick off the Google Maps load (and initMap) a single time.
+        window.mapLoading = true;
+        loadGoogleMaps(function() {
+          initMap(markerPos, routePath);
+        });
+      }
     }
 
     function loadGoogleMaps(callback) {
@@ -231,13 +287,12 @@
 
     let map, marker, polyline;
 
-    function initMap(route) {
+    // markerPos: {lat,lng} live courier position. routePath: array of {lat,lng}.
+    function initMap(markerPos, routePath) {
       window.mapInitialized = true;
-      const lastPoint = route[route.length - 1];
-      const center = { lat: lastPoint.latitude, lng: lastPoint.longitude };
 
       map = new google.maps.Map(document.getElementById('map'), {
-        center: center,
+        center: markerPos,
         zoom: 15,
         disableDefaultUI: true,
         zoomControl: true,
@@ -251,7 +306,7 @@
 
       // Courier marker
       marker = new google.maps.Marker({
-        position: center,
+        position: markerPos,
         map: map,
         icon: {
           path: google.maps.SymbolPath.CIRCLE,
@@ -264,13 +319,9 @@
         title: 'Расонанда'
       });
 
-      // Route polyline
-      const path = route
-        .filter(function(p) { return !p.gap; })
-        .map(function(p) { return { lat: p.latitude, lng: p.longitude }; });
-      
+      // Route polyline (trail travelled so far, when available)
       polyline = new google.maps.Polyline({
-        path: path,
+        path: routePath || [],
         geodesic: true,
         strokeColor: '#2e7d32',
         strokeOpacity: 0.8,
@@ -279,22 +330,14 @@
       });
     }
 
-    function updateMap(route) {
+    function updateMap(markerPos, routePath) {
       if (!map || !marker) return;
 
-      const lastPoint = route[route.length - 1];
-      const pos = { lat: lastPoint.latitude, lng: lastPoint.longitude };
-      
-      marker.setPosition(pos);
-      map.panTo(pos);
+      marker.setPosition(markerPos);
+      map.panTo(markerPos);
 
-      // Update polyline
-      const path = route
-        .filter(function(p) { return !p.gap; })
-        .map(function(p) { return { lat: p.latitude, lng: p.longitude }; });
-      
       if (polyline) {
-        polyline.setPath(path);
+        polyline.setPath(routePath || []);
       }
     }
   </script>
