@@ -6,6 +6,7 @@ import Dashboard from './pages/Dashboard';
 import Couriers from './pages/Couriers';
 import Tariffs from './pages/Tariffs';
 import Deliveries from './pages/Deliveries';
+import Clients from './pages/Clients';
 import MapView from './pages/MapView';
 import Statistics from './pages/Statistics';
 import Analytics from './pages/Analytics';
@@ -105,6 +106,7 @@ function App() {
               <Route path="couriers" element={<Couriers adminId={adminId!} />} />
               <Route path="tariffs" element={<Tariffs adminId={adminId!} />} />
               <Route path="deliveries" element={<Deliveries adminId={adminId!} />} />
+              <Route path="clients" element={<Clients adminId={adminId!} />} />
               {/* Delivery chains removed */}
               <Route path="map" element={<MapView adminId={adminId!} />} />
               <Route path="statistics" element={<Statistics adminId={adminId!} />} />
