@@ -1628,7 +1628,7 @@ export const assignCourierToClient = functions.https.onCall(async (data, context
   
   smsText += ` барои шумо таъин карда шуд. `;
   smsText += `Барои фармоиш додан бо ӯ тамос гиред. `;
-  smsText += `Барномаи ZaKi: https://clck.ru/3TuGb6`;
+  smsText += `Барои даъвати расонанда телеграм бот: https://t.me/zakidostavka_bot`;
 
   // Send SMS to client
   await sendSms(clientPhone, smsText);
