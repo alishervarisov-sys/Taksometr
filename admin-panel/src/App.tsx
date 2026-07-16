@@ -8,6 +8,7 @@ import Tariffs from './pages/Tariffs';
 import Deliveries from './pages/Deliveries';
 import MapView from './pages/MapView';
 import Statistics from './pages/Statistics';
+import Analytics from './pages/Analytics';
 import Commission from './pages/Commission';
 import Credentials from './pages/Credentials';
 import Admins from './pages/Admins';
@@ -107,6 +108,7 @@ function App() {
               {/* Delivery chains removed */}
               <Route path="map" element={<MapView adminId={adminId!} />} />
               <Route path="statistics" element={<Statistics adminId={adminId!} />} />
+              <Route path="analytics" element={<Analytics adminId={adminId!} />} />
               <Route path="commission" element={<Commission adminId={adminId!} />} />
               <Route path="credentials" element={<Credentials adminId={adminId!} />} />
               {adminRole === 'SUPER_ADMIN' && (

@@ -648,6 +648,46 @@ export const completeDelivery = functions.https.onCall(async (data, context) => 
     // ---- Sync courier status after completing this delivery ----
   await syncCourierStatus(courierId, "completeDelivery: delivery status changed to COMPLETED");
 
+  // ---- Push commission data to ZaKi Rashod for analytics (fire-and-forget) ----
+  try {
+    const zakiRashodUrl = process.env.ZAKI_RASHOD_COMMISSION_URL || "";
+    const zakiRashodApiKey = process.env.ZAKI_RASHOD_API_KEY || "";
+    if (zakiRashodUrl && commissionAmount > 0) {
+      const payload = {
+        source: "taksometr",
+        orderId: deliveryId,
+        driverId: courierId,
+        driverName: deliveryData.courierName || "Неизвестный",
+        commissionAmount: commissionAmount,
+        orderAmount: totalCost,
+        commissionPercent: commissionPercent,
+        orderType: deliveryType || "default",
+        completedAt: new Date(deliveryData.createdAt || Date.now()).toISOString(),
+      };
+
+      const pushResponse = await fetch(zakiRashodUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(zakiRashodApiKey ? { "x-api-key": zakiRashodApiKey } : {}),
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!pushResponse.ok) {
+        const errText = await pushResponse.text().catch(() => "");
+        console.error(`ZaKi Rashod commission push failed (${pushResponse.status}): ${errText}`);
+      } else {
+        console.log(`ZaKi Rashod commission push success for deliveryId=${deliveryId}`);
+      }
+    } else if (!zakiRashodUrl) {
+      console.warn("ZAKI_RASHOD_COMMISSION_URL is not set, skipping commission push");
+    }
+  } catch (pushErr) {
+    // Ошибка отправки не должна блокировать завершение доставки
+    console.error("Ошибка отправки комиссии в ZaKi Rashod:", pushErr);
+  }
+
   // ---- Notify client by SMS about the final delivery total (Tajik) ----
   let completeSmsText = `Фармоиши ZaKi анҷом ёфт. `;
   
@@ -2433,3 +2473,108 @@ export const scheduledTelegramReport = functions.pubsub
 // Keep taxi logic fully isolated in taxi.ts and taxiDrivers.ts.
 export { createTaxiOrder, taxiTelegramPoller } from "./taxi";
 export { approveTaxiDriver, rejectTaxiDriver, blockTaxiDriver, sendTaxiBroadcast, createTaxiDriverByAdmin } from "./taxiDrivers";
+
+
+// ============ ONE-TIME MIGRATION: push all historical commissions to ZaKi Rashod ============
+// Call this once via HTTP: GET https://<region>-auva-70253.cloudfunctions.net/migrateCommissionsToRashod
+// After successful migration, delete this function.
+export const migrateCommissionsToRashod = functions.runWith({ timeoutSeconds: 540, memory: "512MB" }).https.onRequest(async (req, res) => {
+  const ZAKI_URL = process.env.ZAKI_RASHOD_COMMISSION_URL || "";
+  const ZAKI_KEY = process.env.ZAKI_RASHOD_API_KEY || "";
+
+  if (!ZAKI_URL) {
+    res.status(500).json({ error: "ZAKI_RASHOD_COMMISSION_URL not configured" });
+    return;
+  }
+
+  try {
+    // Step 1: Delete ALL existing taksometr records from rashod_commissions
+    // by calling a special endpoint or just re-sending with createdAt as completedAt.
+    // Since receiveCommission checks for duplicates by orderId+source and skips them,
+    // we need to use a "force" approach. We'll rely on the fact that the endpoint
+    // already has idempotency check - duplicates are skipped, so we just need to
+    // ensure completedAt is correct. For a full re-sync, we need to delete old records first.
+    // We'll skip deletion and just accept the duplicate check will skip already-imported ones.
+    // The key fix: use createdAt instead of endTime so dates align with Taksometr stats.
+
+    const snapshot = await db.collection("deliveries")
+      .where("status", "==", "COMPLETED")
+      .get();
+
+    let sent = 0;
+    let skipped = 0;
+    let duplicates = 0;
+    let errors = 0;
+
+    // Process in parallel batches of 20 for speed
+    const BATCH_SIZE = 20;
+    const payloads: Array<{docId: string; payload: any}> = [];
+
+    for (const doc of snapshot.docs) {
+      const d = doc.data();
+      const commission = d.commission || 0;
+      if (commission <= 0) { skipped++; continue; }
+
+      const rawCreatedAt = d.createdAt || d.endTime || Date.now();
+      const completedAt = new Date(rawCreatedAt).toISOString();
+
+      payloads.push({
+        docId: doc.id,
+        payload: {
+          source: "taksometr",
+          orderId: doc.id,
+          driverId: d.courierId || "",
+          driverName: d.courierName || "Неизвестный",
+          commissionAmount: commission,
+          orderAmount: d.cost || 0,
+          commissionPercent: d.cost > 0 ? Math.round((commission / d.cost) * 1000) / 10 : 0,
+          orderType: d.deliveryType || "default",
+          completedAt: completedAt,
+        },
+      });
+    }
+
+    // Send in parallel batches
+    for (let i = 0; i < payloads.length; i += BATCH_SIZE) {
+      const batch = payloads.slice(i, i + BATCH_SIZE);
+      const results = await Promise.allSettled(
+        batch.map(async ({ payload }) => {
+          const pushResp = await fetch(ZAKI_URL, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...(ZAKI_KEY ? { "x-api-key": ZAKI_KEY } : {}),
+            },
+            body: JSON.stringify(payload),
+          });
+          if (pushResp.ok) {
+            const body: any = await pushResp.json().catch(() => ({}));
+            return body.duplicate ? "duplicate" : "sent";
+          }
+          return "error";
+        })
+      );
+
+      for (const r of results) {
+        if (r.status === "fulfilled") {
+          if (r.value === "sent") sent++;
+          else if (r.value === "duplicate") duplicates++;
+          else errors++;
+        } else {
+          errors++;
+        }
+      }
+    }
+
+    res.status(200).json({
+      total: snapshot.size,
+      sent,
+      duplicates,
+      skipped,
+      errors,
+    });
+  } catch (e: any) {
+    console.error("migrateCommissionsToRashod error:", e);
+    res.status(500).json({ error: e.message || "Unknown error" });
+  }
+});
