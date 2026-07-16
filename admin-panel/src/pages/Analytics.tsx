@@ -89,6 +89,37 @@ const STATUS_META: Record<string, { label: string; color: string }> = {
 
 const WEEKDAY_LABELS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 
+// Convert a value that may be a number (ms), a Firestore Timestamp, or an ISO
+// string into milliseconds. Returns undefined when not parseable.
+const toMs = (v: any): number | undefined => {
+  if (v == null) return undefined;
+  if (typeof v === 'number') return v;
+  if (typeof v === 'string') {
+    const n = Date.parse(v);
+    return Number.isNaN(n) ? undefined : n;
+  }
+  if (typeof v === 'object') {
+    if (typeof v.toMillis === 'function') return v.toMillis();
+    if (typeof v.seconds === 'number') return v.seconds * 1000 + Math.floor((v.nanoseconds || 0) / 1e6);
+    if (typeof v._seconds === 'number') return v._seconds * 1000 + Math.floor((v._nanoseconds || 0) / 1e6);
+  }
+  return undefined;
+};
+
+const normalizeDelivery = (id: string, data: any): RawDelivery => ({
+  ...data,
+  id,
+  createdAt: toMs(data.createdAt),
+  startTime: toMs(data.startTime),
+  endTime: toMs(data.endTime) ?? null,
+});
+
+const normalizeTaxi = (id: string, data: any): RawTaxi => ({
+  ...data,
+  id,
+  createdAt: toMs(data.createdAt),
+});
+
 const Analytics: React.FC<AnalyticsProps> = () => {
   const [loading, setLoading] = useState(true);
   const [period, setPeriod] = useState<Period>('week');
@@ -142,52 +173,42 @@ const Analytics: React.FC<AnalyticsProps> = () => {
   };
 
   // ─── Data loading ───────────────────────────────────────────────────────────
+  // We load whole collections and filter client-side (same proven approach as the
+  // Dashboard leaderboard). This avoids Firestore inequality/index pitfalls and
+  // handles `createdAt` stored as either a number or a Firestore Timestamp.
   const loadData = async () => {
     setLoading(true);
+    const { start, end } = getDateRange();
+    setRange({ start, end });
+
+    // Deliveries — load everything, filter by date on the client.
     try {
-      const { start, end } = getDateRange();
-      setRange({ start, end });
-
-      // Load deliveries up to endDate (covers current period + previous period + lifetime cohort)
-      const delSnap = await getDocs(query(
-        collection(db, 'deliveries'),
-        where('createdAt', '<=', end),
-        orderBy('createdAt', 'desc'),
-        limit(20000),
-      ));
-      const deliveries = delSnap.docs.map(d => ({ id: d.id, ...d.data() })) as RawDelivery[];
-
-      // Taxi orders up to endDate
-      let taxi: RawTaxi[] = [];
-      try {
-        const taxiSnap = await getDocs(query(
-          collection(db, 'taxi_orders'),
-          where('createdAt', '<=', end),
-          orderBy('createdAt', 'desc'),
-          limit(20000),
-        ));
-        taxi = taxiSnap.docs.map(d => ({ id: d.id, ...d.data() })) as RawTaxi[];
-      } catch (e) {
-        console.warn('taxi_orders load failed', e);
-      }
-
-      // Total couriers
-      let couriers = 0;
-      try {
-        const cSnap = await getDocs(query(collection(db, 'users'), where('role', '==', 'COURIER')));
-        couriers = cSnap.size;
-      } catch (e) {
-        console.warn('couriers load failed', e);
-      }
-
-      setAllDeliveries(deliveries);
-      setAllTaxi(taxi);
-      setTotalCouriers(couriers);
-    } catch (err) {
-      console.error('Error loading analytics:', err);
-    } finally {
-      setLoading(false);
+      const delSnap = await getDocs(collection(db, 'deliveries'));
+      setAllDeliveries(delSnap.docs.map(d => normalizeDelivery(d.id, d.data())));
+    } catch (e) {
+      console.error('deliveries load failed', e);
+      setAllDeliveries([]);
     }
+
+    // Taxi orders
+    try {
+      const taxiSnap = await getDocs(collection(db, 'taxi_orders'));
+      setAllTaxi(taxiSnap.docs.map(d => normalizeTaxi(d.id, d.data())));
+    } catch (e) {
+      console.warn('taxi_orders load failed', e);
+      setAllTaxi([]);
+    }
+
+    // Total couriers (independent of everything above)
+    try {
+      const cSnap = await getDocs(query(collection(db, 'users'), where('role', '==', 'COURIER')));
+      setTotalCouriers(cSnap.size);
+    } catch (e) {
+      console.warn('couriers load failed', e);
+      setTotalCouriers(0);
+    }
+
+    setLoading(false);
   };
 
   // ─── Derived analytics ──────────────────────────────────────────────────────
