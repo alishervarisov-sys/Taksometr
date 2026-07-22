@@ -2324,6 +2324,195 @@ export const adminCompleteDelivery = functions.https.onCall(async (data, context
   return {success: true};
 });
 
+// ============ ADMIN: SET DELIVERY STATUS (COMPLETED <-> CANCELLED anytime) ============
+// Allows an admin to switch a delivery between COMPLETED and CANCELLED at any
+// time. Commission is charged/refunded idempotently so the courier balance
+// stays correct no matter how many times the status is toggled.
+export const adminSetDeliveryStatus = functions.https.onCall(async (data, context) => {
+  const {adminId, deliveryId} = data;
+  const newStatus: string = data.status;
+
+  await verifyAdmin(adminId);
+
+  if (!deliveryId || !newStatus) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "deliveryId and status are required"
+    );
+  }
+  if (newStatus !== "COMPLETED" && newStatus !== "CANCELLED") {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "status must be COMPLETED or CANCELLED"
+    );
+  }
+
+  const deliveryRef = db.collection("deliveries").doc(deliveryId);
+  const deliveryDoc = await deliveryRef.get();
+  if (!deliveryDoc.exists) {
+    throw new functions.https.HttpsError("not-found", "Delivery not found");
+  }
+
+  const deliveryData = deliveryDoc.data()!;
+  const currentStatus = deliveryData.status;
+  const courierId: string | null = deliveryData.courierId || null;
+  const isMarketplace = deliveryData.orderKind === "MARKETPLACE";
+
+  // Nothing to do if already in the requested status.
+  if (currentStatus === newStatus) {
+    return {success: true, unchanged: true, status: newStatus};
+  }
+
+  // Is the commission currently deducted from the courier balance?
+  // Legacy fallback: a COMPLETED delivery with commission>0 counts as charged.
+  const commissionCurrentlyCharged =
+    deliveryData.commissionCharged === true ||
+    (deliveryData.commissionCharged === undefined &&
+      currentStatus === "COMPLETED" &&
+      (deliveryData.commission || 0) > 0);
+
+  if (newStatus === "COMPLETED") {
+    // ---- Determine cost ----
+    let totalCost: number;
+    let distanceMeters: number = deliveryData.distanceMeters || 0;
+    const deliveryType = deliveryData.deliveryType || "default";
+    const fixedPrice = deliveryData.fixedPrice;
+
+    if ((deliveryData.cost || 0) > 0) {
+      // Reuse cost computed previously (e.g. re-completing after a cancel).
+      totalCost = deliveryData.cost;
+    } else if (
+      deliveryType !== "default" &&
+      fixedPrice !== null &&
+      fixedPrice !== undefined
+    ) {
+      totalCost = fixedPrice;
+    } else {
+      const route = deliveryData.route || [];
+      distanceMeters = route.length > 0 ? calculateRouteDistance(route) : distanceMeters;
+      const tariffDoc = await db.collection("tariffs").doc("default").get();
+      let baseCost = 5000;
+      let baseDistanceKm = 3;
+      let costPerKm = 1500;
+      if (tariffDoc.exists) {
+        const t = tariffDoc.data()!;
+        baseCost = t.baseCost || 5000;
+        baseDistanceKm = t.baseDistanceKm ?? 3;
+        costPerKm = t.costPerKm || 1500;
+      }
+      totalCost = computeCost(distanceMeters, baseCost, baseDistanceKm, costPerKm);
+    }
+
+    // ---- Determine and (if needed) charge commission ----
+    let commissionAmount = deliveryData.commission || 0;
+    if (courierId) {
+      const courierRef = db.collection("users").doc(courierId);
+      const courierDoc = await courierRef.get();
+      const courierData = courierDoc.exists ? courierDoc.data()! : {};
+
+      if (!(commissionAmount > 0)) {
+        let commissionPercent: number;
+        if (
+          courierData.commissionPercent !== undefined &&
+          courierData.commissionPercent !== null
+        ) {
+          commissionPercent = courierData.commissionPercent;
+        } else {
+          const settingsDoc = await db.collection("settings").doc("commission").get();
+          commissionPercent = settingsDoc.exists ? (settingsDoc.data()!.percent || 0) : 0;
+        }
+        commissionAmount = Math.round((totalCost * commissionPercent / 100) * 100) / 100;
+      }
+
+      if (!commissionCurrentlyCharged && commissionAmount > 0) {
+        const currentBalance = courierData.balance || 0;
+        const newBalance = currentBalance - commissionAmount;
+        await courierRef.update({balance: newBalance});
+        await db.collection("transactions").add({
+          courierId: courierId,
+          courierName: deliveryData.courierName || "",
+          type: "COMMISSION",
+          amount: -commissionAmount,
+          deliveryId: deliveryId,
+          balanceAfter: newBalance,
+          description: "Комиссия за доставку (завершена админом)",
+          createdAt: Date.now(),
+        });
+      }
+    }
+
+    const update: {[key: string]: unknown} = {
+      status: "COMPLETED",
+      endTime: Date.now(),
+      distanceMeters: distanceMeters,
+      cost: totalCost,
+      commission: commissionAmount,
+      commissionCharged: !!courierId && commissionAmount > 0,
+      statusChangedByAdminId: adminId,
+      statusChangedAt: Date.now(),
+    };
+    if (isMarketplace) update.adminOrderStage = "COMPLETED";
+    await deliveryRef.update(update);
+
+    // Notify client only when transitioning into COMPLETED.
+    if (deliveryData.clientPhone) {
+      let smsText = "Фармоиши ZaKi анҷом ёфт. ";
+      if (distanceMeters > 0) {
+        smsText += `Масофа: ${(distanceMeters / 1000).toFixed(1)} км. `;
+      }
+      smsText += `Маблағи умумӣ: ${formatCostForSms(totalCost)} сомонӣ. Ташаккур!`;
+      await sendSms(deliveryData.clientPhone, smsText);
+    }
+
+    if (courierId) {
+      await syncCourierStatus(courierId, "adminSetDeliveryStatus: status -> COMPLETED");
+    }
+
+    return {success: true, status: "COMPLETED"};
+  }
+
+  // ---- newStatus === "CANCELLED" ----
+  // Refund the commission if it is currently charged to the courier.
+  if (courierId && commissionCurrentlyCharged) {
+    const commissionAmount = deliveryData.commission || 0;
+    if (commissionAmount > 0) {
+      const courierRef = db.collection("users").doc(courierId);
+      const courierDoc = await courierRef.get();
+      const courierData = courierDoc.exists ? courierDoc.data()! : {};
+      const currentBalance = courierData.balance || 0;
+      const newBalance = currentBalance + commissionAmount;
+      await courierRef.update({balance: newBalance});
+      await db.collection("transactions").add({
+        courierId: courierId,
+        courierName: deliveryData.courierName || "",
+        type: "COMMISSION_REFUND",
+        amount: commissionAmount,
+        deliveryId: deliveryId,
+        balanceAfter: newBalance,
+        description: "Возврат комиссии (доставка отменена админом)",
+        createdAt: Date.now(),
+      });
+    }
+  }
+
+  const cancelUpdate: {[key: string]: unknown} = {
+    status: "CANCELLED",
+    endTime: Date.now(),
+    commissionCharged: false,
+    cancelledByAdminId: adminId,
+    statusChangedByAdminId: adminId,
+    statusChangedAt: Date.now(),
+  };
+  if (isMarketplace) cancelUpdate.adminOrderStage = "CANCELLED";
+  await deliveryRef.update(cancelUpdate);
+
+  if (courierId) {
+    await syncCourierStatus(courierId, "adminSetDeliveryStatus: status -> CANCELLED");
+  }
+
+  return {success: true, status: "CANCELLED"};
+});
+
 
 // ============ TELEGRAM REPORT ============
 

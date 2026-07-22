@@ -6,7 +6,7 @@ import {
   MenuItem, ToggleButtonGroup, ToggleButton, Stack, Alert
 } from '@mui/material';
 import { Search } from '@mui/icons-material';
-import { collection, getDocs, query, orderBy, limit, doc, getDoc, updateDoc, where } from 'firebase/firestore';
+import { collection, getDocs, query, orderBy, limit, doc, getDoc, where, onSnapshot } from 'firebase/firestore';
 import { GoogleMap, useJsApiLoader, PolylineF, MarkerF } from '@react-google-maps/api';
 import { db, GOOGLE_MAPS_API_KEY, functions } from '../firebase';
 import { httpsCallable } from 'firebase/functions';
@@ -62,6 +62,7 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
   const [isSearching, setIsSearching] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [isCreatingOrder, setIsCreatingOrder] = useState(false);
+  const [changingStatusId, setChangingStatusId] = useState<string | null>(null);
   const [mapPickerMode, setMapPickerMode] = useState<'pickup' | 'destination' | null>(null);
   const [mapCenter, setMapCenter] = useState<{ lat: number; lng: number }>(() => {
     try {
@@ -87,9 +88,25 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
   });
 
   useEffect(() => {
-    loadDeliveries();
+    // Real-time subscription: status changes (from admin panel, courier app,
+    // or backend) propagate here asynchronously without manual reload.
+    const q = query(collection(db, 'deliveries'), orderBy('createdAt', 'desc'), limit(200));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const data = snapshot.docs.map(d => ({ id: d.id, ...d.data() })) as Delivery[];
+      setDeliveries(data);
+    });
     loadCouriers();
+    return () => unsubscribe();
   }, []);
+
+  // Keep the open detail dialog in sync with live updates.
+  useEffect(() => {
+    setSelectedDelivery(prev => {
+      if (!prev) return prev;
+      const updated = deliveries.find(d => d.id === prev.id);
+      return updated ? { ...prev, ...updated } : prev;
+    });
+  }, [deliveries]);
 
   const loadCouriers = async () => {
     const q = query(collection(db, 'users'), where('role', '==', 'COURIER'));
@@ -170,57 +187,36 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
     setReportResult({ total, count: filtered.length });
   };
 
-  const handleCancelDelivery = async (delivery: Delivery) => {
-    const confirmMessage = delivery.courierId
-      ? `Отменить доставку?\n\nКурьер: ${delivery.courierName}\nКлиент: ${delivery.clientPhone}`
-      : 'Отменить эту доставку?';
+  // Unified status switch: works for any current status and can toggle
+  // COMPLETED <-> CANCELLED at any time. Commission is handled server-side.
+  const handleChangeStatus = async (delivery: Delivery, newStatus: 'COMPLETED' | 'CANCELLED') => {
+    const actionWord = newStatus === 'COMPLETED' ? 'Завершить' : 'Отменить';
+    const confirmMessage = `${actionWord} доставку?\n\nКурьер: ${delivery.courierName || '—'}\nКлиент: ${delivery.clientPhone || '—'}`;
     if (!window.confirm(confirmMessage)) return;
 
     try {
-      if (delivery.orderKind === 'MARKETPLACE') {
-        const cancelMarketplaceFn = httpsCallable(functions, 'adminCancelMarketplaceDelivery');
-        await cancelMarketplaceFn({ adminId, deliveryId: delivery.id });
-      } else if (delivery.courierId) {
-        const cancelDeliveryFn = httpsCallable(functions, 'adminCancelDelivery');
-        await cancelDeliveryFn({ adminId, deliveryId: delivery.id });
-      } else {
-        await updateDoc(doc(db, 'deliveries', delivery.id), { status: 'CANCELLED', endTime: Date.now() });
-      }
-      loadDeliveries();
+      setChangingStatusId(delivery.id);
+      const setStatusFn = httpsCallable(functions, 'adminSetDeliveryStatus');
+      await setStatusFn({ adminId, deliveryId: delivery.id, status: newStatus });
+      // The onSnapshot listener updates the list automatically (async everywhere).
     } catch (error: any) {
-      alert('Ошибка отмены: ' + (error.message || 'Неизвестная ошибка'));
-    }
-  };
-
-  const handleCompleteDelivery = async (delivery: Delivery) => {
-    if (!window.confirm(`Завершить доставку?\n\nКурьер: ${delivery.courierName}\nКлиент: ${delivery.clientPhone}`)) return;
-    try {
-      const completeDeliveryFn = httpsCallable(functions, 'adminCompleteDelivery');
-      await completeDeliveryFn({ adminId, deliveryId: delivery.id });
-      alert('✅ Доставка завершена! SMS отправлено клиенту.');
-      loadDeliveries();
-    } catch (error: any) {
-      alert('Ошибка: ' + (error.message || 'Не удалось завершить доставку'));
+      alert('Ошибка изменения статуса: ' + (error.message || 'Неизвестная ошибка'));
+    } finally {
+      setChangingStatusId(null);
     }
   };
 
   const handleFixProblemDelivery = async (delivery: Delivery) => {
-    if (!window.confirm(`Завершить проблемную доставку?\n\nКурьер: ${delivery.courierName}\nКлиент: ${delivery.clientPhone}`)) return;
+    if (!window.confirm(`Отменить проблемную доставку?\n\nКурьер: ${delivery.courierName || '—'}\nКлиент: ${delivery.clientPhone || '—'}`)) return;
     try {
-      if (delivery.courierId) {
-        const cancelDeliveryFn = httpsCallable(functions, 'adminCancelDelivery');
-        await cancelDeliveryFn({ adminId, deliveryId: delivery.id });
-      } else {
-        await updateDoc(doc(db, 'deliveries', delivery.id), {
-          status: 'CANCELLED',
-          endTime: Date.now(),
-          note: 'Автоматически отменена через админ-панель (проблемная доставка)'
-        });
-      }
-      loadDeliveries();
+      setChangingStatusId(delivery.id);
+      const setStatusFn = httpsCallable(functions, 'adminSetDeliveryStatus');
+      await setStatusFn({ adminId, deliveryId: delivery.id, status: 'CANCELLED' });
       setProblemDeliveries(prev => prev.filter(d => d.id !== delivery.id));
     } catch (error) {
       alert('Ошибка: ' + (error as Error).message);
+    } finally {
+      setChangingStatusId(null);
     }
   };
 
@@ -425,10 +421,16 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
                   <TableCell>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                       {getStatusChip(delivery.status)}
-                      {(delivery.status === 'IN_PROGRESS' || (delivery.orderKind === 'MARKETPLACE' && delivery.status === 'PENDING')) && (
+                      {delivery.status === 'COMPLETED' && (
+                        <Button size="small" color="error" variant="outlined" disabled={changingStatusId === delivery.id} onClick={(e) => { e.stopPropagation(); handleChangeStatus(delivery, 'CANCELLED'); }}>Отменить</Button>
+                      )}
+                      {delivery.status === 'CANCELLED' && (
+                        <Button size="small" color="success" variant="contained" disabled={changingStatusId === delivery.id} onClick={(e) => { e.stopPropagation(); handleChangeStatus(delivery, 'COMPLETED'); }}>Завершить</Button>
+                      )}
+                      {(delivery.status === 'IN_PROGRESS' || delivery.status === 'PENDING') && (
                         <>
-                          <Button size="small" color="success" variant="contained" onClick={(e) => { e.stopPropagation(); handleCompleteDelivery(delivery); }}>Завершить</Button>
-                          <Button size="small" color="error" variant="outlined" onClick={(e) => { e.stopPropagation(); handleCancelDelivery(delivery); }}>Отменить</Button>
+                          <Button size="small" color="success" variant="contained" disabled={changingStatusId === delivery.id} onClick={(e) => { e.stopPropagation(); handleChangeStatus(delivery, 'COMPLETED'); }}>Завершить</Button>
+                          <Button size="small" color="error" variant="outlined" disabled={changingStatusId === delivery.id} onClick={(e) => { e.stopPropagation(); handleChangeStatus(delivery, 'CANCELLED'); }}>Отменить</Button>
                         </>
                       )}
                     </Box>
@@ -525,7 +527,21 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
             </Box>
           )}
         </DialogContent>
-        <DialogActions><Button onClick={() => setDetailOpen(false)}>Закрыть</Button></DialogActions>
+        <DialogActions>
+          {selectedDelivery && selectedDelivery.status === 'COMPLETED' && (
+            <Button color="error" variant="outlined" disabled={changingStatusId === selectedDelivery.id} onClick={() => handleChangeStatus(selectedDelivery, 'CANCELLED')}>Изменить на "Отменена"</Button>
+          )}
+          {selectedDelivery && selectedDelivery.status === 'CANCELLED' && (
+            <Button color="success" variant="contained" disabled={changingStatusId === selectedDelivery.id} onClick={() => handleChangeStatus(selectedDelivery, 'COMPLETED')}>Изменить на "Завершена"</Button>
+          )}
+          {selectedDelivery && (selectedDelivery.status === 'IN_PROGRESS' || selectedDelivery.status === 'PENDING') && (
+            <>
+              <Button color="success" variant="contained" disabled={changingStatusId === selectedDelivery.id} onClick={() => handleChangeStatus(selectedDelivery, 'COMPLETED')}>Завершить</Button>
+              <Button color="error" variant="outlined" disabled={changingStatusId === selectedDelivery.id} onClick={() => handleChangeStatus(selectedDelivery, 'CANCELLED')}>Отменить</Button>
+            </>
+          )}
+          <Button onClick={() => setDetailOpen(false)}>Закрыть</Button>
+        </DialogActions>
       </Dialog>
     </Box>
   );
