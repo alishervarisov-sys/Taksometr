@@ -19,6 +19,7 @@ interface Delivery {
   status: string;
   distanceMeters: number;
   cost: number;
+  liveCost?: number;
   commission: number;
   waitingMinutes: number;
   waitingCost: number;
@@ -417,7 +418,7 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
                   <TableCell>{formatDistance(delivery.distanceMeters)}</TableCell>
                   <TableCell>{formatSpeed(delivery.distanceMeters, delivery.startTime, delivery.endTime)}</TableCell>
                   <TableCell>{delivery.status === 'COMPLETED' && delivery.startTime && delivery.endTime ? formatDuration(delivery.startTime, delivery.endTime) : '—'}</TableCell>
-                  <TableCell>{formatCost(delivery.cost || 0)}</TableCell>
+                  <TableCell>{(delivery.status === 'IN_PROGRESS' && !(delivery.cost > 0)) ? `${formatCost(delivery.liveCost || 0)} (счётчик)` : formatCost(delivery.cost || 0)}</TableCell>
                   <TableCell>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                       {getStatusChip(delivery.status)}

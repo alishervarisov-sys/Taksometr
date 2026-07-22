@@ -2332,6 +2332,8 @@ export const adminSetDeliveryStatus = functions.https.onCall(async (data, contex
   const {adminId, deliveryId} = data;
   const newStatus: string = data.status;
 
+  console.log("[adminSetDeliveryStatus] called", {adminId, deliveryId, newStatus});
+
   await verifyAdmin(adminId);
 
   if (!deliveryId || !newStatus) {
@@ -2347,6 +2349,7 @@ export const adminSetDeliveryStatus = functions.https.onCall(async (data, contex
     );
   }
 
+  try {
   const deliveryRef = db.collection("deliveries").doc(deliveryId);
   const deliveryDoc = await deliveryRef.get();
   if (!deliveryDoc.exists) {
@@ -2383,11 +2386,19 @@ export const adminSetDeliveryStatus = functions.https.onCall(async (data, contex
       totalCost = deliveryData.cost;
     } else if (
       deliveryType !== "default" &&
+      deliveryType !== "heavyCargoMeter" &&
       fixedPrice !== null &&
       fixedPrice !== undefined
     ) {
+      // Fixed-price service type — always the fixed price.
       totalCost = fixedPrice;
+    } else if ((deliveryData.liveCost || 0) > 0) {
+      // Metered delivery: use the courier's LIVE meter amount (exactly what the
+      // courier sees running, e.g. 16.30), not a recomputed base price.
+      totalCost = deliveryData.liveCost;
+      distanceMeters = deliveryData.distanceMeters || distanceMeters;
     } else {
+      // Fallback: reconstruct cost from the synced route / distance and tariff.
       const route = deliveryData.route || [];
       distanceMeters = route.length > 0 ? calculateRouteDistance(route) : distanceMeters;
       const tariffDoc = await db.collection("tariffs").doc("default").get();
@@ -2396,9 +2407,16 @@ export const adminSetDeliveryStatus = functions.https.onCall(async (data, contex
       let costPerKm = 1500;
       if (tariffDoc.exists) {
         const t = tariffDoc.data()!;
-        baseCost = t.baseCost || 5000;
-        baseDistanceKm = t.baseDistanceKm ?? 3;
-        costPerKm = t.costPerKm || 1500;
+        if (deliveryType === "heavyCargoMeter") {
+          const hcm = t.heavyCargoMeter || {};
+          baseCost = hcm.baseCost ?? 15;
+          baseDistanceKm = hcm.baseDistanceKm ?? 3;
+          costPerKm = hcm.costPerKm ?? 4;
+        } else {
+          baseCost = t.baseCost || 5000;
+          baseDistanceKm = t.baseDistanceKm ?? 3;
+          costPerKm = t.costPerKm || 1500;
+        }
       }
       totalCost = computeCost(distanceMeters, baseCost, baseDistanceKm, costPerKm);
     }
@@ -2511,6 +2529,14 @@ export const adminSetDeliveryStatus = functions.https.onCall(async (data, contex
   }
 
   return {success: true, status: "CANCELLED"};
+  } catch (err: any) {
+    if (err instanceof functions.https.HttpsError) throw err;
+    console.error("[adminSetDeliveryStatus] failed:", err);
+    throw new functions.https.HttpsError(
+      "internal",
+      `Не удалось изменить статус: ${err?.message || String(err)}`
+    );
+  }
 });
 
 

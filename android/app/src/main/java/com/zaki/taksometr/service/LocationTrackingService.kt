@@ -189,6 +189,7 @@ class LocationTrackingService : Service() {
                     startTime = entity.startTime
                     clientPhone = entity.clientPhone
                     isMarketplaceOrder = entity.orderKind == "MARKETPLACE"
+                    currentDeliveryType = entity.deliveryType
                     // Restore the explicit pause state so it survives app/service restarts.
                     paused = entity.isPaused
                 }
@@ -254,7 +255,7 @@ class LocationTrackingService : Service() {
             }
 
             updateCourierLocationInFirestore(newPoint)
-            updateDeliverySpeedInFirestore(currentDeliveryId)
+            updateDeliveryMeterInFirestore(currentDeliveryId)
         }
 
         val distanceText = LocationUtils.formatDistance(totalDistance)
@@ -265,18 +266,24 @@ class LocationTrackingService : Service() {
 
     private var lastFirestoreUpdate = 0L
 
-    private suspend fun updateDeliverySpeedInFirestore(currentDeliveryId: String) {
+    private suspend fun updateDeliveryMeterInFirestore(currentDeliveryId: String) {
         val now = System.currentTimeMillis()
         if (now - lastDeliverySpeedUpdate < 10000) return
         lastDeliverySpeedUpdate = now
         if (currentDeliveryId.isEmpty()) return
         try {
+            // Live meter cost the courier currently sees on the counter. Pushed so
+            // that if an admin completes the order, the accrued amount (e.g. 16.30)
+            // is used instead of a recalculated base price.
+            val liveCost = tariffRepository.calculateCost(totalDistance, currentDeliveryType)
             firestore.collection(Constants.COLLECTION_DELIVERIES)
                 .document(currentDeliveryId)
                 .update(
                     mapOf(
                         "currentSpeedKmh" to currentSpeedKmh,
-                        "maxSpeedKmh" to maxSpeedKmh
+                        "maxSpeedKmh" to maxSpeedKmh,
+                        "distanceMeters" to totalDistance,
+                        "liveCost" to liveCost
                     )
                 )
                 .await()
