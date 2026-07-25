@@ -131,10 +131,17 @@ class ZaKiFirebaseMessagingService : FirebaseMessagingService() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        // Show the app's own launcher icon as the large (colorful) icon so the
+        // notification is instantly recognizable as ZaKi, like other apps.
+        val largeIcon = android.graphics.BitmapFactory.decodeResource(resources, R.mipmap.ic_launcher)
+
         val notification = NotificationCompat.Builder(this, ZaKiApp.NOTIFICATION_CHANNEL_ID)
             .setContentTitle(title)
             .setContentText(body)
             .setSmallIcon(R.drawable.ic_notification)
+            .apply { largeIcon?.let { setLargeIcon(it) } }
+            // Brand green tint applied to the small (status-bar) icon.
+            .setColor(android.graphics.Color.parseColor("#1B5E20"))
             .setAutoCancel(true)
             .setContentIntent(pendingIntent)
             .setPriority(NotificationCompat.PRIORITY_HIGH)

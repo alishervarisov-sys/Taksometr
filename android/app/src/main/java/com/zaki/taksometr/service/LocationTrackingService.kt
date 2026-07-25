@@ -386,10 +386,14 @@ class LocationTrackingService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        val largeIcon = android.graphics.BitmapFactory.decodeResource(resources, R.mipmap.ic_launcher)
+
         return NotificationCompat.Builder(this, ZaKiApp.TRACKING_CHANNEL_ID)
             .setContentTitle("ZaKi Taksometr")
             .setContentText(contentText)
             .setSmallIcon(R.drawable.ic_delivery)
+            .apply { largeIcon?.let { setLargeIcon(it) } }
+            .setColor(android.graphics.Color.parseColor("#1B5E20"))
             .setContentIntent(pendingIntent)
             .setOngoing(true)
             .setSilent(true)
