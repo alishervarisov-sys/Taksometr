@@ -257,10 +257,12 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
   };
 
   const handleCreateMarketplaceOrder = async () => {
-    if (!createForm.clientPhone || !createForm.pickupLat || !createForm.pickupLng || !createForm.destinationLat || !createForm.destinationLng) {
-      alert('Заполните телефон клиента и координаты точек');
+    if (!createForm.clientPhone || !createForm.pickupLat || !createForm.pickupLng) {
+      alert('Заполните телефон клиента и точку "Откуда"');
       return;
     }
+
+    const hasDestination = !!createForm.destinationLat && !!createForm.destinationLng;
 
     try {
       setIsCreatingOrder(true);
@@ -274,11 +276,11 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
           latitude: Number(createForm.pickupLat),
           longitude: Number(createForm.pickupLng),
         },
-        destination: {
+        destination: hasDestination ? {
           address: createForm.destinationAddress,
           latitude: Number(createForm.destinationLat),
           longitude: Number(createForm.destinationLng),
-        },
+        } : null,
       });
       alert(`✅ Заказ создан. Доступно курьеров: ${result?.data?.availableCouriers ?? 0}`);
       setCreateOpen(false);
@@ -465,11 +467,11 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
                 <Button variant={mapPickerMode === 'destination' ? 'contained' : 'outlined'} onClick={() => setMapPickerMode('destination')}>Выбрать точку "Куда"</Button>
               </Stack>
             </Grid>
-            <Grid item xs={12}><Divider>Откуда</Divider></Grid>
+            <Grid item xs={12}><Divider>Откуда (обязательно)</Divider></Grid>
             <Grid item xs={12}><TextField fullWidth label="Адрес откуда" value={createForm.pickupAddress} onChange={(e) => setCreateForm(prev => ({ ...prev, pickupAddress: e.target.value }))} /></Grid>
             <Grid item xs={12} md={6}><TextField fullWidth label="Широта" value={createForm.pickupLat} onChange={(e) => setCreateForm(prev => ({ ...prev, pickupLat: e.target.value }))} /></Grid>
             <Grid item xs={12} md={6}><TextField fullWidth label="Долгота" value={createForm.pickupLng} onChange={(e) => setCreateForm(prev => ({ ...prev, pickupLng: e.target.value }))} /></Grid>
-            <Grid item xs={12}><Divider>Куда</Divider></Grid>
+            <Grid item xs={12}><Divider>Куда (необязательно)</Divider></Grid>
             <Grid item xs={12}><TextField fullWidth label="Адрес куда" value={createForm.destinationAddress} onChange={(e) => setCreateForm(prev => ({ ...prev, destinationAddress: e.target.value }))} /></Grid>
             <Grid item xs={12} md={6}><TextField fullWidth label="Широта" value={createForm.destinationLat} onChange={(e) => setCreateForm(prev => ({ ...prev, destinationLat: e.target.value }))} /></Grid>
             <Grid item xs={12} md={6}><TextField fullWidth label="Долгота" value={createForm.destinationLng} onChange={(e) => setCreateForm(prev => ({ ...prev, destinationLng: e.target.value }))} /></Grid>

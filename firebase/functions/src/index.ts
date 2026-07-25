@@ -823,24 +823,28 @@ export const adminCreateMarketplaceDelivery = functions.https.onCall(async (data
 
   await verifyAdmin(adminId);
 
-  if (!clientPhone || !pickup || !destination) {
+  if (!clientPhone || !pickup) {
     throw new functions.https.HttpsError(
       "invalid-argument",
-      "clientPhone, pickup and destination are required"
+      "clientPhone and pickup are required"
     );
   }
 
   if (
     typeof pickup.latitude !== "number" ||
-    typeof pickup.longitude !== "number" ||
-    typeof destination.latitude !== "number" ||
-    typeof destination.longitude !== "number"
+    typeof pickup.longitude !== "number"
   ) {
     throw new functions.https.HttpsError(
       "invalid-argument",
-      "pickup and destination coordinates are required"
+      "pickup coordinates are required"
     );
   }
+
+  // destination is optional (may be filled in later by admin/courier)
+  const hasDestination =
+    destination &&
+    typeof destination.latitude === "number" &&
+    typeof destination.longitude === "number";
 
   const courierDocs = await db.collection("users")
     .where("role", "==", "COURIER")
@@ -887,7 +891,7 @@ export const adminCreateMarketplaceDelivery = functions.https.onCall(async (data
     adminId: adminId,
     comment: comment || "",
     pickup,
-    destination,
+    destination: hasDestination ? destination : null,
     availableCourierIds,
     availableCouriersDebug,
     waitingMinutes: 0,
@@ -903,7 +907,9 @@ export const adminCreateMarketplaceDelivery = functions.https.onCall(async (data
 
     await sendPushToCourier(courierData, {
       title: "Новый заказ",
-      body: `Заказ: ${pickup.address || "точка А"} → ${destination.address || "точка Б"}`,
+      body: hasDestination
+        ? `Заказ: ${pickup.address || "точка А"} → ${destination.address || "точка Б"}`
+        : `Заказ: ${pickup.address || "точка А"}`,
       data: {
         type: "ADMIN_MARKETPLACE_ORDER",
         deliveryId: deliveryRef.id,
