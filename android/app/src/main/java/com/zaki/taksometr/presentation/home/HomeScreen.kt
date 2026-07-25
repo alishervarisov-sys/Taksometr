@@ -32,6 +32,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.zaki.taksometr.presentation.components.SwipeToAcceptButton
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -831,21 +832,10 @@ fun PendingOrderCard(
                     .background(Color(0xFFFFB300).copy(alpha = 0.5f))
             )
 
-            Button(
-                onClick = onAccept,
-                enabled = !isAccepting,
-                modifier = Modifier.fillMaxWidth().height(52.dp),
-                shape = RoundedCornerShape(14.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-            ) {
-                if (isAccepting) {
-                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
-                } else {
-                    Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(20.dp))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Принять заказ", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                }
-            }
+            SwipeToAcceptButton(
+                isAccepting = isAccepting,
+                onAccept = onAccept
+            )
         }
     }
 }

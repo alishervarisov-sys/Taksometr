@@ -259,9 +259,13 @@ class ActiveDeliveryViewModel @Inject constructor(
                     _state.value = _state.value.copy(error = result.message)
                 }
                 is Resource.Success -> {
-                    // When courier starts driving to client, reset km/cost counter to 0 immediately
+                    // When courier starts driving to client, reset the km counter to 0 but
+                    // show the base fare (base included km + base price) immediately. The
+                    // per-km charge is then added on top as new distance accumulates.
                     if (stage == "ON_THE_WAY") {
-                        _state.value = _state.value.copy(distanceMeters = 0.0, currentCost = 0.0)
+                        val deliveryType = _state.value.delivery?.deliveryType ?: "default"
+                        val baseCost = tariffRepository.calculateCost(0.0, deliveryType)
+                        _state.value = _state.value.copy(distanceMeters = 0.0, currentCost = baseCost)
                     }
                 }
                 else -> Unit

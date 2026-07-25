@@ -25,6 +25,7 @@ import com.google.android.gms.maps.model.CameraPosition
 import com.google.android.gms.maps.model.LatLng
 import com.google.android.gms.maps.model.LatLngBounds
 import com.google.maps.android.compose.*
+import com.zaki.taksometr.presentation.components.SwipeToAcceptButton
 import com.zaki.taksometr.presentation.theme.*
 import com.zaki.taksometr.service.LocationTrackingService
 import com.zaki.taksometr.util.LocationUtils
@@ -338,25 +339,12 @@ fun ActiveDeliveryScreen(
                                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                             )
                             Spacer(modifier = Modifier.height(10.dp))
-                            Button(
-                                onClick = { viewModel.acceptPendingOrder(pending.id) },
-                                enabled = !state.isAcceptingOrder,
-                                modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(10.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE65100))
-                            ) {
-                                if (state.isAcceptingOrder) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(18.dp),
-                                        strokeWidth = 2.dp,
-                                        color = MaterialTheme.colorScheme.onPrimary
-                                    )
-                                } else {
-                                    Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(str(Strings.acceptOrder))
-                                }
-                            }
+                            SwipeToAcceptButton(
+                                isAccepting = state.isAcceptingOrder,
+                                onAccept = { viewModel.acceptPendingOrder(pending.id) },
+                                accentColor = Color(0xFFE65100),
+                                onAccentColor = Color.White
+                            )
                         }
                     }
                 }
