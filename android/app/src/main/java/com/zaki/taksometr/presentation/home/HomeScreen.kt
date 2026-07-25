@@ -721,6 +721,12 @@ fun HomeScreen(
     }
 }
 
+// The pending-order card always has a fixed light (cream) background, so its
+// text must use fixed dark colors — otherwise in dark/night theme the default
+// onSurface color turns light and the order text becomes invisible.
+private val PendingOrderTextColor = Color(0xFF212121)
+private val PendingOrderLabelColor = Color(0xFF6D4C41)
+
 @Composable
 fun PendingOrderCard(
     pending: PendingMarketplaceOrder,
@@ -784,8 +790,8 @@ fun PendingOrderCard(
                     Icon(Icons.Default.LocationOn, contentDescription = null, tint = AccentGreen, modifier = Modifier.size(20.dp))
                     Spacer(modifier = Modifier.width(10.dp))
                     Column {
-                        Text("Откуда", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
-                        Text(pending.pickupAddress, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                        Text("Откуда", style = MaterialTheme.typography.labelSmall, color = PendingOrderLabelColor)
+                        Text(pending.pickupAddress, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = PendingOrderTextColor)
                     }
                 }
                 Spacer(modifier = Modifier.height(10.dp))
@@ -795,8 +801,8 @@ fun PendingOrderCard(
                     Icon(Icons.Default.LocationOn, contentDescription = null, tint = AccentRed, modifier = Modifier.size(20.dp))
                     Spacer(modifier = Modifier.width(10.dp))
                     Column {
-                        Text("Куда", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
-                        Text(pending.destinationAddress, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                        Text("Куда", style = MaterialTheme.typography.labelSmall, color = PendingOrderLabelColor)
+                        Text(pending.destinationAddress, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = PendingOrderTextColor)
                     }
                 }
                 Spacer(modifier = Modifier.height(10.dp))
@@ -806,19 +812,19 @@ fun PendingOrderCard(
                     Icon(Icons.Default.Comment, contentDescription = null, tint = AccentBlue, modifier = Modifier.size(20.dp))
                     Spacer(modifier = Modifier.width(10.dp))
                     Column {
-                        Text("Комментарий", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
-                        Text(pending.comment, style = MaterialTheme.typography.bodyMedium)
+                        Text("Комментарий", style = MaterialTheme.typography.labelSmall, color = PendingOrderLabelColor)
+                        Text(pending.comment, style = MaterialTheme.typography.bodyMedium, color = PendingOrderTextColor)
                     }
                 }
                 Spacer(modifier = Modifier.height(10.dp))
             }
             if (pending.clientPhone.isNotBlank()) {
                 Row(verticalAlignment = Alignment.Top, modifier = Modifier.fillMaxWidth()) {
-                    Icon(Icons.Default.Phone, contentDescription = null, tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f), modifier = Modifier.size(20.dp))
+                    Icon(Icons.Default.Phone, contentDescription = null, tint = PendingOrderLabelColor, modifier = Modifier.size(20.dp))
                     Spacer(modifier = Modifier.width(10.dp))
                     Column {
-                        Text("Клиент", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
-                        Text(pending.clientPhone, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                        Text("Клиент", style = MaterialTheme.typography.labelSmall, color = PendingOrderLabelColor)
+                        Text(pending.clientPhone, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = PendingOrderTextColor)
                     }
                 }
                 Spacer(modifier = Modifier.height(12.dp))
