@@ -1,7 +1,10 @@
 ﻿package com.zaki.taksometr.presentation.delivery
 
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -9,14 +12,18 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.google.android.gms.maps.CameraUpdateFactory
+import com.google.android.gms.maps.model.BitmapDescriptorFactory
 import com.google.android.gms.maps.model.CameraPosition
 import com.google.android.gms.maps.model.LatLng
+import com.google.android.gms.maps.model.LatLngBounds
 import com.google.maps.android.compose.*
 import com.zaki.taksometr.presentation.theme.*
 import com.zaki.taksometr.service.LocationTrackingService
@@ -35,23 +42,71 @@ fun ActiveDeliveryScreen(
     val context = LocalContext.current
     var showCancelDialog by remember { mutableStateOf(false) }
     var showCompleteDialog by remember { mutableStateOf(false) }
+    // Whether the delivery info panel is expanded. Collapsing it gives the
+    // courier a much larger map view while keeping the call button reachable.
+    var infoPanelExpanded by remember { mutableStateOf(true) }
 
     // Map state
     val defaultLocation = LatLng(41.2995, 69.2401) // Tashkent
-    val currentLatLng = state.currentLocation?.let {
-        LatLng(it.latitude, it.longitude)
-    } ?: defaultLocation
 
-    val cameraPositionState = rememberCameraPositionState {
-        position = CameraPosition.fromLatLngZoom(currentLatLng, 15f)
+    // Pickup ("Откуда") point selected by the admin when the order was created.
+    val pickupLatLng = run {
+        val lat = state.delivery?.pickupLat
+        val lng = state.delivery?.pickupLng
+        if (lat != null && lng != null) LatLng(lat, lng) else null
+    }
+    // Destination ("Куда") point, if the order has one.
+    val destinationLatLng = run {
+        val lat = state.delivery?.destinationLat
+        val lng = state.delivery?.destinationLng
+        if (lat != null && lng != null) LatLng(lat, lng) else null
+    }
+    val courierLatLng = state.currentLocation?.let {
+        LatLng(it.latitude, it.longitude)
     }
 
-    // Update camera when location changes
+    // Center the map on the pickup ("Откуда") point first, so the courier
+    // immediately sees where the order starts. Fall back to courier / default.
+    val initialLatLng = pickupLatLng ?: courierLatLng ?: defaultLocation
+
+    val cameraPositionState = rememberCameraPositionState {
+        position = CameraPosition.fromLatLngZoom(initialLatLng, 15f)
+    }
+
+    // One-time framing: once the pickup point is known, fit pickup, destination
+    // and the courier into view instead of tracking only the courier.
+    var hasFramedPickup by remember { mutableStateOf(false) }
+    LaunchedEffect(pickupLatLng, courierLatLng, destinationLatLng) {
+        if (pickupLatLng != null && !hasFramedPickup) {
+            val points = listOfNotNull(pickupLatLng, destinationLatLng, courierLatLng)
+            try {
+                if (points.size >= 2) {
+                    val boundsBuilder = LatLngBounds.builder()
+                    points.forEach { boundsBuilder.include(it) }
+                    cameraPositionState.animate(
+                        CameraUpdateFactory.newLatLngBounds(boundsBuilder.build(), 140)
+                    )
+                } else {
+                    cameraPositionState.animate(
+                        CameraUpdateFactory.newLatLngZoom(pickupLatLng, 15f)
+                    )
+                }
+            } catch (e: Exception) {
+                cameraPositionState.animate(CameraUpdateFactory.newLatLng(pickupLatLng))
+            }
+            hasFramedPickup = true
+        }
+    }
+
+    // For orders without a pickup point (regular meter rides) keep following
+    // the courier's live location as before.
     LaunchedEffect(state.currentLocation) {
-        state.currentLocation?.let {
-            cameraPositionState.animate(
-                CameraUpdateFactory.newLatLng(LatLng(it.latitude, it.longitude))
-            )
+        if (pickupLatLng == null) {
+            state.currentLocation?.let {
+                cameraPositionState.animate(
+                    CameraUpdateFactory.newLatLng(LatLng(it.latitude, it.longitude))
+                )
+            }
         }
     }
 
@@ -98,12 +153,88 @@ fun ActiveDeliveryScreen(
                         )
                     }
 
-                    // Current location marker
-                    state.currentLocation?.let {
+                    // Pickup ("Откуда") marker — where the admin order starts.
+                    pickupLatLng?.let {
                         Marker(
-                            state = MarkerState(position = LatLng(it.latitude, it.longitude)),
-                            title = str(Strings.delivery)
+                            state = MarkerState(position = it),
+                            title = "Откуда",
+                            snippet = state.delivery?.pickupAddress?.ifBlank { null },
+                            icon = BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_GREEN)
                         )
+                    }
+
+                    // Destination ("Куда") marker, if provided.
+                    destinationLatLng?.let {
+                        Marker(
+                            state = MarkerState(position = it),
+                            title = "Куда",
+                            snippet = state.delivery?.destinationAddress?.ifBlank { null },
+                            icon = BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_RED)
+                        )
+                    }
+
+                    // Courier's current location marker only when there is no
+                    // dedicated pickup point (the blue my-location dot covers it).
+                    if (pickupLatLng == null) {
+                        state.currentLocation?.let {
+                            Marker(
+                                state = MarkerState(position = LatLng(it.latitude, it.longitude)),
+                                title = str(Strings.delivery)
+                            )
+                        }
+                    }
+                }
+
+                // On-map info card: route addresses + key metrics (distance,
+                // cost, client phone). Stays visible even when the panel below
+                // is collapsed, so the courier always sees the essentials.
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+                    shadowElevation = 6.dp
+                ) {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+                    ) {
+                        val pickupText = state.delivery?.pickupAddress?.ifBlank { null }
+                        val destText = state.delivery?.destinationAddress?.ifBlank { null }
+
+                        if (pickupText != null) {
+                            RoutePointRow(color = AccentGreen, label = "Откуда", value = pickupText)
+                        }
+                        if (destText != null) {
+                            if (pickupText != null) Spacer(modifier = Modifier.height(6.dp))
+                            RoutePointRow(color = AccentRed, label = "Куда", value = destText)
+                        }
+                        if (pickupText != null || destText != null) {
+                            Divider(
+                                modifier = Modifier.padding(vertical = 8.dp),
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+                            )
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            MapInfoItem(
+                                icon = Icons.Default.Route,
+                                value = LocationUtils.formatDistance(state.distanceMeters)
+                            )
+                            MapInfoItem(
+                                icon = Icons.Default.AttachMoney,
+                                value = LocationUtils.formatCost(state.currentCost)
+                            )
+                            MapInfoItem(
+                                icon = Icons.Default.Phone,
+                                value = state.delivery?.clientPhone?.ifBlank { "—" } ?: "—"
+                            )
+                        }
                     }
                 }
             }
@@ -242,8 +373,31 @@ fun ActiveDeliveryScreen(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .animateContentSize()
                         .padding(16.dp)
                 ) {
+                    // Collapsible header — toggles the detailed panel so the
+                    // courier can see more of the map.
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Информация о доставке",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        IconButton(onClick = { infoPanelExpanded = !infoPanelExpanded }) {
+                            Icon(
+                                if (infoPanelExpanded) Icons.Default.ExpandMore else Icons.Default.ExpandLess,
+                                contentDescription = if (infoPanelExpanded) "Свернуть" else "Развернуть"
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(4.dp))
+
                     // Client phone - call button
                     Row(
                         verticalAlignment = Alignment.CenterVertically
@@ -276,6 +430,7 @@ fun ActiveDeliveryScreen(
                         }
                     }
 
+                  if (infoPanelExpanded) {
 
                     if (state.delivery?.orderKind == "MARKETPLACE") {
                         Spacer(modifier = Modifier.height(12.dp))
@@ -603,6 +758,7 @@ fun ActiveDeliveryScreen(
                             style = MaterialTheme.typography.bodySmall
                         )
                     }
+                  } // end infoPanelExpanded
                 }
             }
         }
@@ -663,6 +819,59 @@ fun ActiveDeliveryScreen(
                     Text(str(Strings.no))
                 }
             }
+        )
+    }
+}
+
+@Composable
+fun RoutePointRow(
+    color: Color,
+    label: String,
+    value: String
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            modifier = Modifier
+                .size(10.dp)
+                .clip(CircleShape)
+                .background(color)
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = "$label:",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+        )
+        Spacer(modifier = Modifier.width(6.dp))
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+    }
+}
+
+@Composable
+fun MapInfoItem(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    value: String
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(18.dp)
+        )
+        Spacer(modifier = Modifier.width(4.dp))
+        Text(
+            text = value,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.Bold
         )
     }
 }
