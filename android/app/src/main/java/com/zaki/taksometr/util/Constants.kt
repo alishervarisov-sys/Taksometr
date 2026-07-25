@@ -13,6 +13,12 @@ object Constants {
     const val LOCATION_FASTEST_INTERVAL = 2000L
     const val LOCATION_MIN_DISPLACEMENT = 3f // meters
 
+    // Radius (in meters) within which a courier is considered to have "arrived"
+    // at the admin-defined pickup point. The courier cannot advance the order
+    // stage past ACCEPTED until inside this radius, and the ARRIVED_PICKUP stage
+    // is set automatically once the courier enters it.
+    const val PICKUP_ARRIVAL_RADIUS_METERS = 150.0
+
     // Preferences
     const val PREFS_NAME = "zaki_prefs"
     const val PREF_USER_ID = "user_id"

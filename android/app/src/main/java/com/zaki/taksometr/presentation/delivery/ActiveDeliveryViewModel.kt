@@ -57,6 +57,12 @@ data class ActiveDeliveryState(
     val pendingOrder: PendingOrderInfo? = null,
     val isSwitching: Boolean = false,
     val isAcceptingOrder: Boolean = false,
+    // Distance (meters) from the courier to the admin-defined pickup point, or
+    // null when the current order has no pickup point / no known location.
+    val distanceToPickupMeters: Double? = null,
+    // True when the courier is within PICKUP_ARRIVAL_RADIUS_METERS of the pickup
+    // point (or the order has no pickup point to gate against).
+    val isWithinPickupRadius: Boolean = false,
     val error: String? = null
 ) {
     val canAcceptMore: Boolean
@@ -119,7 +125,54 @@ class ActiveDeliveryViewModel @Inject constructor(
                     // Hide the pending-order offer once the courier is at the limit.
                     pendingOrder = if (list.size >= Constants.MAX_CONCURRENT_DELIVERIES) null else _state.value.pendingOrder
                 )
+                // Re-evaluate the pickup geofence whenever the current order changes.
+                evaluatePickupGeofence(current, _state.value.currentLocation)
             }
+        }
+    }
+
+    // Guards the one-shot automatic ARRIVED_PICKUP transition so it fires at most
+    // once per delivery even though GPS updates arrive continuously.
+    private var autoArrivedFiredForId: String? = null
+
+    /**
+     * Checks how far the courier is from the admin-defined pickup point and:
+     *  - exposes the distance + whether they are within the arrival radius, and
+     *  - automatically advances the order to ARRIVED_PICKUP the first time the
+     *    courier reaches the pickup point (only from the initial stage).
+     */
+    private fun evaluatePickupGeofence(current: Delivery?, location: GeoPoint?) {
+        // Only marketplace (admin) orders have a gated pickup point.
+        if (current == null || current.orderKind != "MARKETPLACE") {
+            _state.value = _state.value.copy(isWithinPickupRadius = true, distanceToPickupMeters = null)
+            return
+        }
+        val lat = current.pickupLat
+        val lng = current.pickupLng
+        // No pickup coordinates were set by the admin — nothing to gate against,
+        // so don't block the courier.
+        if (lat == null || lng == null) {
+            _state.value = _state.value.copy(isWithinPickupRadius = true, distanceToPickupMeters = null)
+            return
+        }
+        if (location == null) {
+            _state.value = _state.value.copy(isWithinPickupRadius = false, distanceToPickupMeters = null)
+            return
+        }
+
+        val distance = LocationUtils.haversineDistance(location, GeoPoint(lat, lng))
+        val within = distance <= Constants.PICKUP_ARRIVAL_RADIUS_METERS
+        _state.value = _state.value.copy(
+            distanceToPickupMeters = distance,
+            isWithinPickupRadius = within
+        )
+
+        val stage = current.adminOrderStage
+        val atInitialStage = stage == null || stage == "ACCEPTED"
+        if (within && atInitialStage && !current.isPaused && autoArrivedFiredForId != current.id) {
+            autoArrivedFiredForId = current.id
+            log("Auto-advancing to ARRIVED_PICKUP: courier within ${distance.toInt()}m of pickup")
+            updateMarketplaceStage(stage = "ARRIVED_PICKUP")
         }
     }
 
@@ -144,12 +197,16 @@ class ActiveDeliveryViewModel @Inject constructor(
                 val distance = LocationUtils.calculateTotalDistance(distancePoints)
                 val cost = tariffRepository.calculateCost(distance, current?.deliveryType ?: "default")
 
+                val newLocation = points.lastOrNull()
                 _state.value = _state.value.copy(
                     routePoints = points,
-                    currentLocation = points.lastOrNull(),
+                    currentLocation = newLocation,
                     distanceMeters = distance,
                     currentCost = cost
                 )
+                // Check the pickup geofence on every new GPS fix so the order can
+                // auto-advance to ARRIVED_PICKUP when the courier reaches it.
+                evaluatePickupGeofence(_state.value.delivery, newLocation)
             }
         }
     }

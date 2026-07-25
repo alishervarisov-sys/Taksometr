@@ -503,9 +503,19 @@ fun ActiveDeliveryScreen(
                             else                  -> null
                         }
                         if (nextStageInfo != null) {
+                            // The first transition (→ ARRIVED_PICKUP) is gated: the
+                            // courier must be within 150m of the admin-defined pickup
+                            // point. Other transitions are never proximity-gated.
+                            val requiresPickupProximity =
+                                nextStageInfo.first == "ARRIVED_PICKUP" && pickupLatLng != null
+                            val proximityBlocked =
+                                requiresPickupProximity && !state.isWithinPickupRadius
+
                             Button(
                                 onClick = { viewModel.updateMarketplaceStage(stage = nextStageInfo.first) },
-                                enabled = !state.isUpdatingStage && state.delivery?.isPaused != true,
+                                enabled = !state.isUpdatingStage &&
+                                        state.delivery?.isPaused != true &&
+                                        !proximityBlocked,
                                 modifier = Modifier.fillMaxWidth(),
                                 shape = RoundedCornerShape(12.dp)
                             ) {
@@ -517,7 +527,7 @@ fun ActiveDeliveryScreen(
                                     )
                                 } else {
                                     Icon(
-                                        Icons.Default.ArrowForward,
+                                        if (proximityBlocked) Icons.Default.LocationOn else Icons.Default.ArrowForward,
                                         contentDescription = null,
                                         modifier = Modifier.size(18.dp)
                                     )
@@ -525,6 +535,31 @@ fun ActiveDeliveryScreen(
                                     Text(
                                         text = nextStageInfo.second,
                                         style = MaterialTheme.typography.bodyMedium
+                                    )
+                                }
+                            }
+
+                            // Hint shown while the courier is still too far from the
+                            // pickup point to change the status.
+                            if (proximityBlocked) {
+                                Spacer(modifier = Modifier.height(6.dp))
+                                val distanceHint = state.distanceToPickupMeters?.let {
+                                    " (${LocationUtils.formatDistance(it)} до точки)"
+                                } ?: ""
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        Icons.Default.Info,
+                                        contentDescription = null,
+                                        tint = AccentOrange,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "Подъедьте к точке забора в радиусе 150 м, чтобы изменить статус$distanceHint",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = AccentOrange
                                     )
                                 }
                             }
