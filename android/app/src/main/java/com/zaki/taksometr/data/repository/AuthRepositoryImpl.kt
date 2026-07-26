@@ -45,7 +45,8 @@ class AuthRepositoryImpl @Inject constructor(
                 isBlocked = doc.getBoolean("isBlocked") ?: false,
                 balance = doc.getDouble("balance") ?: 0.0,
                 createdAt = doc.getLong("createdAt") ?: 0L,
-                fcmToken = doc.getString("fcmToken") ?: ""
+                fcmToken = doc.getString("fcmToken") ?: "",
+                photoBase64 = doc.getString("photoBase64") ?: ""
             )
 
             if (user.isBlocked) {
@@ -100,7 +101,8 @@ class AuthRepositoryImpl @Inject constructor(
                     isBlocked = snapshot.getBoolean("isBlocked") ?: false,
                     balance = snapshot.getDouble("balance") ?: 0.0,
                     createdAt = snapshot.getLong("createdAt") ?: 0L,
-                    fcmToken = snapshot.getString("fcmToken") ?: ""
+                    fcmToken = snapshot.getString("fcmToken") ?: "",
+                    photoBase64 = snapshot.getString("photoBase64") ?: ""
                 )
                 trySend(user)
             }
@@ -118,6 +120,20 @@ class AuthRepositoryImpl @Inject constructor(
             .document(userId)
             .update("fcmToken", token)
             .await()
+    }
+
+    override suspend fun updateProfilePhoto(photoBase64: String): Resource<Unit> {
+        val userId = prefs.getString(Constants.PREF_USER_ID, null)
+            ?: return Resource.Error("Пользователь не найден")
+        return try {
+            firestore.collection(Constants.COLLECTION_USERS)
+                .document(userId)
+                .update("photoBase64", photoBase64)
+                .await()
+            Resource.Success(Unit)
+        } catch (e: Exception) {
+            Resource.Error("Не удалось сохранить фото: ${e.localizedMessage}")
+        }
     }
 
     private fun hashPassword(password: String): String {

@@ -10,7 +10,9 @@ data class User(
     val isBlocked: Boolean = false,
     val balance: Double = 0.0,
     val createdAt: Long = System.currentTimeMillis(),
-    val fcmToken: String = ""
+    val fcmToken: String = "",
+    /** Profile photo stored as a compressed base64 JPEG string (may be empty). */
+    val photoBase64: String = ""
 )
 
 enum class UserRole {

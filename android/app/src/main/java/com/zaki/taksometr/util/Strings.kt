@@ -602,6 +602,12 @@ object Strings {
         "en" to "You will need to sign in again to return."
     )
 
+    val changePhoto = mapOf(
+        "tg" to "Иваз кардани акс",
+        "ru" to "Изменить фото",
+        "en" to "Change photo"
+    )
+
     // Helper function to get string
     fun get(key: Map<String, String>, languageCode: String): String {
         return key[languageCode] ?: key["en"] ?: ""

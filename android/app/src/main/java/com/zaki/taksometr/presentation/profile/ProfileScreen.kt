@@ -1,5 +1,8 @@
 package com.zaki.taksometr.presentation.profile
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -22,6 +25,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.zaki.taksometr.domain.model.Delivery
 import com.zaki.taksometr.domain.model.DeliveryStatus
+import com.zaki.taksometr.presentation.components.CourierAvatar
 import com.zaki.taksometr.presentation.theme.*
 import com.zaki.taksometr.util.LocationUtils
 import com.zaki.taksometr.util.Strings
@@ -40,8 +44,23 @@ fun ProfileScreen(
 ) {
     val state by viewModel.state.collectAsState()
     var showLogoutDialog by remember { mutableStateOf(false) }
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    val photoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri != null) viewModel.onPhotoSelected(uri)
+    }
+
+    LaunchedEffect(state.photoError) {
+        state.photoError?.let {
+            snackbarHostState.showSnackbar(it)
+            viewModel.clearPhotoError()
+        }
+    }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text(str(Strings.profile)) },
@@ -81,19 +100,66 @@ fun ProfileScreen(
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Box(
-                            modifier = Modifier
-                                .size(80.dp)
-                                .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.primary),
-                            contentAlignment = Alignment.Center
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier.clickable(enabled = !state.isUploadingPhoto) {
+                                photoPickerLauncher.launch(
+                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                )
+                            }
                         ) {
-                            Text(
-                                text = state.user?.name?.firstOrNull()?.uppercase()
+                            CourierAvatar(
+                                photoBase64 = state.user?.photoBase64,
+                                fallbackLetter = state.user?.name?.firstOrNull()?.uppercase()
                                     ?: str(Strings.courier).first().uppercase().toString(),
-                                style = MaterialTheme.typography.displaySmall,
-                                color = MaterialTheme.colorScheme.onPrimary
+                                size = 96.dp,
+                                letterStyle = MaterialTheme.typography.displaySmall
                             )
+
+                            // Dim + spinner while uploading
+                            if (state.isUploadingPhoto) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(96.dp)
+                                        .clip(CircleShape)
+                                        .background(Color.Black.copy(alpha = 0.45f)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    CircularProgressIndicator(
+                                        color = Color.White,
+                                        strokeWidth = 2.dp,
+                                        modifier = Modifier.size(28.dp)
+                                    )
+                                }
+                            }
+
+                            // Camera edit badge
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.BottomEnd)
+                                    .size(30.dp)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.primary),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    Icons.Default.PhotoCamera,
+                                    contentDescription = str(Strings.changePhoto),
+                                    tint = MaterialTheme.colorScheme.onPrimary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
                         }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = str(Strings.changePhoto),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.clickable(enabled = !state.isUploadingPhoto) {
+                                photoPickerLauncher.launch(
+                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                )
+                            }
+                        )
                         Spacer(modifier = Modifier.height(12.dp))
                         Text(
                             text = state.user?.name ?: str(Strings.courier),

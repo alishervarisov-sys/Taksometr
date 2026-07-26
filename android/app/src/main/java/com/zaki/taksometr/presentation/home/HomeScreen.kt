@@ -270,19 +270,13 @@ fun HomeScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         // Avatar
-                        Box(
-                            modifier = Modifier
-                                .size(56.dp)
-                                .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.primary),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = state.user?.name?.firstOrNull()?.uppercase() ?: str(Strings.courier).first().uppercase().toString(),
-                                style = MaterialTheme.typography.headlineMedium,
-                                color = MaterialTheme.colorScheme.onPrimary
-                            )
-                        }
+                        com.zaki.taksometr.presentation.components.CourierAvatar(
+                            photoBase64 = state.user?.photoBase64,
+                            fallbackLetter = state.user?.name?.firstOrNull()?.uppercase()
+                                ?: str(Strings.courier).first().uppercase().toString(),
+                            size = 56.dp,
+                            letterStyle = MaterialTheme.typography.headlineMedium
+                        )
 
                         Spacer(modifier = Modifier.width(16.dp))
 

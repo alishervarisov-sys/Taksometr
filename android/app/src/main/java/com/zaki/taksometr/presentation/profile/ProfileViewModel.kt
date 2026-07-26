@@ -1,6 +1,8 @@
 package com.zaki.taksometr.presentation.profile
 
+import android.content.Context
 import android.content.SharedPreferences
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.zaki.taksometr.domain.model.Delivery
@@ -9,11 +11,16 @@ import com.zaki.taksometr.domain.model.User
 import com.zaki.taksometr.domain.repository.AuthRepository
 import com.zaki.taksometr.domain.repository.DeliveryRepository
 import com.zaki.taksometr.util.Constants
+import com.zaki.taksometr.util.ImageUtils
+import com.zaki.taksometr.util.Resource
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.Calendar
 import javax.inject.Inject
 
@@ -32,11 +39,14 @@ data class ProfileState(
     val totalEarnings: Double = 0.0,
     val todayDeliveries: Int = 0,
     val todayEarnings: Double = 0.0,
-    val isLoading: Boolean = true
+    val isLoading: Boolean = true,
+    val isUploadingPhoto: Boolean = false,
+    val photoError: String? = null
 )
 
 @HiltViewModel
 class ProfileViewModel @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val authRepository: AuthRepository,
     private val deliveryRepository: DeliveryRepository,
     private val prefs: SharedPreferences
@@ -92,6 +102,42 @@ class ProfileViewModel @Inject constructor(
                 )
             }
         }
+    }
+
+    fun onPhotoSelected(uri: Uri) {
+        viewModelScope.launch {
+            _state.value = _state.value.copy(isUploadingPhoto = true, photoError = null)
+
+            val base64 = withContext(Dispatchers.IO) {
+                ImageUtils.uriToCompressedBase64(context, uri)
+            }
+
+            if (base64 == null) {
+                _state.value = _state.value.copy(
+                    isUploadingPhoto = false,
+                    photoError = "Не удалось обработать изображение"
+                )
+                return@launch
+            }
+
+            when (val result = authRepository.updateProfilePhoto(base64)) {
+                is Resource.Success -> {
+                    // The user flow (getCurrentUser) will emit the updated photo.
+                    _state.value = _state.value.copy(isUploadingPhoto = false)
+                }
+                is Resource.Error -> {
+                    _state.value = _state.value.copy(
+                        isUploadingPhoto = false,
+                        photoError = result.message
+                    )
+                }
+                is Resource.Loading -> Unit
+            }
+        }
+    }
+
+    fun clearPhotoError() {
+        _state.value = _state.value.copy(photoError = null)
     }
 
     fun logout() {

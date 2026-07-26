@@ -10,4 +10,6 @@ interface AuthRepository {
     fun getCurrentUser(): Flow<User?>
     fun isLoggedIn(): Boolean
     suspend fun updateFcmToken(token: String)
+    /** Saves the courier's profile photo (compressed base64 JPEG) to their user document. */
+    suspend fun updateProfilePhoto(photoBase64: String): Resource<Unit>
 }
