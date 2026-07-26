@@ -511,6 +511,97 @@ object Strings {
         "en" to "Enter client phone number"
     )
     
+    // Profile screen
+    val profile = mapOf(
+        "tg" to "Профил",
+        "ru" to "Профиль",
+        "en" to "Profile"
+    )
+
+    val personalInfo = mapOf(
+        "tg" to "Маълумоти шахсӣ",
+        "ru" to "Личные данные",
+        "en" to "Personal info"
+    )
+
+    val notSpecified = mapOf(
+        "tg" to "Нишон дода нашудааст",
+        "ru" to "Не указан",
+        "en" to "Not specified"
+    )
+
+    val balance = mapOf(
+        "tg" to "Баланс",
+        "ru" to "Баланс",
+        "en" to "Balance"
+    )
+
+    val statistics = mapOf(
+        "tg" to "Омор",
+        "ru" to "Статистика",
+        "en" to "Statistics"
+    )
+
+    val today = mapOf(
+        "tg" to "Имрӯз",
+        "ru" to "Сегодня",
+        "en" to "Today"
+    )
+
+    val allTime = mapOf(
+        "tg" to "Тамоми давра",
+        "ru" to "За всё время",
+        "en" to "All time"
+    )
+
+    val totalOrders = mapOf(
+        "tg" to "Ҳамагӣ фармоишҳо",
+        "ru" to "Всего заказов",
+        "en" to "Total orders"
+    )
+
+    val totalEarned = mapOf(
+        "tg" to "Ҳамагӣ даромад",
+        "ru" to "Всего заработано",
+        "en" to "Total earned"
+    )
+
+    val byDays = mapOf(
+        "tg" to "Аз рӯи рӯзҳо",
+        "ru" to "По дням",
+        "en" to "By days"
+    )
+
+    val orderHistory = mapOf(
+        "tg" to "Таърихи фармоишҳо",
+        "ru" to "История заказов",
+        "en" to "Order history"
+    )
+
+    val recentOrders = mapOf(
+        "tg" to "Фармоишҳои охирин",
+        "ru" to "Последние заказы",
+        "en" to "Recent orders"
+    )
+
+    val viewAll = mapOf(
+        "tg" to "Ҳамаро дидан",
+        "ru" to "Смотреть все",
+        "en" to "View all"
+    )
+
+    val logoutConfirmTitle = mapOf(
+        "tg" to "Аз ҳисоб баромадан?",
+        "ru" to "Выйти из аккаунта?",
+        "en" to "Log out?"
+    )
+
+    val logoutConfirmMessage = mapOf(
+        "tg" to "Барои бозгашт бояд дубора ворид шавед.",
+        "ru" to "Для возврата потребуется войти снова.",
+        "en" to "You will need to sign in again to return."
+    )
+
     // Helper function to get string
     fun get(key: Map<String, String>, languageCode: String): String {
         return key[languageCode] ?: key["en"] ?: ""

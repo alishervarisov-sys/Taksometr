@@ -51,6 +51,7 @@ import com.zaki.taksometr.util.Strings
 fun HomeScreen(
     onStartDelivery: () -> Unit,
     onHistoryClick: () -> Unit,
+    onProfileClick: () -> Unit,
     onLogout: () -> Unit,
     viewModel: HomeViewModel = hiltViewModel()
 ) {
@@ -235,11 +236,8 @@ fun HomeScreen(
                     IconButton(onClick = onHistoryClick) {
                         Icon(Icons.Default.History, contentDescription = str(Strings.history))
                     }
-                    IconButton(onClick = {
-                        viewModel.logout()
-                        onLogout()
-                    }) {
-                        Icon(Icons.Default.Logout, contentDescription = str(Strings.logout))
+                    IconButton(onClick = onProfileClick) {
+                        Icon(Icons.Default.AccountCircle, contentDescription = str(Strings.profile))
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
