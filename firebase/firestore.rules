@@ -38,6 +38,12 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // Winner-of-the-month announcements
+    match /winner_announcements/{announcementId} {
+      allow read: if true;      // Couriers read to show the congratulation
+      allow write: if false;    // Only via Cloud Functions (announceWinner)
+    }
+
     // Transactions collection
     match /transactions/{transactionId} {
       allow read: if true;

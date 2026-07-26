@@ -2836,3 +2836,128 @@ export const migrateCommissionsToRashod = functions.runWith({ timeoutSeconds: 54
     res.status(500).json({ error: e.message || "Unknown error" });
   }
 });
+
+// ============ ADMIN: ANNOUNCE WINNER OF THE MONTH ============
+/**
+ * Announce the "Winner of the Month" (Победитель месяца).
+ *
+ * The admin picks a courier and fills in a congratulation form:
+ *  - congratsText: the personal congratulation shown to the winner
+ *  - prizeAmount:  the prize/bonus amount (in сомони)
+ *  - orderCount:   number of completed deliveries in the chosen period
+ *  - periodStart / periodEnd: the date range the order count refers to
+ *  - expiresAt:    until when the announcement should be shown in the app
+ *
+ * This writes a document to `winner_announcements` (which every courier app
+ * observes in real time) and pushes an FCM message:
+ *  - to the WINNER  → the full personal congratulation
+ *  - to EVERYONE else → a short summary (who won, prize, order count)
+ */
+export const announceWinner = functions.https.onCall(async (data, context) => {
+  const {
+    adminId,
+    winnerId,
+    congratsText,
+    prizeAmount,
+    orderCount,
+    periodStart,
+    periodEnd,
+    expiresAt,
+  } = data;
+
+  // Only admins / super admin may announce a winner.
+  await verifyAdmin(adminId);
+
+  if (!winnerId) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "winnerId is required"
+    );
+  }
+
+  const winnerDoc = await db.collection("users").doc(winnerId).get();
+  if (!winnerDoc.exists || winnerDoc.data()?.role !== "COURIER") {
+    throw new functions.https.HttpsError("not-found", "Winner (courier) not found");
+  }
+
+  const winnerData = winnerDoc.data()!;
+  const winnerName = `${winnerData.name || ""} ${winnerData.surname || ""}`.trim() ||
+    (winnerData.name || "Курьер");
+
+  const now = Date.now();
+  const prize = Number(prizeAmount) || 0;
+  const orders = Number(orderCount) || 0;
+  // Default: show the congratulation for 7 days if no expiry is provided.
+  const expiry = Number(expiresAt) || (now + 7 * 86400000);
+
+  const text = (typeof congratsText === "string" && congratsText.trim().length > 0)
+    ? congratsText.trim()
+    : `Поздравляем ${winnerName} с победой в этом месяце!`;
+
+  // Short summary shown to every other courier.
+  const shortText =
+    `🏆 Победитель месяца — ${winnerName}! ` +
+    `Премия: ${prize} сомони, доставок: ${orders}. Поздравляем!`;
+
+  // Persist the announcement. The courier apps observe this collection and
+  // show the congratulation (full for the winner, short for others) until
+  // `expiresAt`.
+  const announcementRef = db.collection("winner_announcements").doc();
+  await announcementRef.set({
+    winnerId,
+    winnerName,
+    congratsText: text,
+    shortText,
+    prizeAmount: prize,
+    orderCount: orders,
+    periodStart: Number(periodStart) || 0,
+    periodEnd: Number(periodEnd) || now,
+    expiresAt: expiry,
+    createdAt: now,
+    createdBy: adminId,
+    isActive: true,
+  });
+
+  // Push notifications to all couriers.
+  const courierDocs = await db.collection("users")
+    .where("role", "==", "COURIER")
+    .get();
+
+  let winnerNotified = false;
+  let othersNotified = 0;
+
+  for (const courierDoc of courierDocs.docs) {
+    const courierData = courierDoc.data();
+    if (courierDoc.id === winnerId) {
+      await sendPushToCourier(courierData, {
+        title: "🎉 Поздравляем! Вы — победитель месяца!",
+        body: text,
+        data: {
+          type: "WINNER_ANNOUNCEMENT",
+          announcementId: announcementRef.id,
+          winnerRole: "WINNER",
+        },
+      });
+      winnerNotified = true;
+    } else {
+      await sendPushToCourier(courierData, {
+        title: "🏆 Победитель месяца",
+        body: shortText,
+        data: {
+          type: "WINNER_ANNOUNCEMENT",
+          announcementId: announcementRef.id,
+          winnerRole: "OTHER",
+        },
+      });
+      othersNotified++;
+    }
+  }
+
+  return {
+    success: true,
+    announcementId: announcementRef.id,
+    winnerName,
+    winnerNotified,
+    othersNotified,
+  };
+});

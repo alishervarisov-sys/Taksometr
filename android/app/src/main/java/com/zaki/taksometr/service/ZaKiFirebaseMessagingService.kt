@@ -58,6 +58,16 @@ class ZaKiFirebaseMessagingService : FirebaseMessagingService() {
                 val body  = message.data["body"]  ?: message.notification?.body  ?: "Свободный заказ ожидает принятия"
                 showNotification(title, body)
             }
+            "WINNER_ANNOUNCEMENT" -> {
+                // The in-app congratulation dialog is driven by the Firestore
+                // listener; here we just surface a system notification so the
+                // courier is informed even when the app is in the background.
+                val title = message.data["title"] ?: message.notification?.title ?: "🏆 Победитель месяца"
+                val body  = message.data["body"]  ?: message.notification?.body  ?: ""
+                if (body.isNotEmpty()) {
+                    showNotification(title, body)
+                }
+            }
             else -> {
                 val title = message.data["title"] ?: message.notification?.title ?: "ZaKi Taksometr"
                 val body  = message.data["body"]  ?: message.notification?.body  ?: ""

@@ -13,6 +13,7 @@ import Analytics from './pages/Analytics';
 import Commission from './pages/Commission';
 import Credentials from './pages/Credentials';
 import Admins from './pages/Admins';
+import Winner from './pages/Winner';
 import TelegramReport from './pages/TelegramReport';
 import Taxi from './pages/Taxi';
 import TaxiDrivers from './pages/TaxiDrivers';
@@ -104,6 +105,7 @@ function App() {
             <Route path="/" element={<Layout onLogout={handleLogout} isSuperAdmin={adminRole === 'SUPER_ADMIN'} />}>
               <Route index element={<Dashboard adminId={adminId!} />} />
               <Route path="couriers" element={<Couriers adminId={adminId!} />} />
+              <Route path="winner" element={<Winner adminId={adminId!} />} />
               <Route path="tariffs" element={<Tariffs adminId={adminId!} />} />
               <Route path="deliveries" element={<Deliveries adminId={adminId!} />} />
               <Route path="clients" element={<Clients adminId={adminId!} />} />

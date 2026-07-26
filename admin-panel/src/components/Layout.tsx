@@ -21,6 +21,7 @@ import {
   Telegram as TelegramIcon,
   LocalTaxi as TaxiIcon,
   Groups as ClientsIcon,
+  EmojiEvents as TrophyIcon,
 } from '@mui/icons-material';
 
 const drawerWidth = 260;
@@ -38,6 +39,7 @@ const Layout: React.FC<LayoutProps> = ({ onLogout, isSuperAdmin }) => {
   const menuItems = [
     { text: 'Dashboard', icon: <DashboardIcon />, path: '/' },
     { text: 'Курьеры', icon: <PeopleIcon />, path: '/couriers' },
+    { text: 'Победитель месяца', icon: <TrophyIcon sx={{ color: '#FFC107' }} />, path: '/winner' },
     { text: 'Доставки', icon: <DeliveryIcon />, path: '/deliveries' },
     { text: 'Клиенты', icon: <ClientsIcon />, path: '/clients' },
     { text: 'Тарифы', icon: <TariffIcon />, path: '/tariffs' },

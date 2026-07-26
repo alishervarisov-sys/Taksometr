@@ -7,6 +7,7 @@ object Constants {
     const val COLLECTION_TARIFFS = "tariffs"
     const val COLLECTION_SETTINGS = "settings"
     const val COLLECTION_NOTIFICATIONS = "notifications"
+    const val COLLECTION_WINNER_ANNOUNCEMENTS = "winner_announcements"
 
     // Location
     const val LOCATION_UPDATE_INTERVAL = 3000L // 3 seconds
@@ -27,6 +28,9 @@ object Constants {
     const val PREF_ACTIVE_DELIVERY_ID = "active_delivery_id"
     const val PREF_PENDING_MARKETPLACE_DELIVERY_ID = "pending_marketplace_delivery_id"
     const val PREF_ON_THE_WAY_STARTED_AT = "on_the_way_started_at"
+    // Last winner-of-the-month announcement the courier has already dismissed,
+    // so the congratulation dialog is not shown again on every app launch.
+    const val PREF_LAST_SEEN_WINNER_ANNOUNCEMENT_ID = "last_seen_winner_announcement_id"
 
     // Notification
     const val TRACKING_NOTIFICATION_ID = 1001

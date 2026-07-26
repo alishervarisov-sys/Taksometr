@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
+import com.google.firebase.firestore.Query
 import com.google.firebase.messaging.FirebaseMessaging
 import com.zaki.taksometr.domain.model.Delivery
 import com.zaki.taksometr.domain.model.User
@@ -30,6 +31,19 @@ data class PendingMarketplaceOrder(
     val createdAt: Long = 0L
 )
 
+data class WinnerAnnouncement(
+    val id: String = "",
+    val winnerId: String = "",
+    val winnerName: String = "",
+    val congratsText: String = "",
+    val shortText: String = "",
+    val prizeAmount: Double = 0.0,
+    val orderCount: Int = 0,
+    val expiresAt: Long = 0L,
+    // True when the current courier is the winner (show full congratulation).
+    val isWinner: Boolean = false
+)
+
 data class HomeState(
     val user: User? = null,
     val todayStats: TodayStats = TodayStats(),
@@ -45,6 +59,8 @@ data class HomeState(
     val fixedTypes: Map<String, Double> = emptyMap(),
     val isLoadingTariff: Boolean = false,
     val isBlocked: Boolean = false,
+    val winnerAnnouncement: WinnerAnnouncement? = null,
+    val showWinnerDialog: Boolean = false,
     val error: String? = null
 )
 
@@ -64,6 +80,7 @@ class HomeViewModel @Inject constructor(
 
     private var userLoaded = false
     private var pendingOrderListener: ListenerRegistration? = null
+    private var winnerListener: ListenerRegistration? = null
 
     init {
         loadUserData()
@@ -104,6 +121,9 @@ class HomeViewModel @Inject constructor(
                     _state.value = _state.value.copy(user = user, isBlocked = false)
                     if (user != null && pendingOrderListener == null) {
                         observePendingMarketplaceOrders(user.id)
+                    }
+                    if (user != null && winnerListener == null) {
+                        observeWinnerAnnouncement(user.id)
                     }
                 }
                 if (user != null) userLoaded = true
@@ -372,10 +392,72 @@ class HomeViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Observe the "winner of the month" announcements in real time. Shows the
+     * congratulation dialog for the most recent, still-active announcement that
+     * the courier has not dismissed yet. The winner sees the full personal
+     * congratulation; everyone else sees the short summary.
+     */
+    private fun observeWinnerAnnouncement(courierId: String) {
+        winnerListener?.remove()
+        winnerListener = FirebaseFirestore.getInstance()
+            .collection(Constants.COLLECTION_WINNER_ANNOUNCEMENTS)
+            .orderBy("createdAt", Query.Direction.DESCENDING)
+            .limit(1)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    android.util.Log.e("HomeViewModel", "Winner listener error", error)
+                    return@addSnapshotListener
+                }
+                val doc = snapshot?.documents?.firstOrNull()
+                if (doc == null) {
+                    _state.value = _state.value.copy(winnerAnnouncement = null, showWinnerDialog = false)
+                    return@addSnapshotListener
+                }
+
+                val expiresAt = doc.getLong("expiresAt") ?: 0L
+                // Ignore expired announcements.
+                if (expiresAt in 1 until System.currentTimeMillis()) {
+                    _state.value = _state.value.copy(winnerAnnouncement = null, showWinnerDialog = false)
+                    return@addSnapshotListener
+                }
+
+                val winnerId = doc.getString("winnerId") ?: ""
+                val announcement = WinnerAnnouncement(
+                    id = doc.id,
+                    winnerId = winnerId,
+                    winnerName = doc.getString("winnerName") ?: "",
+                    congratsText = doc.getString("congratsText") ?: "",
+                    shortText = doc.getString("shortText") ?: "",
+                    prizeAmount = doc.getDouble("prizeAmount") ?: 0.0,
+                    orderCount = (doc.getLong("orderCount") ?: 0L).toInt(),
+                    expiresAt = expiresAt,
+                    isWinner = winnerId == courierId
+                )
+
+                val lastSeenId = prefs.getString(Constants.PREF_LAST_SEEN_WINNER_ANNOUNCEMENT_ID, "")
+                val shouldShow = announcement.id != lastSeenId
+                _state.value = _state.value.copy(
+                    winnerAnnouncement = announcement,
+                    showWinnerDialog = shouldShow
+                )
+            }
+    }
+
+    fun dismissWinnerDialog() {
+        val id = _state.value.winnerAnnouncement?.id
+        if (!id.isNullOrEmpty()) {
+            prefs.edit().putString(Constants.PREF_LAST_SEEN_WINNER_ANNOUNCEMENT_ID, id).apply()
+        }
+        _state.value = _state.value.copy(showWinnerDialog = false)
+    }
+
     fun logout() {
         viewModelScope.launch {
             pendingOrderListener?.remove()
             pendingOrderListener = null
+            winnerListener?.remove()
+            winnerListener = null
             authRepository.logout()
         }
     }
@@ -383,6 +465,8 @@ class HomeViewModel @Inject constructor(
     override fun onCleared() {
         pendingOrderListener?.remove()
         pendingOrderListener = null
+        winnerListener?.remove()
+        winnerListener = null
         super.onCleared()
     }
 }

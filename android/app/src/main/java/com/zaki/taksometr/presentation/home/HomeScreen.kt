@@ -711,6 +711,118 @@ fun HomeScreen(
             }
         )
     }
+
+    // Winner-of-the-month congratulation dialog
+    if (state.showWinnerDialog) {
+        state.winnerAnnouncement?.let { winner ->
+            WinnerCongratsDialog(
+                winner = winner,
+                onDismiss = { viewModel.dismissWinnerDialog() }
+            )
+        }
+    }
+}
+
+@Composable
+fun WinnerCongratsDialog(
+    winner: WinnerAnnouncement,
+    onDismiss: () -> Unit
+) {
+    val gold = Color(0xFFFFC107)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = {
+            Icon(
+                Icons.Default.EmojiEvents,
+                contentDescription = null,
+                tint = gold,
+                modifier = Modifier.size(48.dp)
+            )
+        },
+        title = {
+            Text(
+                text = if (winner.isWinner) "🎉 Поздравляем!" else "🏆 Победитель месяца",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                if (winner.isWinner) {
+                    // Full personal congratulation for the winner.
+                    Text(
+                        text = winner.congratsText,
+                        style = MaterialTheme.typography.bodyLarge,
+                        textAlign = TextAlign.Center
+                    )
+                } else {
+                    // Short summary for the other couriers.
+                    Text(
+                        text = "Победитель этого месяца — ${winner.winnerName}!",
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Prize + order-count summary badges.
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly
+                ) {
+                    if (winner.prizeAmount > 0) {
+                        WinnerStat(
+                            icon = Icons.Default.AttachMoney,
+                            value = LocationUtils.formatCost(winner.prizeAmount),
+                            label = "Премия",
+                            color = AccentGreen
+                        )
+                    }
+                    if (winner.orderCount > 0) {
+                        WinnerStat(
+                            icon = Icons.Default.DeliveryDining,
+                            value = "${winner.orderCount}",
+                            label = "Доставок",
+                            color = AccentBlue
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = onDismiss) {
+                Text(if (winner.isWinner) "Спасибо!" else "Поздравить")
+            }
+        }
+    )
+}
+
+@Composable
+private fun WinnerStat(
+    icon: ImageVector,
+    value: String,
+    label: String,
+    color: Color
+) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(28.dp))
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(text = value, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+        )
+    }
 }
 
 // The pending-order card always has a fixed light (cream) background, so its
