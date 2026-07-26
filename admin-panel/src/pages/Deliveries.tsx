@@ -64,6 +64,7 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
   const [createOpen, setCreateOpen] = useState(false);
   const [isCreatingOrder, setIsCreatingOrder] = useState(false);
   const [changingStatusId, setChangingStatusId] = useState<string | null>(null);
+  const [changingStageId, setChangingStageId] = useState<string | null>(null);
   const [mapPickerMode, setMapPickerMode] = useState<'pickup' | 'destination' | null>(null);
   const [mapCenter, setMapCenter] = useState<{ lat: number; lng: number }>(() => {
     try {
@@ -204,6 +205,35 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
       alert('Ошибка изменения статуса: ' + (error.message || 'Неизвестная ошибка'));
     } finally {
       setChangingStatusId(null);
+    }
+  };
+
+  // Intermediate marketplace stages an admin can set on behalf of a courier
+  // who has lost internet connectivity. COMPLETE / CANCEL are handled by the
+  // status buttons (adminSetDeliveryStatus).
+  const MARKETPLACE_STAGES: Array<{ value: string; label: string }> = [
+    { value: 'ACCEPTED', label: 'Принят' },
+    { value: 'ARRIVED_PICKUP', label: 'У точки забора' },
+    { value: 'PICKED_UP', label: 'Товар забран' },
+    { value: 'ON_THE_WAY', label: 'В пути к клиенту' },
+    { value: 'ARRIVED_DESTINATION', label: 'У клиента' },
+  ];
+
+  const stageLabel = (stage?: string) =>
+    MARKETPLACE_STAGES.find(s => s.value === stage)?.label || stage || '—';
+
+  // Admin sets the marketplace order stage when the courier is offline.
+  const handleChangeStage = async (delivery: Delivery, stage: string) => {
+    if (stage === delivery.adminOrderStage) return;
+    try {
+      setChangingStageId(delivery.id);
+      const setStageFn = httpsCallable(functions, 'adminUpdateMarketplaceStage');
+      await setStageFn({ adminId, deliveryId: delivery.id, stage });
+      // onSnapshot keeps the list and open dialog in sync automatically.
+    } catch (error: any) {
+      alert('Ошибка изменения этапа: ' + (error.message || 'Неизвестная ошибка'));
+    } finally {
+      setChangingStageId(null);
     }
   };
 
@@ -509,7 +539,27 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
                 {selectedDelivery.orderKind === 'MARKETPLACE' && <>
                   <Grid item xs={6}><Typography variant="body2" color="text.secondary">Откуда</Typography><Typography fontWeight={600}>{selectedDelivery.pickup?.address || '—'}</Typography></Grid>
                   <Grid item xs={6}><Typography variant="body2" color="text.secondary">Куда</Typography><Typography fontWeight={600}>{selectedDelivery.destination?.address || '—'}</Typography></Grid>
-                  <Grid item xs={6}><Typography variant="body2" color="text.secondary">Этап</Typography><Typography fontWeight={600}>{selectedDelivery.adminOrderStage || '—'}</Typography></Grid>
+                  <Grid item xs={6}>
+                    <Typography variant="body2" color="text.secondary">Этап</Typography>
+                    {selectedDelivery.status === 'IN_PROGRESS' ? (
+                      <TextField
+                        select
+                        size="small"
+                        fullWidth
+                        value={MARKETPLACE_STAGES.some(s => s.value === selectedDelivery.adminOrderStage) ? selectedDelivery.adminOrderStage : ''}
+                        disabled={changingStageId === selectedDelivery.id}
+                        onChange={(e) => handleChangeStage(selectedDelivery, e.target.value)}
+                        helperText="Можно менять, если у курьера пропал интернет"
+                        sx={{ mt: 0.5 }}
+                      >
+                        {MARKETPLACE_STAGES.map(s => (
+                          <MenuItem key={s.value} value={s.value}>{s.label}</MenuItem>
+                        ))}
+                      </TextField>
+                    ) : (
+                      <Typography fontWeight={600}>{stageLabel(selectedDelivery.adminOrderStage)}</Typography>
+                    )}
+                  </Grid>
                   <Grid item xs={6}><Typography variant="body2" color="text.secondary">Комментарий</Typography><Typography fontWeight={600}>{selectedDelivery.comment || '—'}</Typography></Grid>
                 </>}
                 <Grid item xs={12}><Divider /></Grid>

@@ -1108,6 +1108,67 @@ export const updateMarketplaceDeliveryStage = functions.https.onCall(async (data
   return {success: true};
 });
 
+// ============ ADMIN: UPDATE MARKETPLACE STAGE (fallback when courier is offline) ============
+// Lets an admin set the stage of a marketplace order on behalf of a courier who
+// has lost internet connectivity. Only the intermediate stages are handled here;
+// use adminSetDeliveryStatus to COMPLETE or CANCEL an order. No SMS is sent on
+// these intermediate transitions (same policy as the courier-driven flow).
+export const adminUpdateMarketplaceStage = functions.https.onCall(async (data, context) => {
+  const {adminId, deliveryId, stage} = data as {
+    adminId: string;
+    deliveryId: string;
+    stage: AdminOrderStage;
+  };
+
+  await verifyAdmin(adminId);
+
+  if (!deliveryId || !stage) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "deliveryId and stage are required"
+    );
+  }
+
+  const allowedStages: AdminOrderStage[] = [
+    "ACCEPTED",
+    "ARRIVED_PICKUP",
+    "PICKED_UP",
+    "ON_THE_WAY",
+    "ARRIVED_DESTINATION",
+  ];
+  if (!allowedStages.includes(stage)) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "stage must be one of the intermediate marketplace stages"
+    );
+  }
+
+  const deliveryRef = db.collection("deliveries").doc(deliveryId);
+  const deliveryDoc = await deliveryRef.get();
+  if (!deliveryDoc.exists) {
+    throw new functions.https.HttpsError("not-found", "Delivery not found");
+  }
+
+  const deliveryData = deliveryDoc.data()!;
+  if (deliveryData.orderKind !== "MARKETPLACE") {
+    throw new functions.https.HttpsError("failed-precondition", "Not a marketplace delivery");
+  }
+  if (deliveryData.status !== "IN_PROGRESS") {
+    throw new functions.https.HttpsError(
+      "failed-precondition",
+      "Delivery is not in progress"
+    );
+  }
+
+  await deliveryRef.update({
+    adminOrderStage: stage,
+    lastStageUpdatedAt: Date.now(),
+    stageChangedByAdminId: adminId,
+  });
+
+  return {success: true, stage};
+});
+
 export const adminCancelMarketplaceDelivery = functions.https.onCall(async (data, context) => {
   const {adminId, deliveryId} = data;
 
