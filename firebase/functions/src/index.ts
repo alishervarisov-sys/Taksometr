@@ -237,6 +237,13 @@ async function sendPushToCourier(courierData: any, payload: {
   title: string;
   body: string;
   data: {[key: string]: string};
+}, options?: {
+  // When true, also include an FCM `notification` block so Android shows the
+  // notification in the system tray even when the app is fully closed (killed
+  // / swiped away). Use this for one-off announcements that MUST be delivered
+  // (e.g. winner of the month). Leave false for real-time/data-only signals
+  // that rely on onMessageReceived() waking the app.
+  withSystemNotification?: boolean;
 }): Promise<void> {
   const fcmToken = courierData?.fcmToken;
   if (!fcmToken) {
@@ -245,11 +252,10 @@ async function sendPushToCourier(courierData: any, payload: {
   }
 
   try {
-    // Send as data-only message so onMessageReceived() is always called
-    // even when the app is in the background. The Android service shows
-    // the notification itself via showNotification().
-    await admin.messaging().send({
+    const message: admin.messaging.Message = {
       token: fcmToken,
+      // Data is always included so onMessageReceived() can react (foreground)
+      // and carry the payload type/ids.
       data: {
         ...payload.data,
         title: payload.title,
@@ -258,7 +264,24 @@ async function sendPushToCourier(courierData: any, payload: {
       android: {
         priority: "high",
       },
-    });
+    };
+
+    if (options?.withSystemNotification) {
+      // Guaranteed delivery: the OS renders this even when the app is killed.
+      message.notification = {
+        title: payload.title,
+        body: payload.body,
+      };
+      message.android = {
+        priority: "high",
+        notification: {
+          channelId: "zaki_notifications",
+          sound: "default",
+        },
+      };
+    }
+
+    await admin.messaging().send(message);
   } catch (e) {
     console.error("FCM send error:", e);
   }
@@ -2937,7 +2960,7 @@ export const announceWinner = functions.https.onCall(async (data, context) => {
           announcementId: announcementRef.id,
           winnerRole: "WINNER",
         },
-      });
+      }, {withSystemNotification: true});
       winnerNotified = true;
     } else {
       await sendPushToCourier(courierData, {
@@ -2948,7 +2971,7 @@ export const announceWinner = functions.https.onCall(async (data, context) => {
           announcementId: announcementRef.id,
           winnerRole: "OTHER",
         },
-      });
+      }, {withSystemNotification: true});
       othersNotified++;
     }
   }

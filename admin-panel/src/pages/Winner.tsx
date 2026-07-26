@@ -250,7 +250,7 @@ const Winner: React.FC<WinnerProps> = ({ adminId }) => {
         <DialogContent>
           {selected && (
             <Chip
-              label={`${selected.name} ${selected.surname}`}
+              label={`${selected.name}${selected.surname ? ' ' + selected.surname : ''}`}
               color="primary"
               sx={{ mb: 2, mt: 0.5 }}
             />
