@@ -281,42 +281,27 @@ fun HomeScreen(
                         Spacer(modifier = Modifier.width(16.dp))
 
                         Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = state.user?.name ?: str(Strings.courier),
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold
+                            )
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    text = state.user?.name ?: str(Strings.courier),
-                                    style = MaterialTheme.typography.titleLarge,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Surface(
-                                    shape = RoundedCornerShape(8.dp),
-                                    color = if ((state.user?.balance ?: 0.0) >= 5.0)
-                                        AccentGreen.copy(alpha = 0.15f)
-                                    else
-                                        AccentRed.copy(alpha = 0.15f)
-                                ) {
-                                    Text(
-                                        text = LocationUtils.formatCost(state.user?.balance ?: 0.0),
-                                        style = MaterialTheme.typography.labelMedium,
-                                        fontWeight = FontWeight.Bold,
-                                        color = if ((state.user?.balance ?: 0.0) >= 5.0) AccentGreen else AccentRed,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-                                    )
-                                }
-                            }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                // Status reflects the manual shift switch: "На работе"
+                                // when on shift, otherwise offline.
+                                val onShiftStatus = state.user?.isOnShift ?: true
                                 Box(
                                     modifier = Modifier
                                         .size(8.dp)
                                         .clip(CircleShape)
                                         .background(
-                                            if (state.user?.isOnline == true) StatusOnline
+                                            if (onShiftStatus) StatusOnline
                                             else StatusOffline
                                         )
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
-                                    text = if (state.user?.isOnline == true) str(Strings.online) else str(Strings.offline),
+                                    text = if (onShiftStatus) "На работе" else str(Strings.offline),
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
                                 )

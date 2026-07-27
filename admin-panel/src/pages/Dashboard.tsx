@@ -11,8 +11,9 @@ import {
   PersonPin as ActiveIcon,
   EmojiEvents as TrophyIcon
 } from '@mui/icons-material';
+import { WorkOutline as OnShiftIcon } from '@mui/icons-material';
 import { httpsCallable } from 'firebase/functions';
-import { collection, getDocs, query, where } from 'firebase/firestore';
+import { collection, getDocs, query, where, onSnapshot } from 'firebase/firestore';
 import { db, functions } from '../firebase';
 
 interface DashboardProps {
@@ -49,10 +50,34 @@ const Dashboard: React.FC<DashboardProps> = ({ adminId }) => {
   const [loadingLeaderboard, setLoadingLeaderboard] = useState(false);
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');
+  // Couriers currently "on shift" (manual switch enabled in the app).
+  const [onShiftCouriers, setOnShiftCouriers] = useState<Array<{ id: string; name: string; busy: boolean }>>([]);
 
   useEffect(() => {
     loadStats();
     loadLeaderboard(leaderboardPeriod);
+  }, []);
+
+  // Real-time list of couriers who turned their shift on in the app.
+  useEffect(() => {
+    const couriersQ = query(collection(db, 'users'), where('role', '==', 'COURIER'));
+    const unsubUsers = onSnapshot(couriersQ, (snapshot) => {
+      // On shift = not explicitly turned off (matches the app's default of
+      // treating a missing isOnShift field as on-shift).
+      const onShift = snapshot.docs
+        .filter(d => !d.data().isBlocked && d.data().isOnShift !== false)
+        .map(d => ({ id: d.id, name: d.data().name || '—', busy: false }));
+      setOnShiftCouriers(onShift);
+    });
+
+    // Mark on-shift couriers who currently have an active delivery as busy.
+    const deliveriesQ = query(collection(db, 'deliveries'), where('status', '==', 'IN_PROGRESS'));
+    const unsubDeliveries = onSnapshot(deliveriesQ, (snapshot) => {
+      const busyIds = new Set(snapshot.docs.map(d => d.data().courierId));
+      setOnShiftCouriers(prev => prev.map(c => ({ ...c, busy: busyIds.has(c.id) })));
+    });
+
+    return () => { unsubUsers(); unsubDeliveries(); };
   }, []);
 
   const loadStats = async () => {
@@ -222,6 +247,12 @@ const Dashboard: React.FC<DashboardProps> = ({ adminId }) => {
       color: '#2196F3',
     },
     {
+      title: 'На смене',
+      value: onShiftCouriers.length,
+      icon: <OnShiftIcon sx={{ fontSize: 40 }} />,
+      color: '#1B5E20',
+    },
+    {
       title: 'Доставки сегодня',
       value: stats.totalDeliveries,
       icon: <DeliveryIcon sx={{ fontSize: 40 }} />,
@@ -264,6 +295,35 @@ const Dashboard: React.FC<DashboardProps> = ({ adminId }) => {
           </Grid>
         ))}
       </Grid>
+
+      {/* Couriers currently on shift */}
+      <Card sx={{ mt: 3 }}>
+        <CardContent>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+            <OnShiftIcon sx={{ color: '#1B5E20' }} />
+            <Typography variant="h6" sx={{ fontWeight: 700 }}>
+              Курьеры на смене ({onShiftCouriers.length})
+            </Typography>
+          </Box>
+          {onShiftCouriers.length === 0 ? (
+            <Typography color="text.secondary" sx={{ py: 2 }}>
+              Сейчас никто не на смене
+            </Typography>
+          ) : (
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+              {onShiftCouriers.map(c => (
+                <Chip
+                  key={c.id}
+                  avatar={<Avatar>{c.name.charAt(0)}</Avatar>}
+                  label={c.busy ? `${c.name} · занят` : `${c.name} · свободен`}
+                  color={c.busy ? 'error' : 'success'}
+                  variant={c.busy ? 'filled' : 'outlined'}
+                />
+              ))}
+            </Box>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Leaderboard */}
       <Card sx={{ mt: 3 }}>
