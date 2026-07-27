@@ -386,20 +386,20 @@ fun ActiveDeliveryScreen(
 
                     Spacer(modifier = Modifier.height(4.dp))
 
-                    // Client phone - call button
+                    // Client phone - call button + external navigation buttons
                     Row(
-                        verticalAlignment = Alignment.CenterVertically
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Button(
                             onClick = {
                                 state.delivery?.clientPhone?.let { phone ->
-                                    val intent = android.content.Intent(
-                                        android.content.Intent.ACTION_DIAL,
-                                        android.net.Uri.parse("tel:$phone")
-                                    )
-                                    context.startActivity(intent)
+                                    com.zaki.taksometr.util.IntentUtils.dialPhone(context, phone)
                                 }
                             },
+                            modifier = Modifier.weight(1f),
+                            enabled = state.delivery?.clientPhone?.isNotBlank() == true,
                             shape = RoundedCornerShape(12.dp),
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = MaterialTheme.colorScheme.primary
@@ -412,9 +412,49 @@ fun ActiveDeliveryScreen(
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "озвонить клиенту",
+                                text = "Позвонить клиенту",
                                 style = MaterialTheme.typography.bodyMedium
                             )
+                        }
+
+                        // Navigate to pickup ("Откуда") point when the order has one.
+                        if (pickupLatLng != null || state.delivery?.pickupAddress?.isNotBlank() == true) {
+                            FilledTonalIconButton(
+                                onClick = {
+                                    com.zaki.taksometr.util.IntentUtils.openNavigation(
+                                        context,
+                                        state.delivery?.pickupLat,
+                                        state.delivery?.pickupLng,
+                                        state.delivery?.pickupAddress ?: ""
+                                    )
+                                },
+                                colors = IconButtonDefaults.filledTonalIconButtonColors(
+                                    containerColor = AccentGreen.copy(alpha = 0.15f),
+                                    contentColor = AccentGreen
+                                )
+                            ) {
+                                Icon(Icons.Default.Navigation, contentDescription = "Маршрут к точке забора")
+                            }
+                        }
+
+                        // Navigate to destination ("Куда") point when present.
+                        if (destinationLatLng != null || state.delivery?.destinationAddress?.isNotBlank() == true) {
+                            FilledTonalIconButton(
+                                onClick = {
+                                    com.zaki.taksometr.util.IntentUtils.openNavigation(
+                                        context,
+                                        state.delivery?.destinationLat,
+                                        state.delivery?.destinationLng,
+                                        state.delivery?.destinationAddress ?: ""
+                                    )
+                                },
+                                colors = IconButtonDefaults.filledTonalIconButtonColors(
+                                    containerColor = AccentRed.copy(alpha = 0.15f),
+                                    contentColor = AccentRed
+                                )
+                            ) {
+                                Icon(Icons.Default.Navigation, contentDescription = "Маршрут к клиенту")
+                            }
                         }
                     }
 

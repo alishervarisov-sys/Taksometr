@@ -12,6 +12,7 @@ import com.zaki.taksometr.data.local.ZaKiDatabase
 import com.zaki.taksometr.data.local.dao.ChainDeliveryItemDao
 import com.zaki.taksometr.data.local.dao.DeliveryChainDao
 import com.zaki.taksometr.data.local.dao.DeliveryDao
+import com.zaki.taksometr.data.local.dao.PendingCompletionDao
 import com.zaki.taksometr.data.local.dao.RoutePointDao
 import com.zaki.taksometr.data.repository.AuthRepositoryImpl
 import com.zaki.taksometr.data.repository.DeliveryChainRepositoryImpl
@@ -68,7 +69,7 @@ object AppModule {
         ZaKiDatabase::class.java,
         "zaki_database"
     )
-        .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+        .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
         .fallbackToDestructiveMigration()
         .build()
 
@@ -139,6 +140,22 @@ object AppModule {
         }
     }
 
+    // Adds the offline completion queue table. Completions requested without a
+    // network connection are stored here and finalized by CompletionSyncWorker.
+    private val MIGRATION_5_6 = object : androidx.room.migration.Migration(5, 6) {
+        override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+            db.execSQL("""
+                CREATE TABLE IF NOT EXISTS pending_completions (
+                    deliveryId TEXT NOT NULL PRIMARY KEY,
+                    courierId TEXT NOT NULL,
+                    waitingMinutes REAL NOT NULL DEFAULT 0.0,
+                    endTime INTEGER NOT NULL,
+                    enqueuedAt INTEGER NOT NULL DEFAULT 0
+                )
+            """.trimIndent())
+        }
+    }
+
     @Provides
     @Singleton
     fun provideRoutePointDao(database: ZaKiDatabase): RoutePointDao = database.routePointDao()
@@ -159,6 +176,11 @@ object AppModule {
 
     @Provides
     @Singleton
+    fun providePendingCompletionDao(database: ZaKiDatabase): PendingCompletionDao =
+        database.pendingCompletionDao()
+
+    @Provides
+    @Singleton
     fun provideAuthRepository(
         firestore: FirebaseFirestore,
         prefs: SharedPreferences
@@ -167,13 +189,17 @@ object AppModule {
     @Provides
     @Singleton
     fun provideDeliveryRepository(
+        @ApplicationContext context: Context,
         firestore: FirebaseFirestore,
         functions: FirebaseFunctions,
         deliveryDao: DeliveryDao,
         routePointDao: RoutePointDao,
+        pendingCompletionDao: PendingCompletionDao,
+        tariffRepository: TariffRepository,
         prefs: SharedPreferences
     ): DeliveryRepository = DeliveryRepositoryImpl(
-        firestore, functions, deliveryDao, routePointDao, prefs
+        context, firestore, functions, deliveryDao, routePointDao,
+        pendingCompletionDao, tariffRepository, prefs
     )
 
     @Provides

@@ -15,12 +15,43 @@ interface CourierLocation {
   name: string;
   phone: string;
   isOnline: boolean;
+  isOnShift?: boolean;
   lastLocation?: {
     latitude: number;
     longitude: number;
     timestamp: number;
   };
   hasActiveDelivery?: boolean;
+}
+
+// Minimal shape of a courier's current (IN_PROGRESS) order, shown when the
+// dispatcher clicks the courier.
+interface ActiveOrder {
+  id: string;
+  clientPhone?: string;
+  pickupAddress?: string;
+  destinationAddress?: string;
+  adminOrderStage?: string;
+  orderKind?: string;
+  cost?: number;
+}
+
+// Dispatcher status of a courier.
+type CourierStatus = 'busy' | 'free' | 'offline';
+type StatusFilter = 'all' | CourierStatus;
+
+const STATUS_META: Record<CourierStatus, { label: string; color: string; chip: 'error' | 'success' | 'default' }> = {
+  busy: { label: 'Занят', color: '#D32F2F', chip: 'error' },
+  free: { label: 'Свободен', color: '#1B5E20', chip: 'success' },
+  offline: { label: 'Не на смене', color: '#757575', chip: 'default' },
+};
+
+// A courier is busy when they have an active delivery; free when on shift with
+// no active order; offline when they explicitly turned their shift off.
+function getCourierStatus(c: CourierLocation): CourierStatus {
+  if (c.hasActiveDelivery) return 'busy';
+  if (c.isOnShift === false) return 'offline';
+  return 'free';
 }
 
 interface MapViewProps {
@@ -53,6 +84,8 @@ const mapContainerStyle = {
 
 const MapView: React.FC<MapViewProps> = ({ adminId }) => {
   const [couriers, setCouriers] = useState<CourierLocation[]>([]);
+  const [ordersByCourier, setOrdersByCourier] = useState<Record<string, ActiveOrder>>({});
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [selectedCourier, setSelectedCourier] = useState<string | null>(null);
   const [requestingLocation, setRequestingLocation] = useState<string | null>(null);
   const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'error' | 'info' | 'warning' }>({
@@ -96,6 +129,21 @@ const MapView: React.FC<MapViewProps> = ({ adminId }) => {
     );
     const unsubDeliveries = onSnapshot(deliveryQ, (snapshot) => {
       const busyCourierIds = new Set(snapshot.docs.map(d => d.data().courierId));
+      const orders: Record<string, ActiveOrder> = {};
+      snapshot.docs.forEach(docSnap => {
+        const d = docSnap.data() as any;
+        if (!d.courierId) return;
+        orders[d.courierId] = {
+          id: docSnap.id,
+          clientPhone: d.clientPhone,
+          pickupAddress: d.pickup?.address,
+          destinationAddress: d.destination?.address,
+          adminOrderStage: d.adminOrderStage,
+          orderKind: d.orderKind,
+          cost: d.cost,
+        };
+      });
+      setOrdersByCourier(orders);
       setCouriers(prev => prev.map(c => ({
         ...c,
         hasActiveDelivery: busyCourierIds.has(c.id)
@@ -315,6 +363,18 @@ const MapView: React.FC<MapViewProps> = ({ adminId }) => {
     }
   };
 
+  // Couriers matching the active status filter (used for both map + list).
+  const visibleCouriers = statusFilter === 'all'
+    ? couriers
+    : couriers.filter(c => getCourierStatus(c) === statusFilter);
+
+  const statusCounts = {
+    all: couriers.length,
+    busy: couriers.filter(c => getCourierStatus(c) === 'busy').length,
+    free: couriers.filter(c => getCourierStatus(c) === 'free').length,
+    offline: couriers.filter(c => getCourierStatus(c) === 'offline').length,
+  };
+
   // Center map on first courier with location, else default
   const mapCenter = (() => {
     const selected = couriers.find(c => c.id === selectedCourier && c.lastLocation);
@@ -380,9 +440,12 @@ const MapView: React.FC<MapViewProps> = ({ adminId }) => {
           fullscreenControl: true,
         }}
       >
-        {couriers
+        {visibleCouriers
           .filter(c => c.lastLocation)
-          .map(courier => (
+          .map(courier => {
+            const status = getCourierStatus(courier);
+            const order = ordersByCourier[courier.id];
+            return (
             <MarkerF
               key={courier.id}
               position={{
@@ -393,7 +456,7 @@ const MapView: React.FC<MapViewProps> = ({ adminId }) => {
               icon={{
                 url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(
                   `<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40">
-                    <circle cx="20" cy="20" r="12" fill="${courier.hasActiveDelivery ? '#D32F2F' : courier.isOnline ? '#1B5E20' : '#757575'}" stroke="white" stroke-width="3"/>
+                    <circle cx="20" cy="20" r="12" fill="${STATUS_META[status].color}" stroke="white" stroke-width="3"/>
                     <circle cx="20" cy="20" r="4" fill="white"/>
                   </svg>`
                 ),
@@ -403,18 +466,41 @@ const MapView: React.FC<MapViewProps> = ({ adminId }) => {
             >
               {selectedCourier === courier.id && (
                 <InfoWindowF onCloseClick={() => setSelectedCourier(null)}>
-                  <Box sx={{ p: 0.5 }}>
+                  <Box sx={{ p: 0.5, minWidth: 180 }}>
                     <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
                       {courier.name}
                     </Typography>
-                    <Typography variant="caption" color="text.secondary">
+                    <Chip
+                      label={STATUS_META[status].label}
+                      color={STATUS_META[status].chip}
+                      size="small"
+                      sx={{ my: 0.5 }}
+                    />
+                    <Typography variant="caption" color="text.secondary" display="block">
                       {formatTimestamp(courier.lastLocation?.timestamp)}
                     </Typography>
+                    {status === 'busy' && order && (
+                      <Box sx={{ mt: 0.5, pt: 0.5, borderTop: '1px solid #eee' }}>
+                        <Typography variant="caption" sx={{ fontWeight: 600 }} display="block">
+                          Текущий заказ
+                        </Typography>
+                        {order.clientPhone && (
+                          <Typography variant="caption" display="block">Клиент: {order.clientPhone}</Typography>
+                        )}
+                        {order.pickupAddress && (
+                          <Typography variant="caption" display="block">Откуда: {order.pickupAddress}</Typography>
+                        )}
+                        {order.destinationAddress && (
+                          <Typography variant="caption" display="block">Куда: {order.destinationAddress}</Typography>
+                        )}
+                      </Box>
+                    )}
                   </Box>
                 </InfoWindowF>
               )}
             </MarkerF>
-          ))}
+          );
+        })}
       </GoogleMap>
     );
   };
@@ -593,14 +679,34 @@ const MapView: React.FC<MapViewProps> = ({ adminId }) => {
         {/* Couriers list */}
         <Card sx={{ flex: 1, maxHeight: 600, overflow: 'auto' }}>
           <CardContent>
-            <Typography variant="h6" sx={{ mb: 2 }}>
-              Курьеры ({couriers.length})
+            <Typography variant="h6" sx={{ mb: 1.5 }}>
+              Курьеры ({visibleCouriers.length}/{couriers.length})
             </Typography>
+
+            {/* Dispatcher status filter */}
+            <ToggleButtonGroup
+              value={statusFilter}
+              exclusive
+              size="small"
+              fullWidth
+              onChange={(_, val) => val && setStatusFilter(val)}
+              sx={{ mb: 2, flexWrap: 'wrap' }}
+            >
+              <ToggleButton value="all">Все ({statusCounts.all})</ToggleButton>
+              <ToggleButton value="free">Свободен ({statusCounts.free})</ToggleButton>
+              <ToggleButton value="busy">Занят ({statusCounts.busy})</ToggleButton>
+              <ToggleButton value="offline">Не на смене ({statusCounts.offline})</ToggleButton>
+            </ToggleButtonGroup>
+
             <List>
-              {couriers.map((courier) => (
+              {visibleCouriers.map((courier) => {
+                const status = getCourierStatus(courier);
+                const order = ordersByCourier[courier.id];
+                const isSelected = selectedCourier === courier.id;
+                return (
+                <React.Fragment key={courier.id}>
                 <ListItem
-                  key={courier.id}
-                  divider
+                  divider={!isSelected}
                   disablePadding
                   secondaryAction={
                     <Tooltip title="Запросить местоположение">
@@ -623,8 +729,8 @@ const MapView: React.FC<MapViewProps> = ({ adminId }) => {
                   }
                 >
                   <ListItemButton
-                    selected={selectedCourier === courier.id}
-                    onClick={() => setSelectedCourier(courier.id)}
+                    selected={isSelected}
+                    onClick={() => setSelectedCourier(isSelected ? null : courier.id)}
                   >
                     <ListItemText
                       primary={courier.name}
@@ -635,15 +741,39 @@ const MapView: React.FC<MapViewProps> = ({ adminId }) => {
                       }
                     />
                     <Chip
-                      label={courier.hasActiveDelivery ? 'Занят' : courier.isOnline ? 'Онлайн' : 'Оффлайн'}
-                      color={courier.hasActiveDelivery ? 'error' : courier.isOnline ? 'success' : 'default'}
+                      label={STATUS_META[status].label}
+                      color={STATUS_META[status].chip}
                       size="small"
                       sx={{ mr: 1 }}
                     />
                   </ListItemButton>
                 </ListItem>
-              ))}
-              {couriers.length === 0 && (
+                {/* Current order details for a selected busy courier */}
+                {isSelected && status === 'busy' && order && (
+                  <Box sx={{ px: 2, py: 1.5, bgcolor: 'action.hover', borderBottom: '1px solid #eee' }}>
+                    <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 0.5 }}>
+                      Текущий заказ {order.orderKind === 'MARKETPLACE' ? '(админ)' : ''}
+                    </Typography>
+                    {order.clientPhone && (
+                      <Typography variant="body2">Клиент: {order.clientPhone}</Typography>
+                    )}
+                    {order.pickupAddress && (
+                      <Typography variant="body2">Откуда: {order.pickupAddress}</Typography>
+                    )}
+                    {order.destinationAddress && (
+                      <Typography variant="body2">Куда: {order.destinationAddress}</Typography>
+                    )}
+                    {order.adminOrderStage && (
+                      <Typography variant="caption" color="text.secondary">
+                        Этап: {order.adminOrderStage}
+                      </Typography>
+                    )}
+                  </Box>
+                )}
+                </React.Fragment>
+              );
+            })}
+              {visibleCouriers.length === 0 && (
                 <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center', py: 4 }}>
                   Нет курьеров
                 </Typography>

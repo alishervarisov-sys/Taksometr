@@ -183,6 +183,33 @@ fun ProfileScreen(
                                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
                             )
                         }
+
+                        // Client rating (shown once the courier has ratings).
+                        val ratingCount = state.user?.ratingCount ?: 0
+                        if (ratingCount > 0) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            val rating = state.user?.rating ?: 0.0
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    Icons.Default.Star,
+                                    contentDescription = null,
+                                    tint = Color(0xFFFFC107),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = String.format(Locale.getDefault(), "%.1f", rating),
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "($ratingCount)",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                                )
+                            }
+                        }
                     }
                 }
             }

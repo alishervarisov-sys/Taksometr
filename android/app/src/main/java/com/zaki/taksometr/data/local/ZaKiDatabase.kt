@@ -5,10 +5,12 @@ import androidx.room.RoomDatabase
 import com.zaki.taksometr.data.local.dao.ChainDeliveryItemDao
 import com.zaki.taksometr.data.local.dao.DeliveryChainDao
 import com.zaki.taksometr.data.local.dao.DeliveryDao
+import com.zaki.taksometr.data.local.dao.PendingCompletionDao
 import com.zaki.taksometr.data.local.dao.RoutePointDao
 import com.zaki.taksometr.data.local.entity.ChainDeliveryItemEntity
 import com.zaki.taksometr.data.local.entity.DeliveryChainEntity
 import com.zaki.taksometr.data.local.entity.DeliveryEntity
+import com.zaki.taksometr.data.local.entity.PendingCompletionEntity
 import com.zaki.taksometr.data.local.entity.RoutePointEntity
 
 @Database(
@@ -16,9 +18,10 @@ import com.zaki.taksometr.data.local.entity.RoutePointEntity
         RoutePointEntity::class,
         DeliveryEntity::class,
         DeliveryChainEntity::class,
-        ChainDeliveryItemEntity::class
+        ChainDeliveryItemEntity::class,
+        PendingCompletionEntity::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 abstract class ZaKiDatabase : RoomDatabase() {
@@ -26,4 +29,5 @@ abstract class ZaKiDatabase : RoomDatabase() {
     abstract fun deliveryDao(): DeliveryDao
     abstract fun deliveryChainDao(): DeliveryChainDao
     abstract fun chainDeliveryItemDao(): ChainDeliveryItemDao
+    abstract fun pendingCompletionDao(): PendingCompletionDao
 }

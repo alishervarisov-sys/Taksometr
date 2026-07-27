@@ -27,7 +27,11 @@ data class PendingMarketplaceOrder(
     val clientPhone: String = "",
     val comment: String = "",
     val pickupAddress: String = "",
+    val pickupLat: Double? = null,
+    val pickupLng: Double? = null,
     val destinationAddress: String = "",
+    val destinationLat: Double? = null,
+    val destinationLng: Double? = null,
     val createdAt: Long = 0L
 )
 
@@ -59,6 +63,7 @@ data class HomeState(
     val fixedTypes: Map<String, Double> = emptyMap(),
     val isLoadingTariff: Boolean = false,
     val isBlocked: Boolean = false,
+    val isUpdatingShift: Boolean = false,
     val winnerAnnouncement: WinnerAnnouncement? = null,
     val showWinnerDialog: Boolean = false,
     val error: String? = null
@@ -157,7 +162,11 @@ class HomeViewModel @Inject constructor(
                         clientPhone = doc.getString("clientPhone") ?: "",
                         comment = doc.getString("comment") ?: "",
                         pickupAddress = pickup?.get("address") as? String ?: "",
+                        pickupLat = (pickup?.get("latitude") as? Number)?.toDouble(),
+                        pickupLng = (pickup?.get("longitude") as? Number)?.toDouble(),
                         destinationAddress = destination?.get("address") as? String ?: "",
+                        destinationLat = (destination?.get("latitude") as? Number)?.toDouble(),
+                        destinationLng = (destination?.get("longitude") as? Number)?.toDouble(),
                         createdAt = doc.getLong("createdAt") ?: 0L
                     )
                 } ?: emptyList()
@@ -214,7 +223,11 @@ class HomeViewModel @Inject constructor(
                         clientPhone = doc.getString("clientPhone") ?: "",
                         comment = doc.getString("comment") ?: "",
                         pickupAddress = pickup?.get("address") as? String ?: "",
+                        pickupLat = (pickup?.get("latitude") as? Number)?.toDouble(),
+                        pickupLng = (pickup?.get("longitude") as? Number)?.toDouble(),
                         destinationAddress = destination?.get("address") as? String ?: "",
+                        destinationLat = (destination?.get("latitude") as? Number)?.toDouble(),
+                        destinationLng = (destination?.get("longitude") as? Number)?.toDouble(),
                         createdAt = doc.getLong("createdAt") ?: 0L
                     ))
                 )
@@ -278,6 +291,23 @@ class HomeViewModel @Inject constructor(
                     )
                 }
                 is Resource.Loading -> Unit
+            }
+        }
+    }
+
+    /**
+     * Flip the courier's manual "on shift" flag. The user document is updated in
+     * Firestore; the getCurrentUser() listener then pushes the new value back
+     * into [state], so the UI switch stays in sync with the source of truth.
+     */
+    fun toggleShift(isOnShift: Boolean) {
+        viewModelScope.launch {
+            _state.value = _state.value.copy(isUpdatingShift = true, error = null)
+            when (val result = authRepository.setOnShift(isOnShift)) {
+                is Resource.Error ->
+                    _state.value = _state.value.copy(isUpdatingShift = false, error = result.message)
+                else ->
+                    _state.value = _state.value.copy(isUpdatingShift = false)
             }
         }
     }

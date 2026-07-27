@@ -42,11 +42,14 @@ class AuthRepositoryImpl @Inject constructor(
                 phone = doc.getString("phone") ?: "",
                 role = UserRole.valueOf(doc.getString("role") ?: "COURIER"),
                 isOnline = doc.getBoolean("isOnline") ?: false,
+                isOnShift = doc.getBoolean("isOnShift") ?: true,
                 isBlocked = doc.getBoolean("isBlocked") ?: false,
                 balance = doc.getDouble("balance") ?: 0.0,
                 createdAt = doc.getLong("createdAt") ?: 0L,
                 fcmToken = doc.getString("fcmToken") ?: "",
-                photoBase64 = doc.getString("photoBase64") ?: ""
+                photoBase64 = doc.getString("photoBase64") ?: "",
+                rating = doc.getDouble("rating") ?: 0.0,
+                ratingCount = (doc.getLong("ratingCount") ?: 0L).toInt()
             )
 
             if (user.isBlocked) {
@@ -98,11 +101,14 @@ class AuthRepositoryImpl @Inject constructor(
                     phone = snapshot.getString("phone") ?: "",
                     role = UserRole.valueOf(snapshot.getString("role") ?: "COURIER"),
                     isOnline = snapshot.getBoolean("isOnline") ?: false,
+                    isOnShift = snapshot.getBoolean("isOnShift") ?: true,
                     isBlocked = snapshot.getBoolean("isBlocked") ?: false,
                     balance = snapshot.getDouble("balance") ?: 0.0,
                     createdAt = snapshot.getLong("createdAt") ?: 0L,
                     fcmToken = snapshot.getString("fcmToken") ?: "",
-                    photoBase64 = snapshot.getString("photoBase64") ?: ""
+                    photoBase64 = snapshot.getString("photoBase64") ?: "",
+                    rating = snapshot.getDouble("rating") ?: 0.0,
+                    ratingCount = (snapshot.getLong("ratingCount") ?: 0L).toInt()
                 )
                 trySend(user)
             }
@@ -133,6 +139,20 @@ class AuthRepositoryImpl @Inject constructor(
             Resource.Success(Unit)
         } catch (e: Exception) {
             Resource.Error("Не удалось сохранить фото: ${e.localizedMessage}")
+        }
+    }
+
+    override suspend fun setOnShift(isOnShift: Boolean): Resource<Unit> {
+        val userId = prefs.getString(Constants.PREF_USER_ID, null)
+            ?: return Resource.Error("Пользователь не найден")
+        return try {
+            firestore.collection(Constants.COLLECTION_USERS)
+                .document(userId)
+                .update("isOnShift", isOnShift)
+                .await()
+            Resource.Success(Unit)
+        } catch (e: Exception) {
+            Resource.Error("Не удалось изменить статус смены: ${e.localizedMessage}")
         }
     }
 

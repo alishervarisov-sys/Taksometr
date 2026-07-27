@@ -1,19 +1,28 @@
 package com.zaki.taksometr.data.repository
 
+import android.content.Context
 import android.content.SharedPreferences
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
 import com.google.firebase.functions.FirebaseFunctions
 import com.zaki.taksometr.data.local.dao.DeliveryDao
+import com.zaki.taksometr.data.local.dao.PendingCompletionDao
 import com.zaki.taksometr.data.local.dao.RoutePointDao
 import com.zaki.taksometr.data.local.entity.DeliveryEntity
+import com.zaki.taksometr.data.local.entity.PendingCompletionEntity
 import com.zaki.taksometr.domain.model.Delivery
 import com.zaki.taksometr.domain.model.DeliveryStatus
 import com.zaki.taksometr.domain.model.GeoPoint
 import com.zaki.taksometr.domain.repository.DeliveryRepository
+import com.zaki.taksometr.domain.repository.TariffRepository
 import com.zaki.taksometr.domain.repository.TodayStats
+import com.zaki.taksometr.service.CompletionSyncWorker
 import com.zaki.taksometr.util.Constants
+import com.zaki.taksometr.util.LocationUtils
 import com.zaki.taksometr.util.Resource
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -27,12 +36,28 @@ import javax.inject.Singleton
 
 @Singleton
 class DeliveryRepositoryImpl @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val firestore: FirebaseFirestore,
     private val functions: FirebaseFunctions,
     private val deliveryDao: DeliveryDao,
     private val routePointDao: RoutePointDao,
+    private val pendingCompletionDao: PendingCompletionDao,
+    private val tariffRepository: TariffRepository,
     private val prefs: SharedPreferences
 ) : DeliveryRepository {
+
+    /** True when the device currently has a usable (validated) internet connection. */
+    private fun isNetworkAvailable(): Boolean {
+        return try {
+            val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+                ?: return false
+            val network = cm.activeNetwork ?: return false
+            val caps = cm.getNetworkCapabilities(network) ?: return false
+            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        } catch (e: Exception) {
+            false
+        }
+    }
 
     private val userId: String
         get() = prefs.getString(Constants.PREF_USER_ID, "") ?: ""
@@ -129,6 +154,14 @@ class DeliveryRepositoryImpl @Inject constructor(
         android.util.Log.d("DeliveryRepo", "deliveryId=$deliveryId")
         android.util.Log.d("DeliveryRepo", "waitingMinutes=$waitingMinutes")
         android.util.Log.d("DeliveryRepo", "userId=$userId")
+
+        // Offline: don't fail the courier. Queue the completion locally with a
+        // best-effort cost estimate and finalize it on the server later via
+        // CompletionSyncWorker as soon as the network is back.
+        if (!isNetworkAvailable()) {
+            android.util.Log.w("DeliveryRepo", "No network — queueing completion offline")
+            return enqueueOfflineCompletion(deliveryId, waitingMinutes)
+        }
 
         return try {
             // First check Firestore for the actual status of this delivery
@@ -264,12 +297,181 @@ class DeliveryRepositoryImpl @Inject constructor(
         } catch (e: Exception) {
             android.util.Log.e("DeliveryRepo", "=== COMPLETE DELIVERY ERROR ===")
             android.util.Log.e("DeliveryRepo", "Error: ${e.message}", e)
-            
+
+            // If the failure was caused by connectivity dropping mid-call, don't
+            // block the courier: queue the completion and finalize it later.
+            if (!isNetworkAvailable()) {
+                android.util.Log.w("DeliveryRepo", "Network lost during completion — queueing offline")
+                return enqueueOfflineCompletion(deliveryId, waitingMinutes)
+            }
+
             // Check if this is a Firebase Functions error with a specific message
             val errorMessage = e.localizedMessage ?: e.message ?: "Неизвестная ошибка"
             
             Resource.Error("Ошибка завершения доставки: $errorMessage")
         }
+    }
+
+    /**
+     * Persists an offline completion: marks the local delivery COMPLETED with a
+     * locally-estimated distance/cost, records it in the [pendingCompletionDao]
+     * queue, promotes any remaining paused delivery, and schedules the sync
+     * worker. The authoritative cost is written back when the worker finalizes
+     * the delivery on the server.
+     */
+    private suspend fun enqueueOfflineCompletion(
+        deliveryId: String,
+        waitingMinutes: Double
+    ): Resource<Delivery> {
+        val entity = deliveryDao.getById(deliveryId)
+            ?: return Resource.Error("Доставка не найдена локально")
+
+        val endTime = System.currentTimeMillis()
+
+        // Estimate distance/cost locally the same way the active screen does, so
+        // the completion screen shows a sensible value until the server syncs.
+        val points = routePointDao.getPointsByDeliveryIdSync(deliveryId).map { it.toGeoPoint() }
+        val isMarketplace = entity.orderKind == "MARKETPLACE"
+        val onTheWayAt = entity.onTheWayStartedAt
+            ?: prefs.getLong(Constants.PREF_ON_THE_WAY_STARTED_AT, 0L)
+        val distancePoints = if (isMarketplace && onTheWayAt > 0) {
+            points.filter { it.timestamp >= onTheWayAt }
+        } else {
+            points
+        }
+        val estimatedDistance = LocationUtils.calculateTotalDistance(distancePoints)
+        val estimatedCost = try {
+            tariffRepository.calculateCost(estimatedDistance, entity.deliveryType)
+        } catch (e: Exception) {
+            entity.cost
+        }
+
+        pendingCompletionDao.insert(
+            PendingCompletionEntity(
+                deliveryId = deliveryId,
+                courierId = userId,
+                waitingMinutes = waitingMinutes,
+                endTime = endTime
+            )
+        )
+
+        val completedEntity = entity.copy(
+            status = DeliveryStatus.COMPLETED.name,
+            endTime = endTime,
+            waitingMinutes = waitingMinutes,
+            distanceMeters = estimatedDistance,
+            cost = estimatedCost,
+            isPaused = false,
+            isSynced = false
+        )
+        deliveryDao.update(completedEntity)
+
+        switchToRemainingActiveOrClear(deliveryId)
+        CompletionSyncWorker.schedule(context)
+
+        android.util.Log.d("DeliveryRepo", "Offline completion queued for $deliveryId (est cost=$estimatedCost)")
+        return Resource.Success(completedEntity.toDelivery())
+    }
+
+    override suspend fun syncPendingCompletions(): Resource<Unit> {
+        val pending = pendingCompletionDao.getAll()
+        if (pending.isEmpty()) return Resource.Success(Unit)
+
+        android.util.Log.d("DeliveryRepo", "syncPendingCompletions: ${pending.size} queued")
+        var allDone = true
+
+        for (item in pending) {
+            try {
+                val doc = firestore.collection(Constants.COLLECTION_DELIVERIES)
+                    .document(item.deliveryId).get().await()
+
+                // The order vanished on the server — nothing to finalize.
+                if (!doc.exists()) {
+                    pendingCompletionDao.deleteById(item.deliveryId)
+                    continue
+                }
+
+                when (doc.getString("status")) {
+                    "COMPLETED" -> {
+                        // Already completed server-side; reconcile local values.
+                        val cost = doc.getDouble("cost") ?: 0.0
+                        val distance = doc.getDouble("distanceMeters") ?: 0.0
+                        deliveryDao.getById(item.deliveryId)?.let {
+                            deliveryDao.update(
+                                it.copy(
+                                    status = DeliveryStatus.COMPLETED.name,
+                                    cost = cost,
+                                    distanceMeters = distance,
+                                    endTime = doc.getLong("endTime") ?: item.endTime,
+                                    isSynced = true
+                                )
+                            )
+                        }
+                        pendingCompletionDao.deleteById(item.deliveryId)
+                    }
+
+                    "IN_PROGRESS" -> {
+                        val points = routePointDao.getPointsByDeliveryIdSync(item.deliveryId)
+                        val localEntity = deliveryDao.getById(item.deliveryId)
+                        val isMarketplace = localEntity?.orderKind == "MARKETPLACE"
+                        val onTheWayAt = localEntity?.onTheWayStartedAt
+                            ?: prefs.getLong(Constants.PREF_ON_THE_WAY_STARTED_AT, 0L)
+                        val routePoints = if (isMarketplace && onTheWayAt > 0) {
+                            points.filter { it.timestamp >= onTheWayAt }
+                        } else {
+                            points
+                        }
+                        val routeData = routePoints.map { point ->
+                            hashMapOf(
+                                "latitude" to point.latitude,
+                                "longitude" to point.longitude,
+                                "timestamp" to point.timestamp,
+                                "accuracy" to point.accuracy,
+                                "gap" to point.isGap
+                            )
+                        }
+                        val data = hashMapOf(
+                            "deliveryId" to item.deliveryId,
+                            "courierId" to item.courierId,
+                            "route" to routeData,
+                            "endTime" to item.endTime,
+                            "waitingMinutes" to item.waitingMinutes
+                        )
+                        val result = functions.getHttpsCallable("completeDelivery").call(data).await()
+                        @Suppress("UNCHECKED_CAST")
+                        val responseData = result.data as Map<String, Any>
+                        val cost = (responseData["cost"] as? Number)?.toDouble() ?: 0.0
+                        val distance = (responseData["distanceMeters"] as? Number)?.toDouble() ?: 0.0
+                        deliveryDao.getById(item.deliveryId)?.let {
+                            deliveryDao.update(
+                                it.copy(
+                                    status = DeliveryStatus.COMPLETED.name,
+                                    cost = cost,
+                                    distanceMeters = distance,
+                                    endTime = item.endTime,
+                                    isSynced = true
+                                )
+                            )
+                        }
+                        pendingCompletionDao.deleteById(item.deliveryId)
+                        android.util.Log.d("DeliveryRepo", "Pending completion synced: ${item.deliveryId}")
+                    }
+
+                    else -> {
+                        // CANCELLED / PENDING or other terminal state — can't be
+                        // completed anymore, so drop it from the queue.
+                        pendingCompletionDao.deleteById(item.deliveryId)
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("DeliveryRepo", "syncPendingCompletions item failed: ${item.deliveryId}", e)
+                // Keep it in the queue and retry later (likely a network hiccup).
+                allDone = false
+                if (!isNetworkAvailable()) break
+            }
+        }
+
+        return if (allDone) Resource.Success(Unit) else Resource.Error("Есть несинхронизированные завершения")
     }
 
         override suspend fun cancelDelivery(deliveryId: String): Resource<Unit> {

@@ -322,6 +322,26 @@ fun HomeScreen(
                                 )
                             }
                         }
+
+                        // Manual "on shift" toggle. When off, the courier is
+                        // excluded from new order distribution and push.
+                        val onShift = state.user?.isOnShift ?: true
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Switch(
+                                checked = onShift,
+                                onCheckedChange = { viewModel.toggleShift(it) },
+                                enabled = !state.isUpdatingShift,
+                                colors = SwitchDefaults.colors(
+                                    checkedTrackColor = AccentGreen
+                                )
+                            )
+                            Text(
+                                text = if (onShift) "На смене" else "Не на смене",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (onShift) AccentGreen
+                                    else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                            )
+                        }
                     }
 
                     // Thin divider
@@ -837,6 +857,7 @@ fun PendingOrderCard(
     isAccepting: Boolean,
     onAccept: () -> Unit
 ) {
+    val context = LocalContext.current
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(20.dp),
@@ -889,25 +910,39 @@ fun PendingOrderCard(
                     .background(Color(0xFFFFB300).copy(alpha = 0.5f))
             )
 
-            if (pending.pickupAddress.isNotBlank()) {
-                Row(verticalAlignment = Alignment.Top, modifier = Modifier.fillMaxWidth()) {
+            if (pending.pickupAddress.isNotBlank() || (pending.pickupLat != null && pending.pickupLng != null)) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                     Icon(Icons.Default.LocationOn, contentDescription = null, tint = AccentGreen, modifier = Modifier.size(20.dp))
                     Spacer(modifier = Modifier.width(10.dp))
-                    Column {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text("Откуда", style = MaterialTheme.typography.labelSmall, color = PendingOrderLabelColor)
-                        Text(pending.pickupAddress, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = PendingOrderTextColor)
+                        Text(pending.pickupAddress.ifBlank { "Точка на карте" }, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = PendingOrderTextColor)
                     }
+                    NavigateIconButton(
+                        onClick = {
+                            com.zaki.taksometr.util.IntentUtils.openNavigation(
+                                context, pending.pickupLat, pending.pickupLng, pending.pickupAddress
+                            )
+                        }
+                    )
                 }
                 Spacer(modifier = Modifier.height(10.dp))
             }
-            if (pending.destinationAddress.isNotBlank()) {
-                Row(verticalAlignment = Alignment.Top, modifier = Modifier.fillMaxWidth()) {
+            if (pending.destinationAddress.isNotBlank() || (pending.destinationLat != null && pending.destinationLng != null)) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                     Icon(Icons.Default.LocationOn, contentDescription = null, tint = AccentRed, modifier = Modifier.size(20.dp))
                     Spacer(modifier = Modifier.width(10.dp))
-                    Column {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text("Куда", style = MaterialTheme.typography.labelSmall, color = PendingOrderLabelColor)
-                        Text(pending.destinationAddress, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = PendingOrderTextColor)
+                        Text(pending.destinationAddress.ifBlank { "Точка на карте" }, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = PendingOrderTextColor)
                     }
+                    NavigateIconButton(
+                        onClick = {
+                            com.zaki.taksometr.util.IntentUtils.openNavigation(
+                                context, pending.destinationLat, pending.destinationLng, pending.destinationAddress
+                            )
+                        }
+                    )
                 }
                 Spacer(modifier = Modifier.height(10.dp))
             }
@@ -923,12 +958,21 @@ fun PendingOrderCard(
                 Spacer(modifier = Modifier.height(10.dp))
             }
             if (pending.clientPhone.isNotBlank()) {
-                Row(verticalAlignment = Alignment.Top, modifier = Modifier.fillMaxWidth()) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                     Icon(Icons.Default.Phone, contentDescription = null, tint = PendingOrderLabelColor, modifier = Modifier.size(20.dp))
                     Spacer(modifier = Modifier.width(10.dp))
-                    Column {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text("Клиент", style = MaterialTheme.typography.labelSmall, color = PendingOrderLabelColor)
                         Text(pending.clientPhone, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = PendingOrderTextColor)
+                    }
+                    FilledTonalIconButton(
+                        onClick = { com.zaki.taksometr.util.IntentUtils.dialPhone(context, pending.clientPhone) },
+                        colors = IconButtonDefaults.filledTonalIconButtonColors(
+                            containerColor = AccentGreen.copy(alpha = 0.15f),
+                            contentColor = AccentGreen
+                        )
+                    ) {
+                        Icon(Icons.Default.Call, contentDescription = "Позвонить клиенту")
                     }
                 }
                 Spacer(modifier = Modifier.height(12.dp))
@@ -947,6 +991,20 @@ fun PendingOrderCard(
                 onAccept = onAccept
             )
         }
+    }
+}
+
+// Small round button that launches external turn-by-turn navigation to a point.
+@Composable
+fun NavigateIconButton(onClick: () -> Unit) {
+    FilledTonalIconButton(
+        onClick = onClick,
+        colors = IconButtonDefaults.filledTonalIconButtonColors(
+            containerColor = AccentBlue.copy(alpha = 0.15f),
+            contentColor = AccentBlue
+        )
+    ) {
+        Icon(Icons.Default.Navigation, contentDescription = "Построить маршрут")
     }
 }
 

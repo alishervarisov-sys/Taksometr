@@ -12,6 +12,9 @@ class ZaKiApp : Application() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannels()
+        // Flush any deliveries that were completed offline in a previous session
+        // once the network is available again.
+        com.zaki.taksometr.service.CompletionSyncWorker.schedule(this)
     }
 
     private fun createNotificationChannels() {

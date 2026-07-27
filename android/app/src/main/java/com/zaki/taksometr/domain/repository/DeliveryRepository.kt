@@ -37,6 +37,12 @@ interface DeliveryRepository {
     suspend fun acceptMarketplaceDelivery(deliveryId: String): Resource<Delivery>
     suspend fun updateMarketplaceDeliveryStage(deliveryId: String, stage: String? = null, waitingAction: String? = null): Resource<Unit>
     suspend fun syncHistoryFromFirestore(courierId: String): Resource<Unit>
+    /**
+     * Finalizes on the server all deliveries the courier completed while offline
+     * (see the `pending_completions` queue). Returns Success when the queue is
+     * empty afterwards, Error when some items still need another attempt.
+     */
+    suspend fun syncPendingCompletions(): Resource<Unit>
 }
 
 data class TodayStats(

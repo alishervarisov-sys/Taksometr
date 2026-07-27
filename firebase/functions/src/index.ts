@@ -1,5 +1,6 @@
 ﻿import * as functions from "firebase-functions";
 import * as admin from "firebase-admin";
+import * as crypto from "crypto";
 
 admin.initializeApp();
 
@@ -137,6 +138,34 @@ function formatCostForSms(cost: number): string {
     return `${new Intl.NumberFormat("ru-RU").format(somoni)}.${String(diram).padStart(2, "0")}`;
   }
   return new Intl.NumberFormat("ru-RU", {maximumFractionDigits: 0}).format(cost);
+}
+
+// ============ CLIENT RATING (отзывы) ============
+/**
+ * Base URL of the public rateDelivery HTTP endpoint. Configurable via the
+ * RATING_BASE_URL env var; falls back to the default Cloud Functions URL built
+ * from the current project id.
+ */
+function getRatingBaseUrl(): string {
+  if (process.env.RATING_BASE_URL) return process.env.RATING_BASE_URL;
+  const project =
+    process.env.GCLOUD_PROJECT || process.env.GCP_PROJECT || "";
+  return `https://us-central1-${project}.cloudfunctions.net/rateDelivery`;
+}
+
+/** Generates a short opaque token used to authorize a single rating link. */
+function generateRatingToken(): string {
+  return crypto.randomBytes(8).toString("hex");
+}
+
+/** Escapes user-provided text before embedding it into the rating HTML page. */
+function escapeHtml(input: string): string {
+  return String(input)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 // ============ HAVERSINE DISTANCE CALCULATION ============
@@ -656,6 +685,9 @@ export const completeDelivery = functions.https.onCall(async (data, context) => 
     });
   }
 
+  // Rating token — lets the client rate this delivery exactly once via SMS link.
+  const ratingToken = generateRatingToken();
+
   // Update delivery
   await deliveryRef.update({
     status: "COMPLETED",
@@ -666,6 +698,9 @@ export const completeDelivery = functions.https.onCall(async (data, context) => 
     waitingCost: waitingCost,
     commission: commissionAmount,
     route: routePoints,
+    ratingToken: ratingToken,
+    ratingRequestedAt: Date.now(),
+    rating: null,
   });
 
     // ---- Sync courier status after completing this delivery ----
@@ -739,8 +774,12 @@ export const completeDelivery = functions.https.onCall(async (data, context) => 
     }
   }
 
+  const ratingUrl =
+    `${getRatingBaseUrl()}?d=${encodeURIComponent(deliveryId)}&t=${ratingToken}`;
+
   completeSmsText +=
     `Маблағи умумӣ: ${formatCostForSms(totalCost)} сомонӣ. ` +
+    `Ба хизматрасонӣ баҳо диҳед: ${ratingUrl} ` +
     `Барои хариди хӯрок, дору ва дигар молҳо барномаи ZaKi-ро боргирӣ кунед: https://clck.ru/3TuGb6 ` +
     `Ташаккур!`;
 
@@ -758,6 +797,129 @@ export const completeDelivery = functions.https.onCall(async (data, context) => 
     waitingCost: waitingCost,
     commission: commissionAmount,
   };
+});
+
+// ============ CLIENT RATING PAGE (public HTTP) ============
+/**
+ * Public endpoint the client opens from the SMS link to rate a completed
+ * delivery. GET without `s` renders a 1–5 star page; GET with `s` records the
+ * score (and optional comment `c`), updates the courier's aggregate rating and
+ * shows a thank-you page. The single-use `t` token authorizes the rating.
+ */
+export const rateDelivery = functions.https.onRequest(async (req, res) => {
+  const deliveryId = String(req.query.d || "");
+  const token = String(req.query.t || "");
+  const scoreRaw = req.query.s != null ? String(req.query.s) : "";
+  const comment = String(req.query.c || "").slice(0, 500);
+
+  const page = (title: string, body: string): string => `<!DOCTYPE html>
+<html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${escapeHtml(title)}</title>
+<style>
+  body{font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:#f5f5f5;margin:0;padding:24px;color:#212121}
+  .card{max-width:420px;margin:24px auto;background:#fff;border-radius:16px;padding:24px;box-shadow:0 2px 12px rgba(0,0,0,.08)}
+  h1{font-size:20px;margin:0 0 8px}
+  p{color:#555;line-height:1.5}
+  .stars{display:flex;justify-content:center;gap:8px;margin:20px 0}
+  .stars a{font-size:40px;text-decoration:none;color:#FFC107;transition:transform .1s}
+  .stars a:hover{transform:scale(1.15)}
+  textarea{width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:12px;padding:10px;font-size:15px;min-height:80px}
+  button{margin-top:14px;width:100%;padding:14px;border:0;border-radius:12px;background:#1565C0;color:#fff;font-size:16px;font-weight:600}
+  .big{font-size:56px;text-align:center;margin:8px 0}
+</style></head><body><div class="card">${body}</div></body></html>`;
+
+  const errorPage = (msg: string): void => {
+    res.status(200).send(page("ZaKi", `<h1>ZaKi</h1><p>${escapeHtml(msg)}</p>`));
+  };
+
+  try {
+    if (!deliveryId || !token) {
+      return errorPage("Ссылка недействительна.");
+    }
+
+    const deliveryRef = db.collection("deliveries").doc(deliveryId);
+    const deliveryDoc = await deliveryRef.get();
+    if (!deliveryDoc.exists) {
+      return errorPage("Заказ не найден.");
+    }
+    const d = deliveryDoc.data()!;
+    if (!d.ratingToken || d.ratingToken !== token) {
+      return errorPage("Ссылка недействительна или устарела.");
+    }
+    if (d.rating != null) {
+      return errorPage("Спасибо! Вы уже оценили эту доставку.");
+    }
+
+    // No score yet — show the star selection form.
+    if (!scoreRaw) {
+      const starLinks = [1, 2, 3, 4, 5]
+        .map((n) => `<a href="?d=${encodeURIComponent(deliveryId)}&t=${encodeURIComponent(token)}&s=${n}" title="${n}">&#9733;</a>`)
+        .join("");
+      const body = `
+        <h1>Оцените доставку ZaKi</h1>
+        <p>Насколько вы довольны курьером${d.courierName ? " " + escapeHtml(d.courierName) : ""}? Выберите оценку:</p>
+        <div class="stars">${starLinks}</div>
+        <form method="GET" action="">
+          <input type="hidden" name="d" value="${escapeHtml(deliveryId)}">
+          <input type="hidden" name="t" value="${escapeHtml(token)}">
+          <input type="hidden" name="s" value="5">
+          <textarea name="c" placeholder="Комментарий (необязательно)"></textarea>
+          <button type="submit">Отправить с оценкой 5 &#9733;</button>
+        </form>`;
+      res.status(200).send(page("Оцените доставку ZaKi", body));
+      return;
+    }
+
+    const score = parseInt(scoreRaw, 10);
+    if (isNaN(score) || score < 1 || score > 5) {
+      return errorPage("Некорректная оценка.");
+    }
+
+    const courierId = d.courierId || "";
+
+    // Record the rating on the delivery and update the courier aggregate
+    // atomically so concurrent ratings don't clobber the running average.
+    await db.runTransaction(async (tx) => {
+      const freshDelivery = await tx.get(deliveryRef);
+      const fd = freshDelivery.data();
+      // Re-check inside the transaction to prevent double submissions.
+      if (!fd || fd.rating != null || fd.ratingToken !== token) {
+        return;
+      }
+
+      tx.update(deliveryRef, {
+        rating: score,
+        ratingComment: comment,
+        ratedAt: Date.now(),
+      });
+
+      if (courierId) {
+        const courierRef = db.collection("users").doc(courierId);
+        const courierDoc = await tx.get(courierRef);
+        if (courierDoc.exists) {
+          const cd = courierDoc.data()!;
+          const ratingCount = (cd.ratingCount || 0) + 1;
+          const ratingSum = (cd.ratingSum || 0) + score;
+          tx.update(courierRef, {
+            ratingCount: ratingCount,
+            ratingSum: ratingSum,
+            rating: Math.round((ratingSum / ratingCount) * 100) / 100,
+          });
+        }
+      }
+    });
+
+    const body = `
+      <div class="big">&#127881;</div>
+      <h1>Спасибо за оценку!</h1>
+      <p>Вы поставили ${score} &#9733;. Ваш отзыв помогает нам стать лучше.</p>`;
+    res.status(200).send(page("Спасибо!", body));
+    return;
+  } catch (e) {
+    console.error("rateDelivery error:", e);
+    return errorPage("Произошла ошибка. Попробуйте позже.");
+  }
 });
 
 // ============ CANCEL DELIVERY ============
@@ -881,6 +1043,10 @@ export const adminCreateMarketplaceDelivery = functions.https.onCall(async (data
     phone: string;
   }> = [];
   for (const courierDoc of courierDocs.docs) {
+    // Respect the courier's manual "on shift" switch. Couriers that explicitly
+    // turned their shift off are excluded from new order distribution and push.
+    // Missing field is treated as on-shift for backward compatibility.
+    if (courierDoc.data()?.isOnShift === false) continue;
     availableCourierIds.push(courierDoc.id);
     availableCouriersDebug.push({
       id: courierDoc.id,
@@ -1068,6 +1234,280 @@ export const acceptMarketplaceDelivery = functions.https.onCall(async (data, con
     courierPhone,
     etaMinutes,
   };
+});
+
+// ============ ADMIN: ASSIGN A FREE ORDER TO A SPECIFIC COURIER ============
+/**
+ * Dispatcher hands a PENDING marketplace order directly to a chosen courier.
+ * Moves the order to IN_PROGRESS for that courier (bypasses the balance minimum
+ * since the dispatcher is deciding), notifies the courier by push and the client
+ * by SMS.
+ */
+export const adminAssignOrderToCourier = functions.https.onCall(async (data, context) => {
+  const {adminId, deliveryId, courierId} = data as {
+    adminId: string; deliveryId: string; courierId: string;
+  };
+
+  await verifyAdmin(adminId);
+  if (!deliveryId || !courierId) {
+    throw new functions.https.HttpsError("invalid-argument", "deliveryId and courierId are required");
+  }
+
+  const deliveryRef = db.collection("deliveries").doc(deliveryId);
+
+  const result = await db.runTransaction(async (transaction) => {
+    const deliveryDoc = await transaction.get(deliveryRef);
+    if (!deliveryDoc.exists) {
+      throw new functions.https.HttpsError("not-found", "Delivery not found");
+    }
+    const deliveryData = deliveryDoc.data()!;
+    if (deliveryData.status !== "PENDING") {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "Заказ уже не свободен (не в статусе PENDING)"
+      );
+    }
+
+    const courierRef = db.collection("users").doc(courierId);
+    const courierDoc = await transaction.get(courierRef);
+    if (!courierDoc.exists) {
+      throw new functions.https.HttpsError("not-found", "Courier not found");
+    }
+    const courierData = courierDoc.data()!;
+    if (courierData.isBlocked) {
+      throw new functions.https.HttpsError("permission-denied", "Courier is blocked");
+    }
+
+    const activeDeliveries = await db.collection("deliveries")
+      .where("courierId", "==", courierId)
+      .where("status", "==", "IN_PROGRESS")
+      .get();
+    if (activeDeliveries.size >= MAX_CONCURRENT_DELIVERIES) {
+      throw new functions.https.HttpsError(
+        "already-exists",
+        "У курьера уже максимум активных заказов"
+      );
+    }
+
+    const acceptedAt = Date.now();
+    transaction.update(deliveryRef, {
+      courierId,
+      courierName: courierData.name || "",
+      courierPhone: courierData.phone || "",
+      status: "IN_PROGRESS",
+      orderKind: deliveryData.orderKind || "MARKETPLACE",
+      adminOrderStage: "ACCEPTED",
+      acceptedAt,
+      startTime: acceptedAt,
+      availableCourierIds: [courierId],
+      assignedByAdmin: true,
+      assignedByAdminId: adminId,
+    });
+
+    return {courierData, deliveryData};
+  });
+
+  await syncCourierStatus(courierId, "adminAssignOrderToCourier: order assigned by dispatcher");
+
+  await sendPushToCourier(result.courierData, {
+    title: "Вам назначен заказ",
+    body: result.deliveryData.pickup?.address
+      ? `Заказ: ${result.deliveryData.pickup.address}`
+      : "Диспетчер назначил вам заказ",
+    data: {type: "ADMIN_ASSIGNED_ORDER", deliveryId},
+  }, {withSystemNotification: true});
+
+  const courierName = result.courierData.name || "";
+  const courierPhone = result.courierData.phone || "";
+  let smsText = `Салом! Курьери ZaKi фармоиши шуморо қабул кард. ${courierName}`;
+  if (courierPhone) smsText += `, тел: ${courierPhone}`;
+  smsText += `.`;
+  await sendSms(result.deliveryData.clientPhone, smsText);
+
+  return {success: true, deliveryId, courierId, courierName};
+});
+
+// ============ ADMIN: REASSIGN AN ORDER TO ANOTHER COURIER ============
+/**
+ * Moves an order (PENDING or IN_PROGRESS) from its current courier to a new one.
+ * Useful when a courier accepted an order by mistake. The previous courier is
+ * released and notified; the new courier is assigned and notified.
+ */
+export const adminReassignOrder = functions.https.onCall(async (data, context) => {
+  const {adminId, deliveryId, newCourierId} = data as {
+    adminId: string; deliveryId: string; newCourierId: string;
+  };
+
+  await verifyAdmin(adminId);
+  if (!deliveryId || !newCourierId) {
+    throw new functions.https.HttpsError("invalid-argument", "deliveryId and newCourierId are required");
+  }
+
+  const deliveryRef = db.collection("deliveries").doc(deliveryId);
+
+  const result = await db.runTransaction(async (transaction) => {
+    const deliveryDoc = await transaction.get(deliveryRef);
+    if (!deliveryDoc.exists) {
+      throw new functions.https.HttpsError("not-found", "Delivery not found");
+    }
+    const deliveryData = deliveryDoc.data()!;
+    if (deliveryData.status !== "PENDING" && deliveryData.status !== "IN_PROGRESS") {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "Переназначить можно только активный или свободный заказ"
+      );
+    }
+
+    const previousCourierId = deliveryData.courierId || "";
+    if (previousCourierId === newCourierId) {
+      throw new functions.https.HttpsError("already-exists", "Заказ уже у этого курьера");
+    }
+
+    const courierRef = db.collection("users").doc(newCourierId);
+    const courierDoc = await transaction.get(courierRef);
+    if (!courierDoc.exists) {
+      throw new functions.https.HttpsError("not-found", "Courier not found");
+    }
+    const courierData = courierDoc.data()!;
+    if (courierData.isBlocked) {
+      throw new functions.https.HttpsError("permission-denied", "Courier is blocked");
+    }
+
+    const activeDeliveries = await db.collection("deliveries")
+      .where("courierId", "==", newCourierId)
+      .where("status", "==", "IN_PROGRESS")
+      .get();
+    // Count excludes this delivery in case it's already assigned to the target.
+    const activeCount = activeDeliveries.docs.filter(d => d.id !== deliveryId).length;
+    if (activeCount >= MAX_CONCURRENT_DELIVERIES) {
+      throw new functions.https.HttpsError("already-exists", "У курьера уже максимум активных заказов");
+    }
+
+    const now = Date.now();
+    transaction.update(deliveryRef, {
+      courierId: newCourierId,
+      courierName: courierData.name || "",
+      courierPhone: courierData.phone || "",
+      status: "IN_PROGRESS",
+      adminOrderStage: "ACCEPTED",
+      acceptedAt: now,
+      startTime: deliveryData.startTime || now,
+      availableCourierIds: [newCourierId],
+      reassignedByAdmin: true,
+      reassignedByAdminId: adminId,
+      previousCourierId,
+    });
+
+    return {courierData, deliveryData, previousCourierId};
+  });
+
+  // Sync both couriers' online status.
+  if (result.previousCourierId) {
+    await syncCourierStatus(result.previousCourierId, "adminReassignOrder: order removed from previous courier");
+    const prevDoc = await db.collection("users").doc(result.previousCourierId).get();
+    if (prevDoc.exists) {
+      await sendPushToCourier(prevDoc.data()!, {
+        title: "Заказ снят",
+        body: "Диспетчер переназначил ваш заказ другому курьеру",
+        data: {type: "ORDER_REASSIGNED_AWAY", deliveryId},
+      }, {withSystemNotification: true});
+    }
+  }
+  await syncCourierStatus(newCourierId, "adminReassignOrder: order assigned to new courier");
+  await sendPushToCourier(result.courierData, {
+    title: "Вам назначен заказ",
+    body: result.deliveryData.pickup?.address
+      ? `Заказ: ${result.deliveryData.pickup.address}`
+      : "Диспетчер назначил вам заказ",
+    data: {type: "ADMIN_ASSIGNED_ORDER", deliveryId},
+  }, {withSystemNotification: true});
+
+  return {success: true, deliveryId, newCourierId};
+});
+
+// ============ ADMIN: RELEASE AN ORDER BACK TO THE MARKETPLACE ============
+/**
+ * Resets an order back to a free (PENDING marketplace) state so any eligible
+ * courier can pick it up again. Detaches the current courier and re-notifies all
+ * on-shift couriers.
+ */
+export const adminReleaseOrderToMarketplace = functions.https.onCall(async (data, context) => {
+  const {adminId, deliveryId} = data as {adminId: string; deliveryId: string};
+
+  await verifyAdmin(adminId);
+  if (!deliveryId) {
+    throw new functions.https.HttpsError("invalid-argument", "deliveryId is required");
+  }
+
+  const deliveryRef = db.collection("deliveries").doc(deliveryId);
+  const deliveryDoc = await deliveryRef.get();
+  if (!deliveryDoc.exists) {
+    throw new functions.https.HttpsError("not-found", "Delivery not found");
+  }
+  const deliveryData = deliveryDoc.data()!;
+  if (deliveryData.status === "COMPLETED" || deliveryData.status === "CANCELLED") {
+    throw new functions.https.HttpsError(
+      "failed-precondition",
+      "Завершённый или отменённый заказ нельзя вернуть в свободные"
+    );
+  }
+
+  const previousCourierId = deliveryData.courierId || "";
+
+  // Rebuild the pool of eligible (non-blocked, on-shift) couriers.
+  const courierDocs = await db.collection("users")
+    .where("role", "==", "COURIER")
+    .where("isBlocked", "==", false)
+    .get();
+  const availableCourierIds: string[] = [];
+  for (const courierDoc of courierDocs.docs) {
+    if (courierDoc.data()?.isOnShift === false) continue;
+    availableCourierIds.push(courierDoc.id);
+  }
+
+  await deliveryRef.update({
+    courierId: "",
+    courierName: "",
+    courierPhone: "",
+    status: "PENDING",
+    orderKind: "MARKETPLACE",
+    adminOrderStage: "NEW",
+    acceptedAt: null,
+    startTime: null,
+    availableCourierIds,
+    releasedByAdmin: true,
+    releasedByAdminId: adminId,
+    releasedAt: Date.now(),
+  });
+
+  // The previously-assigned courier is now free again.
+  if (previousCourierId) {
+    await syncCourierStatus(previousCourierId, "adminReleaseOrderToMarketplace: order released back to marketplace");
+    const prevDoc = await db.collection("users").doc(previousCourierId).get();
+    if (prevDoc.exists) {
+      await sendPushToCourier(prevDoc.data()!, {
+        title: "Заказ снят",
+        body: "Диспетчер вернул заказ в свободные",
+        data: {type: "ORDER_RELEASED", deliveryId},
+      }, {withSystemNotification: true});
+    }
+  }
+
+  // Re-notify all eligible couriers that a free order is available.
+  for (const courierId of availableCourierIds) {
+    if (courierId === previousCourierId) continue;
+    const courierDoc = await db.collection("users").doc(courierId).get();
+    if (!courierDoc.exists) continue;
+    await sendPushToCourier(courierDoc.data()!, {
+      title: "Новый заказ",
+      body: deliveryData.pickup?.address
+        ? `Заказ: ${deliveryData.pickup.address}`
+        : "Доступен новый заказ",
+      data: {type: "ADMIN_MARKETPLACE_ORDER", deliveryId},
+    });
+  }
+
+  return {success: true, deliveryId, availableCouriers: availableCourierIds.length};
 });
 
 export const updateMarketplaceDeliveryStage = functions.https.onCall(async (data, context) => {

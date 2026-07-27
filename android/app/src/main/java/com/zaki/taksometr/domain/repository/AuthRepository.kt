@@ -12,4 +12,6 @@ interface AuthRepository {
     suspend fun updateFcmToken(token: String)
     /** Saves the courier's profile photo (compressed base64 JPEG) to their user document. */
     suspend fun updateProfilePhoto(photoBase64: String): Resource<Unit>
+    /** Sets the courier's manual "on shift" flag on their user document. */
+    suspend fun setOnShift(isOnShift: Boolean): Resource<Unit>
 }

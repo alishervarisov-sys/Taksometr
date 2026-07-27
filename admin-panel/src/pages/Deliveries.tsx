@@ -65,6 +65,13 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
   const [isCreatingOrder, setIsCreatingOrder] = useState(false);
   const [changingStatusId, setChangingStatusId] = useState<string | null>(null);
   const [changingStageId, setChangingStageId] = useState<string | null>(null);
+  // Manual assignment / reassignment of an order to a specific courier.
+  const [assignOpen, setAssignOpen] = useState(false);
+  const [assignMode, setAssignMode] = useState<'assign' | 'reassign'>('assign');
+  const [assignTarget, setAssignTarget] = useState<Delivery | null>(null);
+  const [assignCourierId, setAssignCourierId] = useState('');
+  const [assignBusy, setAssignBusy] = useState(false);
+  const [releasingId, setReleasingId] = useState<string | null>(null);
   const [mapPickerMode, setMapPickerMode] = useState<'pickup' | 'destination' | null>(null);
   const [mapCenter, setMapCenter] = useState<{ lat: number; lng: number }>(() => {
     try {
@@ -234,6 +241,56 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
       alert('Ошибка изменения этапа: ' + (error.message || 'Неизвестная ошибка'));
     } finally {
       setChangingStageId(null);
+    }
+  };
+
+  // Open the assign/reassign dialog for a delivery.
+  const openAssignDialog = (delivery: Delivery, mode: 'assign' | 'reassign') => {
+    setAssignTarget(delivery);
+    setAssignMode(mode);
+    setAssignCourierId(mode === 'reassign' ? '' : (delivery.courierId || ''));
+    setAssignOpen(true);
+  };
+
+  // Assign a free order to a courier, or move an order to another courier.
+  const handleAssignSubmit = async () => {
+    if (!assignTarget || !assignCourierId) {
+      alert('Выберите курьера');
+      return;
+    }
+    try {
+      setAssignBusy(true);
+      if (assignMode === 'assign') {
+        const fn = httpsCallable(functions, 'adminAssignOrderToCourier');
+        await fn({ adminId, deliveryId: assignTarget.id, courierId: assignCourierId });
+      } else {
+        const fn = httpsCallable(functions, 'adminReassignOrder');
+        await fn({ adminId, deliveryId: assignTarget.id, newCourierId: assignCourierId });
+      }
+      setAssignOpen(false);
+      setAssignTarget(null);
+      setAssignCourierId('');
+      // onSnapshot refreshes the list automatically.
+    } catch (error: any) {
+      alert('Ошибка назначения: ' + (error.message || 'Неизвестная ошибка'));
+    } finally {
+      setAssignBusy(false);
+    }
+  };
+
+  // Return an order to the free (marketplace) pool so any courier can take it.
+  const handleReleaseToMarketplace = async (delivery: Delivery) => {
+    if (!window.confirm(
+      `Вернуть заказ в свободные?\n\nЗаказ будет снят с курьера ${delivery.courierName || '—'} и станет доступен всем курьерам.`
+    )) return;
+    try {
+      setReleasingId(delivery.id);
+      const fn = httpsCallable(functions, 'adminReleaseOrderToMarketplace');
+      await fn({ adminId, deliveryId: delivery.id });
+    } catch (error: any) {
+      alert('Ошибка возврата заказа: ' + (error.message || 'Неизвестная ошибка'));
+    } finally {
+      setReleasingId(null);
     }
   };
 
@@ -460,6 +517,12 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
                       {delivery.status === 'CANCELLED' && (
                         <Button size="small" color="success" variant="contained" disabled={changingStatusId === delivery.id} onClick={(e) => { e.stopPropagation(); handleChangeStatus(delivery, 'COMPLETED'); }}>Завершить</Button>
                       )}
+                      {delivery.status === 'PENDING' && (
+                        <Button size="small" color="primary" variant="contained" onClick={(e) => { e.stopPropagation(); openAssignDialog(delivery, 'assign'); }}>Назначить</Button>
+                      )}
+                      {delivery.status === 'IN_PROGRESS' && (
+                        <Button size="small" color="primary" variant="outlined" onClick={(e) => { e.stopPropagation(); openAssignDialog(delivery, 'reassign'); }}>Переназначить</Button>
+                      )}
                       {(delivery.status === 'IN_PROGRESS' || delivery.status === 'PENDING') && (
                         <>
                           <Button size="small" color="success" variant="contained" disabled={changingStatusId === delivery.id} onClick={(e) => { e.stopPropagation(); handleChangeStatus(delivery, 'COMPLETED'); }}>Завершить</Button>
@@ -474,6 +537,40 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
           </Table>
         </TableContainer>
       </Card>
+
+      <Dialog open={assignOpen} onClose={() => setAssignOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>{assignMode === 'assign' ? 'Назначить заказ курьеру' : 'Переназначить заказ'}</DialogTitle>
+        <DialogContent>
+          {assignTarget && (
+            <Box sx={{ mb: 2, mt: 0.5 }}>
+              <Typography variant="body2" color="text.secondary">Клиент: {assignTarget.clientPhone || '—'}</Typography>
+              {assignTarget.pickup?.address && (
+                <Typography variant="body2" color="text.secondary">Откуда: {assignTarget.pickup.address}</Typography>
+              )}
+              {assignMode === 'reassign' && (
+                <Typography variant="body2" color="text.secondary">Сейчас у: {assignTarget.courierName || '—'}</Typography>
+              )}
+            </Box>
+          )}
+          <TextField
+            select
+            fullWidth
+            label="Курьер"
+            value={assignCourierId}
+            onChange={(e) => setAssignCourierId(e.target.value)}
+          >
+            {couriers.map(c => (
+              <MenuItem key={c.id} value={c.id}>{c.name}</MenuItem>
+            ))}
+          </TextField>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setAssignOpen(false)}>Отмена</Button>
+          <Button variant="contained" onClick={handleAssignSubmit} disabled={assignBusy || !assignCourierId}>
+            {assignBusy ? 'Назначение...' : (assignMode === 'assign' ? 'Назначить' : 'Переназначить')}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <Dialog open={createOpen} onClose={() => setCreateOpen(false)} maxWidth="md" fullWidth>
         <DialogTitle>Создать заказ</DialogTitle>
@@ -591,6 +688,15 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
             <>
               <Button color="success" variant="contained" disabled={changingStatusId === selectedDelivery.id} onClick={() => handleChangeStatus(selectedDelivery, 'COMPLETED')}>Завершить</Button>
               <Button color="error" variant="outlined" disabled={changingStatusId === selectedDelivery.id} onClick={() => handleChangeStatus(selectedDelivery, 'CANCELLED')}>Отменить</Button>
+            </>
+          )}
+          {selectedDelivery && selectedDelivery.status === 'PENDING' && (
+            <Button color="primary" variant="contained" onClick={() => openAssignDialog(selectedDelivery, 'assign')}>Назначить курьеру</Button>
+          )}
+          {selectedDelivery && selectedDelivery.status === 'IN_PROGRESS' && (
+            <>
+              <Button color="primary" variant="outlined" onClick={() => openAssignDialog(selectedDelivery, 'reassign')}>Переназначить</Button>
+              <Button color="warning" variant="outlined" disabled={releasingId === selectedDelivery.id} onClick={() => handleReleaseToMarketplace(selectedDelivery)}>Вернуть в свободные</Button>
             </>
           )}
           <Button onClick={() => setDetailOpen(false)}>Закрыть</Button>
