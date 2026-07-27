@@ -1004,7 +1004,17 @@ export const adminCreateMarketplaceDelivery = functions.https.onCall(async (data
     comment,
     pickup,
     destination,
-  } = data;
+    courierId,
+  } = data as {
+    adminId: string;
+    clientPhone: string;
+    comment?: string;
+    pickup: {address?: string; latitude: number; longitude: number};
+    destination?: {address?: string; latitude: number; longitude: number} | null;
+    // Optional: when provided, the order is created already assigned to this
+    // courier (IN_PROGRESS) instead of being offered to the whole marketplace.
+    courierId?: string | null;
+  };
 
   await verifyAdmin(adminId);
 
@@ -1030,6 +1040,99 @@ export const adminCreateMarketplaceDelivery = functions.https.onCall(async (data
     destination &&
     typeof destination.latitude === "number" &&
     typeof destination.longitude === "number";
+
+  // ---- Direct assignment path: create the order already tied to one courier.
+  if (courierId) {
+    const courierDoc = await db.collection("users").doc(courierId).get();
+    if (!courierDoc.exists) {
+      throw new functions.https.HttpsError("not-found", "Courier not found");
+    }
+    const courierData = courierDoc.data()!;
+    if (courierData.role !== "COURIER") {
+      throw new functions.https.HttpsError(
+        "invalid-argument",
+        "Selected user is not a courier"
+      );
+    }
+    if (courierData.isBlocked) {
+      throw new functions.https.HttpsError("permission-denied", "Courier is blocked");
+    }
+
+    const activeDeliveries = await db.collection("deliveries")
+      .where("courierId", "==", courierId)
+      .where("status", "==", "IN_PROGRESS")
+      .get();
+    if (activeDeliveries.size >= MAX_CONCURRENT_DELIVERIES) {
+      throw new functions.https.HttpsError(
+        "already-exists",
+        "У курьера уже максимум активных заказов"
+      );
+    }
+
+    const tariff = await getDefaultTariffSnapshot();
+    const deliveryRef = db.collection("deliveries").doc();
+    const now = Date.now();
+
+    await deliveryRef.set({
+      courierId,
+      courierName: courierData.name || "",
+      courierPhone: courierData.phone || "",
+      clientPhone: clientPhone,
+      status: "IN_PROGRESS",
+      adminOrderStage: "ACCEPTED",
+      orderSource: "ADMIN_PANEL",
+      orderKind: "MARKETPLACE",
+      startTime: now,
+      acceptedAt: now,
+      endTime: null,
+      distanceMeters: 0,
+      cost: 0,
+      route: [],
+      deliveryType: "admin_marketplace",
+      fixedPrice: null,
+      createdAt: now,
+      adminCreatedAt: now,
+      adminId: adminId,
+      comment: comment || "",
+      pickup,
+      destination: hasDestination ? destination : null,
+      availableCourierIds: [courierId],
+      assignedByAdmin: true,
+      assignedByAdminId: adminId,
+      waitingMinutes: 0,
+      waitingCost: 0,
+      waitingStartedAt: null,
+      tariffSnapshot: tariff,
+    });
+
+    await syncCourierStatus(
+      courierId,
+      "adminCreateMarketplaceDelivery: order created and assigned by dispatcher"
+    );
+
+    await sendPushToCourier(courierData, {
+      title: "Вам назначен заказ",
+      body: pickup.address
+        ? `Заказ: ${pickup.address}`
+        : "Диспетчер назначил вам заказ",
+      data: {type: "ADMIN_ASSIGNED_ORDER", deliveryId: deliveryRef.id},
+    }, {withSystemNotification: true});
+
+    const courierName = courierData.name || "";
+    const courierPhone = courierData.phone || "";
+    let smsText = `Салом! Курьери ZaKi фармоиши шуморо қабул кард. ${courierName}`;
+    if (courierPhone) smsText += `, тел: ${courierPhone}`;
+    smsText += `.`;
+    await sendSms(clientPhone, smsText);
+
+    return {
+      success: true,
+      deliveryId: deliveryRef.id,
+      assignedCourierId: courierId,
+      assignedCourierName: courierName,
+      availableCouriers: 1,
+    };
+  }
 
   const courierDocs = await db.collection("users")
     .where("role", "==", "COURIER")

@@ -83,6 +83,7 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
   const [createForm, setCreateForm] = useState({
     clientPhone: '',
     comment: '',
+    courierId: '',
     pickupAddress: '',
     pickupLat: '',
     pickupLng: '',
@@ -358,6 +359,8 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
         adminId,
         clientPhone: createForm.clientPhone,
         comment: createForm.comment,
+        // Optional: assign the order directly to a chosen courier. Empty => free order.
+        courierId: createForm.courierId || null,
         pickup: {
           address: createForm.pickupAddress,
           latitude: Number(createForm.pickupLat),
@@ -369,9 +372,13 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
           longitude: Number(createForm.destinationLng),
         } : null,
       });
-      alert(`✅ Заказ создан. Доступно курьеров: ${result?.data?.availableCouriers ?? 0}`);
+      if (result?.data?.assignedCourierId) {
+        alert(`✅ Заказ создан и назначен курьеру: ${result.data.assignedCourierName || ''}`);
+      } else {
+        alert(`✅ Заказ создан. Доступно курьеров: ${result?.data?.availableCouriers ?? 0}`);
+      }
       setCreateOpen(false);
-      setCreateForm({ clientPhone: '', comment: '', pickupAddress: '', pickupLat: '', pickupLng: '', destinationAddress: '', destinationLat: '', destinationLng: '' });
+      setCreateForm({ clientPhone: '', comment: '', courierId: '', pickupAddress: '', pickupLat: '', pickupLng: '', destinationAddress: '', destinationLat: '', destinationLng: '' });
       loadDeliveries();
     } catch (error: any) {
       alert('Ошибка создания заказа: ' + (error.message || 'Неизвестная ошибка'));
@@ -578,6 +585,21 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
           <Grid container spacing={2} sx={{ mt: 0.5 }}>
             <Grid item xs={12} md={6}><TextField fullWidth label="Телефон клиента" value={createForm.clientPhone} onChange={(e) => setCreateForm(prev => ({ ...prev, clientPhone: e.target.value }))} /></Grid>
             <Grid item xs={12} md={6}><TextField fullWidth label="Комментарий" value={createForm.comment} onChange={(e) => setCreateForm(prev => ({ ...prev, comment: e.target.value }))} /></Grid>
+            <Grid item xs={12}>
+              <TextField
+                select
+                fullWidth
+                label="Курьер (необязательно)"
+                value={createForm.courierId}
+                onChange={(e) => setCreateForm(prev => ({ ...prev, courierId: e.target.value }))}
+                helperText={createForm.courierId ? 'Заказ будет сразу назначен выбранному курьеру' : 'Не выбрано — заказ увидят все курьеры'}
+              >
+                <MenuItem value="">Не назначать (свободный заказ)</MenuItem>
+                {couriers.map(c => (
+                  <MenuItem key={c.id} value={c.id}>{c.name || c.id}</MenuItem>
+                ))}
+              </TextField>
+            </Grid>
             <Grid item xs={12}>
               {isLoaded && (
                 <Box sx={{ height: 300, borderRadius: 2, overflow: 'hidden', border: '1px solid #ddd' }}>
