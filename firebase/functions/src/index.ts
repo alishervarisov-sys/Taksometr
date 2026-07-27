@@ -1005,6 +1005,7 @@ export const adminCreateMarketplaceDelivery = functions.https.onCall(async (data
     pickup,
     destination,
     courierId,
+    deliveryType,
   } = data as {
     adminId: string;
     clientPhone: string;
@@ -1014,6 +1015,10 @@ export const adminCreateMarketplaceDelivery = functions.https.onCall(async (data
     // Optional: when provided, the order is created already assigned to this
     // courier (IN_PROGRESS) instead of being offered to the whole marketplace.
     courierId?: string | null;
+    // Optional: the same delivery type a courier picks when starting the meter
+    // ("default", "heavyCargoMeter", "coal", "gas15", "gas30", "gas30plus",
+    // "errands", "heavyCargo"). Empty/omitted => "default" (metered).
+    deliveryType?: string | null;
   };
 
   await verifyAdmin(adminId);
@@ -1040,6 +1045,40 @@ export const adminCreateMarketplaceDelivery = functions.https.onCall(async (data
     destination &&
     typeof destination.latitude === "number" &&
     typeof destination.longitude === "number";
+
+  // ---- Resolve delivery type + fixed price the SAME way createDelivery does,
+  // so an admin-created order behaves exactly like a courier-started one.
+  // "default"        -> metered by the normal tariff (no fixed price)
+  // "heavyCargoMeter"-> metered by the heavy-cargo tariff (no fixed price)
+  // fixed types      -> fixedPrice pulled from tariffs/default.fixedTypes
+  let resolvedDeliveryType = deliveryType || "default";
+  let fixedPrice: number | null = null;
+  let deliveryTypeName = "";
+  if (deliveryType && deliveryType !== "default") {
+    if (deliveryType === "heavyCargoMeter") {
+      resolvedDeliveryType = "heavyCargoMeter";
+      deliveryTypeName = "Бори вазнин (аз рӯи ҳисобгар)";
+    } else {
+      const tariffDoc = await db.collection("tariffs").doc("default").get();
+      const fixedTypes = tariffDoc.exists ? (tariffDoc.data()!.fixedTypes || {}) : {};
+      if (fixedTypes[deliveryType] !== undefined && fixedTypes[deliveryType] > 0) {
+        fixedPrice = fixedTypes[deliveryType];
+        resolvedDeliveryType = deliveryType;
+        const typeNames: {[key: string]: string} = {
+          coal: "Ангишт",
+          gas15: "Газ то 15 литр",
+          gas30: "Газ то 30 литр",
+          gas30plus: "Газ зиёда аз 30 литр",
+          errands: "Гуногун супоришҳо",
+          heavyCargo: "Бори вазнин",
+        };
+        deliveryTypeName = typeNames[deliveryType] || deliveryType;
+      } else {
+        // Unknown type or price not configured -> fall back to metered default.
+        resolvedDeliveryType = "default";
+      }
+    }
+  }
 
   // ---- Direct assignment path: create the order already tied to one courier.
   if (courierId) {
@@ -1088,8 +1127,8 @@ export const adminCreateMarketplaceDelivery = functions.https.onCall(async (data
       distanceMeters: 0,
       cost: 0,
       route: [],
-      deliveryType: "admin_marketplace",
-      fixedPrice: null,
+      deliveryType: resolvedDeliveryType,
+      fixedPrice: fixedPrice,
       createdAt: now,
       adminCreatedAt: now,
       adminId: adminId,
@@ -1123,6 +1162,11 @@ export const adminCreateMarketplaceDelivery = functions.https.onCall(async (data
     let smsText = `Салом! Курьери ZaKi фармоиши шуморо қабул кард. ${courierName}`;
     if (courierPhone) smsText += `, тел: ${courierPhone}`;
     smsText += `.`;
+    if (fixedPrice !== null && fixedPrice > 0) {
+      smsText += ` Навъи хидмат: ${deliveryTypeName}. Нархи қатъӣ: ${formatCostForSms(fixedPrice)} сомонӣ.`;
+    } else if (resolvedDeliveryType === "heavyCargoMeter") {
+      smsText += ` Навъи хидмат: ${deliveryTypeName}. Пардохт аз рӯи ҳисобгар.`;
+    }
     await sendSms(clientPhone, smsText);
 
     return {
@@ -1130,6 +1174,8 @@ export const adminCreateMarketplaceDelivery = functions.https.onCall(async (data
       deliveryId: deliveryRef.id,
       assignedCourierId: courierId,
       assignedCourierName: courierName,
+      deliveryType: resolvedDeliveryType,
+      fixedPrice: fixedPrice,
       availableCouriers: 1,
     };
   }
@@ -1176,8 +1222,8 @@ export const adminCreateMarketplaceDelivery = functions.https.onCall(async (data
     distanceMeters: 0,
     cost: 0,
     route: [],
-    deliveryType: "admin_marketplace",
-    fixedPrice: null,
+    deliveryType: resolvedDeliveryType,
+    fixedPrice: fixedPrice,
     createdAt: now,
     adminCreatedAt: now,
     adminId: adminId,
@@ -1212,6 +1258,8 @@ export const adminCreateMarketplaceDelivery = functions.https.onCall(async (data
   return {
     success: true,
     deliveryId: deliveryRef.id,
+    deliveryType: resolvedDeliveryType,
+    fixedPrice: fixedPrice,
     availableCouriers: availableCourierIds.length,
     availableCourierIds,
     availableCouriersDebug,

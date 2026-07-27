@@ -80,10 +80,14 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
     } catch {}
     return { lat: 38.5598, lng: 68.7740 }; // Dushanbe fallback
   });
+  // Fixed-price delivery types configured in tariffs/default.fixedTypes.
+  // Mirrors exactly what a courier sees when starting the meter.
+  const [fixedTypes, setFixedTypes] = useState<Record<string, number>>({});
   const [createForm, setCreateForm] = useState({
     clientPhone: '',
     comment: '',
     courierId: '',
+    deliveryType: 'default',
     pickupAddress: '',
     pickupLat: '',
     pickupLng: '',
@@ -91,6 +95,33 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
     destinationLat: '',
     destinationLng: '',
   });
+
+  // Delivery type options, built the same way as the courier app: two metered
+  // options always available, plus each fixed type whose price is configured (> 0).
+  const formatSomoni = (v: number) => {
+    const s = Math.floor(v); const d = Math.round((v - s) * 100);
+    return d > 0 ? `${s}.${String(d).padStart(2, '0')} сомони` : `${s} сомони`;
+  };
+  const FIXED_TYPE_LABELS: Record<string, string> = {
+    coal: 'Уголь',
+    gas15: 'Газ до 15л',
+    gas30: 'Газ до 30л',
+    gas30plus: 'Газ более 30л',
+    errands: 'Различные поручения',
+    heavyCargo: 'Тяжелые грузы',
+  };
+  const FIXED_TYPE_ORDER = ['coal', 'gas15', 'gas30', 'gas30plus', 'errands', 'heavyCargo'];
+  const deliveryTypeOptions: Array<{ value: string; label: string; hint: string }> = [
+    { value: 'default', label: 'По счётчику (обычная)', hint: 'Оплата по километражу' },
+    { value: 'heavyCargoMeter', label: 'Тяжёлые грузы (по счётчику)', hint: 'Оплата по километражу (тариф тяжёлых грузов)' },
+    ...FIXED_TYPE_ORDER
+      .filter((key) => (fixedTypes[key] ?? 0) > 0)
+      .map((key) => ({
+        value: key,
+        label: FIXED_TYPE_LABELS[key] || key,
+        hint: `Фиксированная цена: ${formatSomoni(fixedTypes[key])}`,
+      })),
+  ];
 
   const { isLoaded } = useJsApiLoader({
     id: 'google-map-script',
@@ -106,6 +137,7 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
       setDeliveries(data);
     });
     loadCouriers();
+    loadFixedTypes();
     return () => unsubscribe();
   }, []);
 
@@ -123,6 +155,18 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
     const snapshot = await getDocs(q);
     const data = snapshot.docs.map(d => ({ id: d.id, name: d.data().name || '' }));
     setCouriers(data);
+  };
+
+  // Load the configured fixed-price delivery types (tariffs/default.fixedTypes),
+  // the same source the courier app reads for its delivery-type picker.
+  const loadFixedTypes = async () => {
+    try {
+      const snap = await getDoc(doc(db, 'tariffs', 'default'));
+      const data = snap.exists() ? (snap.data().fixedTypes || {}) : {};
+      setFixedTypes(data as Record<string, number>);
+    } catch {
+      setFixedTypes({});
+    }
   };
 
   const loadDeliveries = async () => {
@@ -361,6 +405,8 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
         comment: createForm.comment,
         // Optional: assign the order directly to a chosen courier. Empty => free order.
         courierId: createForm.courierId || null,
+        // Delivery type the courier would pick when starting the meter.
+        deliveryType: createForm.deliveryType || 'default',
         pickup: {
           address: createForm.pickupAddress,
           latitude: Number(createForm.pickupLat),
@@ -378,7 +424,7 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
         alert(`✅ Заказ создан. Доступно курьеров: ${result?.data?.availableCouriers ?? 0}`);
       }
       setCreateOpen(false);
-      setCreateForm({ clientPhone: '', comment: '', courierId: '', pickupAddress: '', pickupLat: '', pickupLng: '', destinationAddress: '', destinationLat: '', destinationLng: '' });
+      setCreateForm({ clientPhone: '', comment: '', courierId: '', deliveryType: 'default', pickupAddress: '', pickupLat: '', pickupLng: '', destinationAddress: '', destinationLat: '', destinationLng: '' });
       loadDeliveries();
     } catch (error: any) {
       alert('Ошибка создания заказа: ' + (error.message || 'Неизвестная ошибка'));
@@ -597,6 +643,25 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
                 <MenuItem value="">Не назначать (свободный заказ)</MenuItem>
                 {couriers.map(c => (
                   <MenuItem key={c.id} value={c.id}>{c.name || c.id}</MenuItem>
+                ))}
+              </TextField>
+            </Grid>
+            <Grid item xs={12}>
+              <TextField
+                select
+                fullWidth
+                label="Тип доставки"
+                value={createForm.deliveryType}
+                onChange={(e) => setCreateForm(prev => ({ ...prev, deliveryType: e.target.value }))}
+                helperText="Тот же тип, что курьер выбирает при включении счётчика"
+              >
+                {deliveryTypeOptions.map(opt => (
+                  <MenuItem key={opt.value} value={opt.value}>
+                    <Box>
+                      <Typography component="span" sx={{ fontWeight: 600 }}>{opt.label}</Typography>
+                      <Typography component="span" variant="body2" color="text.secondary" sx={{ ml: 1 }}>— {opt.hint}</Typography>
+                    </Box>
+                  </MenuItem>
                 ))}
               </TextField>
             </Grid>
