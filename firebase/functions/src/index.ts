@@ -3700,13 +3700,24 @@ export const receiveMarketplaceOrderFromMotorol = functions.https.onRequest(asyn
     const deliveryRef = db.collection("deliveries").doc();
     const now = Date.now();
 
-    // Build a human-readable comment that ALWAYS shows the restaurant + items,
-    // so even courier app builds that don't yet render the new structured
-    // fields still display everything in the existing comment block.
-    const itemsText = items.map((it) => `• ${it.name} ×${it.quantity}`).join("\n");
+    // Build a human-readable comment that ALWAYS shows the restaurant, the
+    // dishes with their prices and the order total, so even courier app builds
+    // that don't render the new structured fields still see everything in the
+    // existing comment block.
+    const fmt = (n: number): string => {
+      const v = Number(n) || 0;
+      return Number.isInteger(v) ? String(v) : v.toFixed(2);
+    };
+    const itemsText = items.map((it) => {
+      const lineTotal = (Number(it.price) || 0) * (Number(it.quantity) || 1);
+      return `• ${it.name} ×${it.quantity} — ${fmt(lineTotal)} с.`;
+    }).join("\n");
     const commentParts: string[] = [];
     if (restaurantName) commentParts.push(`🍽 Ресторан: ${restaurantName}`);
     if (itemsText) commentParts.push(`Блюда:\n${itemsText}`);
+    commentParts.push(`Товары: ${fmt(productsPrice)} с.`);
+    commentParts.push(`Доставка: ${fmt(deliveryFee)} с.`);
+    commentParts.push(`Итого: ${fmt(totalPrice)} с.`);
     if (body.comment) commentParts.push(String(body.comment));
     const comment = commentParts.join("\n");
 
