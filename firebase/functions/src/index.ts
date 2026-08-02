@@ -3575,3 +3575,278 @@ export const announceWinner = functions.https.onCall(async (data, context) => {
     othersNotified,
   };
 });
+
+// ============================================================
+// MOTOROL_TJ FOOD ORDER INTEGRATION (ADDITIVE)
+// ------------------------------------------------------------
+// Inbound: motorol_tj publishes an APPROVED food order here; we create a
+// PENDING MARKETPLACE delivery so any eligible courier can accept it exactly
+// like a normal Taksometr order. Outbound: when that delivery is accepted or
+// completed, we sync the status back to motorol_tj so the client and admin see
+// it in real time. NONE of the existing delivery functions are modified.
+// ============================================================
+
+interface MotorolOrderItem {
+  name: string;
+  quantity: number;
+  price: number;
+}
+
+/**
+ * HTTP endpoint called by motorol_tj when an admin approves a food order.
+ * Auth: header `x-api-key` must equal env MOTOROL_ORDER_API_KEY.
+ *
+ * Expected JSON body:
+ * {
+ *   orderId: string,          // motorol_tj order id (sync key, idempotency)
+ *   orderNumber?: string,
+ *   clientPhone?: string,
+ *   restaurantName?: string,
+ *   restaurantAddress?: string,
+ *   pickup: { address?: string, latitude: number, longitude: number },   // restaurant
+ *   destination?: { address?: string, latitude: number, longitude: number }, // client
+ *   items?: Array<{ name: string, quantity: number, price: number }>,
+ *   productsPrice?: number,
+ *   deliveryFee?: number,     // fixed courier payment (no meter)
+ *   totalPrice?: number,
+ *   comment?: string
+ * }
+ */
+export const receiveMarketplaceOrderFromMotorol = functions.https.onRequest(async (req, res) => {
+  if (req.method !== "POST") {
+    res.status(405).json({error: "Method not allowed. Use POST."});
+    return;
+  }
+
+  const apiKey = process.env.MOTOROL_ORDER_API_KEY || "";
+  if (apiKey) {
+    const incoming = req.headers["x-api-key"] || "";
+    if (incoming !== apiKey) {
+      console.warn("receiveMarketplaceOrderFromMotorol: unauthorized request");
+      res.status(401).json({error: "Unauthorized"});
+      return;
+    }
+  } else {
+    console.warn("receiveMarketplaceOrderFromMotorol: MOTOROL_ORDER_API_KEY not set — accepting without auth!");
+  }
+
+  try {
+    const body = req.body || {};
+    const orderId = String(body.orderId || "");
+    const clientPhone = String(body.clientPhone || "");
+    const pickup = body.pickup || {};
+
+    if (!orderId) {
+      res.status(400).json({error: "orderId is required"});
+      return;
+    }
+    if (typeof pickup.latitude !== "number" || typeof pickup.longitude !== "number") {
+      res.status(400).json({error: "pickup coordinates (latitude/longitude) are required"});
+      return;
+    }
+
+    // Idempotency: never create the same motorol order twice.
+    const existing = await db.collection("deliveries")
+      .where("motorolOrderId", "==", orderId)
+      .limit(1)
+      .get();
+    if (!existing.empty) {
+      const existingId = existing.docs[0].id;
+      console.log(`receiveMarketplaceOrderFromMotorol: duplicate skipped orderId=${orderId} docId=${existingId}`);
+      res.status(200).json({success: true, deliveryId: existingId, duplicate: true});
+      return;
+    }
+
+    const hasDestination =
+      body.destination &&
+      typeof body.destination.latitude === "number" &&
+      typeof body.destination.longitude === "number";
+
+    const items: MotorolOrderItem[] = Array.isArray(body.items) ?
+      body.items.map((it: any) => ({
+        name: String(it.name || it.product_name || "Позиция"),
+        quantity: Number(it.quantity || 1),
+        price: Number(it.price || 0),
+      })) : [];
+
+    const deliveryFee = Number(body.deliveryFee || 0);
+    const productsPrice = Number(body.productsPrice || 0);
+    const totalPrice = Number(
+      body.totalPrice != null ? body.totalPrice : (productsPrice + deliveryFee)
+    );
+    const restaurantName = String(
+      body.restaurantName || (body.restaurant && body.restaurant.name) || ""
+    );
+    const restaurantAddress = String(
+      body.restaurantAddress ||
+      (body.restaurant && body.restaurant.address) ||
+      pickup.address || ""
+    );
+
+    // Eligible couriers = same rule as the marketplace path of
+    // adminCreateMarketplaceDelivery (role COURIER, not blocked, on shift).
+    const courierDocs = await db.collection("users")
+      .where("role", "==", "COURIER")
+      .where("isBlocked", "==", false)
+      .get();
+
+    const availableCourierIds: string[] = [];
+    for (const courierDoc of courierDocs.docs) {
+      if (courierDoc.data()?.isOnShift === false) continue;
+      availableCourierIds.push(courierDoc.id);
+    }
+
+    const tariff = await getDefaultTariffSnapshot();
+    const deliveryRef = db.collection("deliveries").doc();
+    const now = Date.now();
+
+    // Build a human-readable comment that ALWAYS shows the restaurant + items,
+    // so even courier app builds that don't yet render the new structured
+    // fields still display everything in the existing comment block.
+    const itemsText = items.map((it) => `• ${it.name} ×${it.quantity}`).join("\n");
+    const commentParts: string[] = [];
+    if (restaurantName) commentParts.push(`🍽 Ресторан: ${restaurantName}`);
+    if (itemsText) commentParts.push(`Блюда:\n${itemsText}`);
+    if (body.comment) commentParts.push(String(body.comment));
+    const comment = commentParts.join("\n");
+
+    await deliveryRef.set({
+      courierId: "",
+      courierName: "",
+      clientPhone: clientPhone,
+      status: "PENDING",
+      adminOrderStage: "NEW",
+      orderSource: "MOTOROL",
+      orderKind: "MARKETPLACE",
+      // --- motorol integration markers (new, ignored by existing code) ---
+      source: "motorol_tj",
+      motorolOrderId: orderId,
+      motorolOrderNumber: String(body.orderNumber || ""),
+      // Fixed price (no meter): courier is paid the delivery fee from motorol.
+      // deliveryType != "default"/"heavyCargoMeter" makes completeDelivery use
+      // fixedPrice instead of the distance meter.
+      deliveryType: deliveryFee > 0 ? "food" : "default",
+      fixedPrice: deliveryFee > 0 ? deliveryFee : null,
+      // --- restaurant + items (new structured fields) ---
+      restaurantName: restaurantName,
+      restaurant: {name: restaurantName, address: restaurantAddress},
+      items: items,
+      productsPrice: productsPrice,
+      totalPrice: totalPrice,
+      // --- standard delivery fields ---
+      startTime: null,
+      acceptedAt: null,
+      endTime: null,
+      distanceMeters: 0,
+      cost: 0,
+      route: [],
+      createdAt: now,
+      adminCreatedAt: now,
+      comment: comment,
+      pickup: {
+        address: String(pickup.address || restaurantAddress || ""),
+        latitude: pickup.latitude,
+        longitude: pickup.longitude,
+      },
+      destination: hasDestination ? {
+        address: String(body.destination.address || ""),
+        latitude: body.destination.latitude,
+        longitude: body.destination.longitude,
+      } : null,
+      availableCourierIds: availableCourierIds,
+      waitingMinutes: 0,
+      waitingCost: 0,
+      waitingStartedAt: null,
+      tariffSnapshot: tariff,
+    });
+
+    // Notify eligible couriers (same as marketplace order push).
+    for (const courierId of availableCourierIds) {
+      const courierDoc = await db.collection("users").doc(courierId).get();
+      if (!courierDoc.exists) continue;
+      await sendPushToCourier(courierDoc.data(), {
+        title: "Новый заказ еды",
+        body: restaurantName ? `Заказ из ${restaurantName}` : "Новый заказ на доставку",
+        data: {
+          type: "ADMIN_MARKETPLACE_ORDER",
+          deliveryId: deliveryRef.id,
+        },
+      });
+    }
+
+    console.log(`receiveMarketplaceOrderFromMotorol: created deliveryId=${deliveryRef.id} orderId=${orderId} couriers=${availableCourierIds.length}`);
+    res.status(200).json({
+      success: true,
+      deliveryId: deliveryRef.id,
+      availableCouriers: availableCourierIds.length,
+    });
+  } catch (error: any) {
+    console.error("receiveMarketplaceOrderFromMotorol error:", error);
+    res.status(500).json({error: "Internal server error", details: error.message});
+  }
+});
+
+/**
+ * Firestore trigger: when a motorol-sourced delivery changes status, sync the
+ * status back to motorol_tj so the client and admin see it in real time.
+ * Additive — does not touch acceptMarketplaceDelivery/completeDelivery.
+ *
+ * IN_PROGRESS -> motorol "accepted", COMPLETED -> "completed",
+ * CANCELLED -> "cancelled".
+ *
+ * Requires env: MOTOROL_ORDER_STATUS_URL, MOTOROL_ORDER_STATUS_API_KEY.
+ */
+export const onMotorolDeliveryStatusChange = functions.firestore
+  .document("deliveries/{deliveryId}")
+  .onUpdate(async (change) => {
+    const before = change.before.data();
+    const after = change.after.data();
+    if (!before || !after) return null;
+
+    // Only motorol-sourced orders.
+    if (after.source !== "motorol_tj" && !after.motorolOrderId) return null;
+    // Only on real status change.
+    if (before.status === after.status) return null;
+
+    let motorolStatus: string | null = null;
+    if (after.status === "IN_PROGRESS") motorolStatus = "accepted";
+    else if (after.status === "COMPLETED") motorolStatus = "completed";
+    else if (after.status === "CANCELLED") motorolStatus = "cancelled";
+    if (!motorolStatus) return null;
+
+    const url = process.env.MOTOROL_ORDER_STATUS_URL || "";
+    const key = process.env.MOTOROL_ORDER_STATUS_API_KEY || "";
+    if (!url) {
+      console.warn("onMotorolDeliveryStatusChange: MOTOROL_ORDER_STATUS_URL not set, skipping status sync");
+      return null;
+    }
+
+    const payload = {
+      source: "taksometr",
+      orderId: String(after.motorolOrderId || ""),
+      status: motorolStatus,
+      courierId: String(after.courierId || ""),
+      courierName: String(after.courierName || ""),
+    };
+
+    try {
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(key ? {"x-api-key": key} : {}),
+        },
+        body: JSON.stringify(payload),
+      });
+      if (!resp.ok) {
+        const errText = await resp.text().catch(() => "");
+        console.error(`onMotorolDeliveryStatusChange: motorol sync failed (${resp.status}): ${errText}`);
+      } else {
+        console.log(`onMotorolDeliveryStatusChange: synced status=${motorolStatus} orderId=${payload.orderId}`);
+      }
+    } catch (err) {
+      console.error("onMotorolDeliveryStatusChange: error syncing to motorol:", err);
+    }
+
+    return null;
+  });

@@ -230,6 +230,14 @@ fun HomeScreen(
                     )
                 },
                 actions = {
+                    // Start-trip moved up here as a prominent action so the
+                    // bottom of the screen stays free for orders.
+                    IconButton(onClick = { viewModel.showDeliveryTypeDialog() }) {
+                        Icon(
+                            Icons.Default.PlayArrow,
+                            contentDescription = str(Strings.startTrip)
+                        )
+                    }
                     IconButton(onClick = { showLanguageDialog = true }) {
                         Icon(Icons.Outlined.Language, contentDescription = str(Strings.language))
                     }
@@ -505,34 +513,8 @@ fun HomeScreen(
                 Spacer(modifier = Modifier.weight(1f))
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Start delivery button
-            Button(
-                onClick = {
-                    viewModel.showDeliveryTypeDialog()
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(64.dp),
-                shape = RoundedCornerShape(16.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.primary
-                )
-            ) {
-                Icon(
-                    Icons.Default.PlayArrow,
-                    contentDescription = null,
-                    modifier = Modifier.size(28.dp)
-                )
-                Spacer(modifier = Modifier.width(12.dp))
-                Text(
-                    text = str(Strings.startTrip),
-                    style = MaterialTheme.typography.titleLarge
-                )
-            }
-
-            Spacer(modifier = Modifier.height(32.dp))
+            // "Начать поездку" moved to the top app bar (PlayArrow icon),
+            // freeing the bottom space for pending orders.
         }
     }
 
