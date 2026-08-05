@@ -3691,9 +3691,11 @@ export const receiveMarketplaceOrderFromMotorol = functions.https.onRequest(asyn
       .get();
 
     const availableCourierIds: string[] = [];
+    const courierDataById = new Map<string, any>();
     for (const courierDoc of courierDocs.docs) {
       if (courierDoc.data()?.isOnShift === false) continue;
       availableCourierIds.push(courierDoc.id);
+      courierDataById.set(courierDoc.id, courierDoc.data());
     }
 
     const tariff = await getDefaultTariffSnapshot();
@@ -3771,19 +3773,20 @@ export const receiveMarketplaceOrderFromMotorol = functions.https.onRequest(asyn
       tariffSnapshot: tariff,
     });
 
-    // Notify eligible couriers (same as marketplace order push).
-    for (const courierId of availableCourierIds) {
-      const courierDoc = await db.collection("users").doc(courierId).get();
-      if (!courierDoc.exists) continue;
-      await sendPushToCourier(courierDoc.data(), {
+    // Notify eligible couriers in parallel, reusing the already-fetched docs.
+    // Push failures (e.g. stale FCM tokens) must never fail the request — the
+    // delivery is already created and couriers see it via the realtime query.
+    await Promise.allSettled(availableCourierIds.map((courierId) =>
+      sendPushToCourier(courierDataById.get(courierId), {
         title: "Новый заказ еды",
-        body: restaurantName ? `Заказ из ${restaurantName}` : "Новый заказ на доставку",
+        body: restaurantName ?
+          `Заказ из ${restaurantName}` : "Новый заказ на доставку",
         data: {
           type: "ADMIN_MARKETPLACE_ORDER",
           deliveryId: deliveryRef.id,
         },
-      });
-    }
+      }),
+    ));
 
     console.log(`receiveMarketplaceOrderFromMotorol: created deliveryId=${deliveryRef.id} orderId=${orderId} couriers=${availableCourierIds.length}`);
     res.status(200).json({
@@ -3816,19 +3819,31 @@ export const onMotorolDeliveryStatusChange = functions.firestore
 
     // Only motorol-sourced orders.
     if (after.source !== "motorol_tj" && !after.motorolOrderId) return null;
-    // Only on real status change.
-    if (before.status === after.status) return null;
+
+    // Forward when the status, the courier (name/phone) or the waiting state
+    // changes, so the motorol client/admin see the courier and the live
+    // waiting timer in real time.
+    const statusChanged = before.status !== after.status;
+    const courierChanged =
+      before.courierId !== after.courierId ||
+      before.courierName !== after.courierName ||
+      before.courierPhone !== after.courierPhone;
+    const waitingChanged =
+      before.waitingStartedAt !== after.waitingStartedAt ||
+      before.waitingMinutes !== after.waitingMinutes;
+    if (!statusChanged && !courierChanged && !waitingChanged) return null;
 
     let motorolStatus: string | null = null;
-    if (after.status === "IN_PROGRESS") motorolStatus = "accepted";
-    else if (after.status === "COMPLETED") motorolStatus = "completed";
-    else if (after.status === "CANCELLED") motorolStatus = "cancelled";
-    if (!motorolStatus) return null;
+    if (statusChanged) {
+      if (after.status === "IN_PROGRESS") motorolStatus = "accepted";
+      else if (after.status === "COMPLETED") motorolStatus = "completed";
+      else if (after.status === "CANCELLED") motorolStatus = "cancelled";
+    }
 
     const url = process.env.MOTOROL_ORDER_STATUS_URL || "";
     const key = process.env.MOTOROL_ORDER_STATUS_API_KEY || "";
     if (!url) {
-      console.warn("onMotorolDeliveryStatusChange: MOTOROL_ORDER_STATUS_URL not set, skipping status sync");
+      console.warn("onMotorolDeliveryStatusChange: MOTOROL_ORDER_STATUS_URL not set, skipping sync");
       return null;
     }
 
@@ -3838,6 +3853,11 @@ export const onMotorolDeliveryStatusChange = functions.firestore
       status: motorolStatus,
       courierId: String(after.courierId || ""),
       courierName: String(after.courierName || ""),
+      courierPhone: String(after.courierPhone || ""),
+      isWaiting: !!after.waitingStartedAt,
+      waitingStartedAt: after.waitingStartedAt || null,
+      waitingMinutes: Number(after.waitingMinutes || 0),
+      waitingCost: Number(after.waitingCost || 0),
     };
 
     try {
@@ -3853,7 +3873,7 @@ export const onMotorolDeliveryStatusChange = functions.firestore
         const errText = await resp.text().catch(() => "");
         console.error(`onMotorolDeliveryStatusChange: motorol sync failed (${resp.status}): ${errText}`);
       } else {
-        console.log(`onMotorolDeliveryStatusChange: synced status=${motorolStatus} orderId=${payload.orderId}`);
+        console.log(`onMotorolDeliveryStatusChange: synced orderId=${payload.orderId} status=${motorolStatus} waiting=${payload.isWaiting}`);
       }
     } catch (err) {
       console.error("onMotorolDeliveryStatusChange: error syncing to motorol:", err);
