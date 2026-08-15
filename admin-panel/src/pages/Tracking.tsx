@@ -146,7 +146,12 @@ const Tracking: React.FC<TrackingProps> = () => {
         }).filter(p => typeof p.latitude === 'number' && typeof p.longitude === 'number');
         setPoints(pts);
       } catch (e: any) {
-        if (!cancelled) setError(e.message || 'Ошибка загрузки маршрута');
+        // Log the raw technical error so it can be found in the server logs
+        // (Firebase console -> Hosting/Cloud Logging). We never surface the raw
+        // SDK message ("Missing or insufficient parameters", index errors, etc.)
+        // to the dispatcher — instead we show a friendly placeholder.
+        console.error('[Tracking] Ошибка загрузки маршрута', { courierId: selectedCourier, date, error: e });
+        if (!cancelled) setError('Не удалось загрузить маршрут. Проверьте логи сервера.');
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -233,37 +238,44 @@ const Tracking: React.FC<TrackingProps> = () => {
       );
     }
     return (
-      <GoogleMap
-        mapContainerStyle={mapContainerStyle}
-        center={mapCenter}
-        zoom={13}
-        options={{ streetViewControl: false, mapTypeControl: false, fullscreenControl: true }}
-      >
-        {segments.map((seg, idx) => (
-          <PolylineF
-            key={idx}
-            path={seg.path}
-            options={{
-              strokeColor: seg.onMeter ? ON_METER_COLOR : OFF_METER_COLOR,
-              strokeOpacity: 0.9,
-              strokeWeight: 5,
-            }}
-          />
-        ))}
+      <Box sx={{ position: 'relative', width: '100%', height: '100%' }}>
+        <GoogleMap
+          mapContainerStyle={mapContainerStyle}
+          center={mapCenter}
+          zoom={13}
+          options={{ streetViewControl: false, mapTypeControl: false, fullscreenControl: true }}
+        >
+          {segments.map((seg, idx) => (
+            <PolylineF
+              key={idx}
+              path={seg.path}
+              options={{
+                strokeColor: seg.onMeter ? ON_METER_COLOR : OFF_METER_COLOR,
+                strokeOpacity: 0.9,
+                strokeWeight: 5,
+              }}
+            />
+          ))}
 
-        {points.length > 0 && (
-          <MarkerF
-            position={{ lat: points[0].latitude, lng: points[0].longitude }}
-            label={{ text: 'A', color: 'white', fontWeight: 'bold' }}
-          />
+          {points.length > 0 && (
+            <MarkerF
+              position={{ lat: points[0].latitude, lng: points[0].longitude }}
+              label={{ text: 'A', color: 'white', fontWeight: 'bold' }}
+            />
+          )}
+          {points.length > 1 && (
+            <MarkerF
+              position={{ lat: points[points.length - 1].latitude, lng: points[points.length - 1].longitude }}
+              label={{ text: 'B', color: 'white', fontWeight: 'bold' }}
+            />
+          )}
+        </GoogleMap>
+        {selectedCourier && !loading && !error && stats.count === 0 && (
+          <Alert severity="info" sx={{ position: 'absolute', top: 16, left: 16, right: 16, zIndex: 1 }}>
+            Нет данных о GPS-координатах курьера за выбранный день
+          </Alert>
         )}
-        {points.length > 1 && (
-          <MarkerF
-            position={{ lat: points[points.length - 1].latitude, lng: points[points.length - 1].longitude }}
-            label={{ text: 'B', color: 'white', fontWeight: 'bold' }}
-          />
-        )}
-      </GoogleMap>
+      </Box>
     );
   };
 
@@ -306,7 +318,7 @@ const Tracking: React.FC<TrackingProps> = () => {
                   <Alert severity="error" sx={{ mt: 1 }}>{error}</Alert>
                 ) : stats.count === 0 ? (
                   <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                    Нет данных за выбранный день
+                    Нет данных о GPS-координатах курьера за выбранный день
                   </Typography>
                 ) : (
                   <Box sx={{ mt: 1.5 }}>
