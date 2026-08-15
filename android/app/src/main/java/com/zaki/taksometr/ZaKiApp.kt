@@ -35,14 +35,27 @@ class ZaKiApp : Application() {
                 description = "Общие уведомления приложения"
             }
 
+            // Low-key persistent notification shown while the courier is on shift
+            // and the continuous location tracker is running.
+            val shiftChannel = NotificationChannel(
+                SHIFT_CHANNEL_ID,
+                "Трекинг на смене",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Фоновое отслеживание местоположения во время смены"
+                setShowBadge(false)
+            }
+
             val manager = getSystemService(NotificationManager::class.java)
             manager.createNotificationChannel(trackingChannel)
             manager.createNotificationChannel(notificationChannel)
+            manager.createNotificationChannel(shiftChannel)
         }
     }
 
     companion object {
         const val TRACKING_CHANNEL_ID = "zaki_tracking"
         const val NOTIFICATION_CHANNEL_ID = "zaki_notifications"
+        const val SHIFT_CHANNEL_ID = "zaki_shift"
     }
 }

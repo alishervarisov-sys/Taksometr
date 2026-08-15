@@ -215,6 +215,24 @@ fun HomeScreen(
         }
     }
 
+    // Continuous "on shift" tracking: run the always-on tracker whenever the
+    // courier is on shift and location is granted+enabled, and stop it as soon as
+    // they go off shift or log out. This is what lets the dispatcher see where a
+    // courier drives even when they work without starting the meter.
+    LaunchedEffect(
+        state.user?.id,
+        state.user?.isOnShift,
+        locationPermissions.allPermissionsGranted,
+        isGpsEnabled
+    ) {
+        val onShift = state.user?.isOnShift == true && state.user?.id != null
+        if (onShift && locationPermissions.allPermissionsGranted && isGpsEnabled) {
+            com.zaki.taksometr.service.ShiftTrackingService.start(context)
+        } else {
+            com.zaki.taksometr.service.ShiftTrackingService.stop(context)
+        }
+    }
+
     LaunchedEffect(state.error) {
         state.error?.let { snackbarHostState.showSnackbar(it) }
     }

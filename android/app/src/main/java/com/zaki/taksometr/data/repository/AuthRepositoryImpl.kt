@@ -1,10 +1,12 @@
 package com.zaki.taksometr.data.repository
 
+import android.content.Context
 import android.content.SharedPreferences
 import com.google.firebase.firestore.FirebaseFirestore
 import com.zaki.taksometr.domain.model.User
 import com.zaki.taksometr.domain.model.UserRole
 import com.zaki.taksometr.domain.repository.AuthRepository
+import com.zaki.taksometr.service.ShiftTrackingService
 import com.zaki.taksometr.util.Constants
 import com.zaki.taksometr.util.Resource
 import kotlinx.coroutines.channels.awaitClose
@@ -17,6 +19,7 @@ import javax.inject.Singleton
 
 @Singleton
 class AuthRepositoryImpl @Inject constructor(
+    private val context: Context,
     private val firestore: FirebaseFirestore,
     private val prefs: SharedPreferences
 ) : AuthRepository {
@@ -61,6 +64,7 @@ class AuthRepositoryImpl @Inject constructor(
                 .putString(Constants.PREF_USER_ID, user.id)
                 .putString(Constants.PREF_USER_NAME, user.name)
                 .putBoolean(Constants.PREF_IS_LOGGED_IN, true)
+                .putBoolean(Constants.PREF_IS_ON_SHIFT, user.isOnShift)
                 .apply()
 
             Resource.Success(user)
@@ -70,9 +74,13 @@ class AuthRepositoryImpl @Inject constructor(
     }
 
     override suspend fun logout() {
+        // Stop the continuous shift tracker so it doesn't keep running for a
+        // logged-out session.
+        ShiftTrackingService.stop(context)
         prefs.edit()
             .remove(Constants.PREF_USER_ID)
             .putBoolean(Constants.PREF_IS_LOGGED_IN, false)
+            .putBoolean(Constants.PREF_IS_ON_SHIFT, false)
             .remove(Constants.PREF_ACTIVE_DELIVERY_ID)
             .remove(Constants.PREF_PENDING_MARKETPLACE_DELIVERY_ID)
             .apply()
@@ -110,6 +118,8 @@ class AuthRepositoryImpl @Inject constructor(
                     rating = snapshot.getDouble("rating") ?: 0.0,
                     ratingCount = (snapshot.getLong("ratingCount") ?: 0L).toInt()
                 )
+                // Keep the shift-flag mirror in sync (covers admin-side changes).
+                prefs.edit().putBoolean(Constants.PREF_IS_ON_SHIFT, user.isOnShift).apply()
                 trySend(user)
             }
 
@@ -150,6 +160,7 @@ class AuthRepositoryImpl @Inject constructor(
                 .document(userId)
                 .update("isOnShift", isOnShift)
                 .await()
+            prefs.edit().putBoolean(Constants.PREF_IS_ON_SHIFT, isOnShift).apply()
             Resource.Success(Unit)
         } catch (e: Exception) {
             Resource.Error("Не удалось изменить статус смены: ${e.localizedMessage}")

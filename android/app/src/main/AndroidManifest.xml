@@ -38,6 +38,11 @@
             android:foregroundServiceType="location" />
 
         <service
+            android:name=".service.ShiftTrackingService"
+            android:exported="false"
+            android:foregroundServiceType="location" />
+
+        <service
             android:name=".service.ZaKiFirebaseMessagingService"
             android:exported="false">
             <intent-filter>

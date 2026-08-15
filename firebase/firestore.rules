@@ -81,5 +81,18 @@ service cloud.firestore {
       allow update: if false;
       allow delete: if false;
     }
+
+    // Continuous courier location breadcrumbs (the "Трекинг" feature).
+    // The courier app appends points; the admin panel reads them; old points are
+    // auto-removed by the Firestore TTL policy on `expireAt`.
+    match /courier_tracks/{courierId} {
+      allow read, write: if true;
+      match /points/{pointId} {
+        allow read: if true;       // Admin panel reads a courier's route
+        allow create: if true;     // Courier app appends breadcrumbs
+        allow update: if false;
+        allow delete: if true;     // Manual/TTL cleanup
+      }
+    }
   }
 }

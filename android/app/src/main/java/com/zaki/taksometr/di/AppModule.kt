@@ -182,9 +182,10 @@ object AppModule {
     @Provides
     @Singleton
     fun provideAuthRepository(
+        @ApplicationContext context: Context,
         firestore: FirebaseFirestore,
         prefs: SharedPreferences
-    ): AuthRepository = AuthRepositoryImpl(firestore, prefs)
+    ): AuthRepository = AuthRepositoryImpl(context, firestore, prefs)
 
     @Provides
     @Singleton
