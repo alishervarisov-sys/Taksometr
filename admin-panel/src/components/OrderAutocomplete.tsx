@@ -32,8 +32,8 @@ export interface RecentDelivery {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const DEBOUNCE_MS = 400;
-const MIN_PHONE_DIGITS = 2;
+const DEBOUNCE_MS = 350;
+const MIN_PHONE_DIGITS = 3;
 const MIN_ADDRESS_CHARS = 2;
 const MAX_PHONE_RESULTS = 8;
 const MAX_ADDRESS_RESULTS = 8;
@@ -51,16 +51,6 @@ function useDebouncedCallback<A extends unknown[]>(fn: (...args: A) => void, del
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => fnRef.current(...args), delay);
   }, [delay]);
-}
-
-// Candidates covering common phone storage formats: 901234567 / 992901234567 / +992901234567
-function phonePrefixCandidates(digits: string): string[] {
-  const cands = new Set<string>([digits]);
-  if (!digits.startsWith('992')) {
-    cands.add('992' + digits);
-    cands.add('+992' + digits);
-  }
-  return Array.from(cands);
 }
 
 function addDeliveryToAddressMap(data: RecentDelivery, map: Map<string, AddressSuggestion>) {
@@ -91,86 +81,175 @@ function addressRank(normalized: string, q: string): number {
 }
 
 // ─── Search: phone ───────────────────────────────────────────────────────────
+//
+// Phones are stored as free-form strings (courier app sends raw input), so the
+// same number may appear as "901234567", "992901234567" or "+992901234567".
+// A prefix search must potentially try each variant, but we remember which
+// variant actually matches this database and try it first — the common case
+// is a single wave of 2 parallel queries instead of 6.
+
+type PhoneVariant = 'plain' | '992' | '+992';
+let preferredPhoneVariant: PhoneVariant | null = null;
+
+function phoneVariantsFor(digits: string): Array<{ value: string; variant: PhoneVariant }> {
+  const variants: Array<{ value: string; variant: PhoneVariant }> = digits.startsWith('992')
+    ? [
+        { value: digits, variant: '992' },
+        { value: '+' + digits, variant: '+992' },
+      ]
+    : [
+        { value: digits, variant: 'plain' },
+        { value: '992' + digits, variant: '992' },
+        { value: '+992' + digits, variant: '+992' },
+      ];
+  if (preferredPhoneVariant) {
+    variants.sort((a, b) => Number(b.variant === preferredPhoneVariant) - Number(a.variant === preferredPhoneVariant));
+  }
+  return variants;
+}
+
+// One prefix variant: range query over deliveries + users (parallel, indexed).
+async function queryPhoneVariant(prefix: string, digits: string): Promise<{ suggestions: Map<string, PhoneSuggestion>; hits: number }> {
+  const [delRes, usrRes] = await Promise.allSettled([
+    getDocs(query(collection(db, 'deliveries'),
+      where('clientPhone', '>=', prefix), where('clientPhone', '<', prefix + RANGE_END), limit(10))),
+    getDocs(query(collection(db, 'users'),
+      where('phone', '>=', prefix), where('phone', '<', prefix + RANGE_END), limit(10))),
+  ]);
+
+  const names = new Map<string, string>();
+  const userPhones: Array<{ phone: string; name?: string }> = [];
+  if (usrRes.status === 'fulfilled') {
+    usrRes.value.docs.forEach((d) => {
+      const data = d.data() as { phone?: string; name?: string; role?: string };
+      if (!data.phone || data.role === 'COURIER' || data.role === 'ADMIN') return;
+      const k = digitsOf(data.phone);
+      if (!k || !k.includes(digits)) return;
+      if (data.name) names.set(k, data.name);
+      userPhones.push({ phone: data.phone, name: data.name });
+    });
+  }
+
+  const map = new Map<string, PhoneSuggestion>();
+  let hits = 0;
+  if (delRes.status === 'fulfilled') {
+    delRes.value.docs.forEach((d) => {
+      const data = d.data() as RecentDelivery;
+      const p = String(data.clientPhone || '');
+      const k = digitsOf(p);
+      if (!k || !k.includes(digits)) return;
+      hits += 1;
+      const ex = map.get(k) || { phone: p, name: names.get(k), orders: 0, lastUsedAt: 0 };
+      ex.orders += 1;
+      ex.lastUsedAt = Math.max(ex.lastUsedAt || 0, data.createdAt || 0);
+      if (p.startsWith('+')) ex.phone = p;
+      if (!ex.name) ex.name = names.get(k);
+      if (!ex.lastAddress) {
+        const a = data.pickup?.address || data.destination?.address;
+        if (a) ex.lastAddress = a;
+      }
+      map.set(k, ex);
+    });
+  }
+  // Registered clients with no deliveries yet
+  userPhones.forEach(({ phone, name }) => {
+    const k = digitsOf(phone);
+    if (!k || map.has(k)) return;
+    hits += 1;
+    map.set(k, { phone, name, orders: 0, lastUsedAt: 0 });
+  });
+  return { suggestions: map, hits };
+}
+
+// Small frontend cache + in-flight deduplication: backspacing to a previously
+// searched prefix or re-typing it never re-queries Firebase.
+const phoneCache = new Map<string, PhoneSuggestion[]>();
+const phoneInflight = new Map<string, Promise<PhoneSuggestion[]>>();
+const MAX_PHONE_CACHE = 60;
+
+function mergePhoneAgg(target: Map<string, PhoneSuggestion>, source: Map<string, PhoneSuggestion>) {
+  source.forEach((s, k) => {
+    const ex = target.get(k);
+    if (ex) {
+      ex.orders += s.orders;
+      ex.lastUsedAt = Math.max(ex.lastUsedAt || 0, s.lastUsedAt || 0);
+      if (!ex.name && s.name) ex.name = s.name;
+      if (!ex.lastAddress && s.lastAddress) ex.lastAddress = s.lastAddress;
+    } else {
+      target.set(k, s);
+    }
+  });
+}
 
 async function fetchPhoneSuggestions(input: string, recent: RecentDelivery[]): Promise<PhoneSuggestion[]> {
   const digits = digitsOf(input);
   if (digits.length < MIN_PHONE_DIGITS) return [];
 
-  const candidates = phonePrefixCandidates(digits);
+  const cached = phoneCache.get(digits);
+  if (cached) return cached;
+  const running = phoneInflight.get(digits);
+  if (running) return running;
 
-  const [delResults, usrResults] = await Promise.all([
-    // Prefix search over deliveries (server-side, automatic single-field index)
-    Promise.allSettled(candidates.map((c) =>
-      getDocs(query(collection(db, 'deliveries'),
-        where('clientPhone', '>=', c), where('clientPhone', '<', c + RANGE_END), limit(15)))
-    )),
-    // Client names from users collection
-    Promise.allSettled(candidates.map((c) =>
-      getDocs(query(collection(db, 'users'),
-        where('phone', '>=', c), where('phone', '<', c + RANGE_END), limit(10)))
-    )),
-  ]);
+  const task = (async (): Promise<PhoneSuggestion[]> => {
+    const variants = phoneVariantsFor(digits);
+    const agg = new Map<string, PhoneSuggestion>();
+    let matchedVariant: PhoneVariant | null = null;
 
-  const names = new Map<string, string>();
-  usrResults.forEach((r) => {
-    if (r.status !== 'fulfilled') return;
-    r.value.docs.forEach((d) => {
-      const data = d.data() as { phone?: string; name?: string; role?: string };
-      if (!data.phone || data.role === 'COURIER' || data.role === 'ADMIN') return;
-      const k = digitsOf(data.phone);
-      if (k && data.name && !names.has(k)) names.set(k, data.name);
-    });
-  });
-
-  const agg = new Map<string, PhoneSuggestion>();
-  const addDelivery = (data: RecentDelivery) => {
-    const p = String(data.clientPhone || '');
-    if (!p) return;
-    const k = digitsOf(p);
-    if (!k) return;
-    const ex = agg.get(k) || { phone: p, name: names.get(k), orders: 0, lastUsedAt: 0 };
-    ex.orders += 1;
-    ex.lastUsedAt = Math.max(ex.lastUsedAt || 0, data.createdAt || 0);
-    if (p.startsWith('+')) ex.phone = p;
-    if (!ex.name) ex.name = names.get(k);
-    if (!ex.lastAddress) {
-      const a = data.pickup?.address || data.destination?.address;
-      if (a) ex.lastAddress = a;
+    // First wave: only the preferred format (single round trip).
+    const first = await queryPhoneVariant(variants[0].value, digits);
+    if (first.hits > 0) {
+      matchedVariant = variants[0].variant;
+      mergePhoneAgg(agg, first.suggestions);
+    } else if (variants.length > 1) {
+      // Second wave (rare): the preferred format missed — try the rest.
+      const rest = await Promise.all(variants.slice(1).map((v) => queryPhoneVariant(v.value, digits)));
+      rest.forEach((r, i) => {
+        if (r.hits > 0) {
+          if (!matchedVariant) matchedVariant = variants[i + 1].variant;
+          mergePhoneAgg(agg, r.suggestions);
+        }
+      });
     }
-    agg.set(k, ex);
-  };
+    if (matchedVariant) preferredPhoneVariant = matchedVariant;
 
-  delResults.forEach((r) => {
-    if (r.status !== 'fulfilled') return;
-    r.value.docs.forEach((d) => addDelivery(d.data() as RecentDelivery));
-  });
-  // Supplementary partial matching over already-loaded recent deliveries
-  recent.forEach((d) => {
-    if (digitsOf(String(d.clientPhone || '')).includes(digits)) addDelivery(d);
-  });
-  // Registered clients with no deliveries yet
-  usrResults.forEach((r) => {
-    if (r.status !== 'fulfilled') return;
-    r.value.docs.forEach((d) => {
-      const data = d.data() as { phone?: string; name?: string; role?: string };
-      if (!data.phone || data.role === 'COURIER' || data.role === 'ADMIN') return;
-      const k = digitsOf(data.phone);
-      if (!k || agg.has(k)) return;
-      agg.set(k, { phone: data.phone, name: data.name, orders: 0, lastUsedAt: 0 });
+    // Supplementary partial matching over already-loaded recent deliveries
+    recent.forEach((d) => {
+      const dp = digitsOf(String(d.clientPhone || ''));
+      if (!dp || !dp.includes(digits)) return;
+      const p = String(d.clientPhone || '');
+      const ex = agg.get(dp) || { phone: p, orders: 0, lastUsedAt: 0 };
+      ex.orders += 1;
+      ex.lastUsedAt = Math.max(ex.lastUsedAt || 0, d.createdAt || 0);
+      if (p.startsWith('+')) ex.phone = p;
+      if (!ex.lastAddress) {
+        const a = d.pickup?.address || d.destination?.address;
+        if (a) ex.lastAddress = a;
+      }
+      agg.set(dp, ex);
     });
-  });
 
-  const rank = (s: PhoneSuggestion): number => {
-    const dp = digitsOf(s.phone);
-    if (dp === digits) return 0;
-    if (dp.startsWith(digits)) return 1;
-    return 2;
-  };
+    const rank = (s: PhoneSuggestion): number => {
+      const dp = digitsOf(s.phone);
+      if (dp === digits) return 0;
+      if (dp.startsWith(digits)) return 1;
+      return 2;
+    };
 
-  return Array.from(agg.values())
-    .filter((s) => digitsOf(s.phone).includes(digits))
-    .sort((a, b) => rank(a) - rank(b) || b.orders - a.orders || (b.lastUsedAt || 0) - (a.lastUsedAt || 0))
-    .slice(0, MAX_PHONE_RESULTS);
+    const result = Array.from(agg.values())
+      .filter((s) => digitsOf(s.phone).includes(digits))
+      .sort((a, b) => rank(a) - rank(b) || b.orders - a.orders || (b.lastUsedAt || 0) - (a.lastUsedAt || 0))
+      .slice(0, MAX_PHONE_RESULTS);
+
+    if (phoneCache.size >= MAX_PHONE_CACHE) {
+      const oldest = phoneCache.keys().next().value;
+      if (oldest !== undefined) phoneCache.delete(oldest);
+    }
+    phoneCache.set(digits, result);
+    return result;
+  })().finally(() => { phoneInflight.delete(digits); });
+
+  phoneInflight.set(digits, task);
+  return task;
 }
 
 // ─── Search: address ─────────────────────────────────────────────────────────
