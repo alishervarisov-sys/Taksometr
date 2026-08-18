@@ -1,10 +1,14 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Box, Typography, Card, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, Chip, TextField, InputAdornment, Dialog,
   DialogTitle, DialogContent, DialogActions, Button, Grid, Divider,
-  MenuItem, ToggleButtonGroup, ToggleButton, Stack, Alert
+  MenuItem, ToggleButtonGroup, ToggleButton, Stack, Alert, CircularProgress
 } from '@mui/material';
+import {
+  ClientPhoneAutocomplete, AddressAutocomplete, fetchClientRecentAddresses,
+  AddressSuggestion, PhoneSuggestion,
+} from '../components/OrderAutocomplete';
 import { Search } from '@mui/icons-material';
 import { collection, getDocs, query, orderBy, limit, doc, getDoc, where, onSnapshot } from 'firebase/firestore';
 import { GoogleMap, useJsApiLoader, PolylineF, MarkerF } from '@react-google-maps/api';
@@ -95,6 +99,14 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
     destinationLat: '',
     destinationLng: '',
   });
+  // Saved addresses of the client picked from autocomplete (phone → addresses).
+  const [clientAddresses, setClientAddresses] = useState<AddressSuggestion[]>([]);
+  const [loadingClientAddresses, setLoadingClientAddresses] = useState(false);
+  // Guards against a stale address/coordinates pair: 'autocomplete' means the
+  // current lat/lng came from a selected address; editing the address text
+  // afterwards invalidates them. 'map' means the point was picked on the map.
+  const coordSourceRef = useRef<{ pickup: 'autocomplete' | 'map' | null; destination: 'autocomplete' | 'map' | null }>({ pickup: null, destination: null });
+  const selectedAddressRef = useRef<{ pickup: string | null; destination: string | null }>({ pickup: null, destination: null });
 
   // Delivery type options, built the same way as the courier app: two metered
   // options always available, plus each fixed type whose price is configured (> 0).
@@ -384,8 +396,74 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
     const center = { lat, lng };
     setMapCenter(center);
     localStorage.setItem('zaki_admin_map_center', JSON.stringify(center));
-    if (mapPickerMode === 'pickup') setCreateForm(prev => ({ ...prev, pickupLat: String(lat), pickupLng: String(lng) }));
-    if (mapPickerMode === 'destination') setCreateForm(prev => ({ ...prev, destinationLat: String(lat), destinationLng: String(lng) }));
+    if (mapPickerMode === 'pickup') {
+      setCreateForm(prev => ({ ...prev, pickupLat: String(lat), pickupLng: String(lng) }));
+      coordSourceRef.current.pickup = 'map';
+    }
+    if (mapPickerMode === 'destination') {
+      setCreateForm(prev => ({ ...prev, destinationLat: String(lat), destinationLng: String(lng) }));
+      coordSourceRef.current.destination = 'map';
+    }
+  };
+
+  // Fill address + linked coordinates from the ZaKi base and move the map
+  // marker to the selected point (marker renders automatically from lat/lng).
+  const applyAddressSuggestion = (field: 'pickup' | 'destination', s: AddressSuggestion) => {
+    setCreateForm(prev => field === 'pickup'
+      ? { ...prev, pickupAddress: s.address, pickupLat: String(s.latitude), pickupLng: String(s.longitude) }
+      : { ...prev, destinationAddress: s.address, destinationLat: String(s.latitude), destinationLng: String(s.longitude) });
+    coordSourceRef.current[field] = 'autocomplete';
+    selectedAddressRef.current[field] = s.address;
+    const center = { lat: s.latitude, lng: s.longitude };
+    setMapCenter(center);
+    localStorage.setItem('zaki_admin_map_center', JSON.stringify(center));
+  };
+
+  // Manual typing: if the user edits an address previously filled from
+  // autocomplete, the old coordinates no longer match — drop them.
+  const handleAddressInputChange = (field: 'pickup' | 'destination', text: string) => {
+    setCreateForm(prev => {
+      const next = field === 'pickup' ? { ...prev, pickupAddress: text } : { ...prev, destinationAddress: text };
+      const selected = selectedAddressRef.current[field];
+      if (coordSourceRef.current[field] === 'autocomplete' && selected != null && text.trim() !== selected.trim()) {
+        coordSourceRef.current[field] = null;
+        selectedAddressRef.current[field] = null;
+        if (field === 'pickup') { next.pickupLat = ''; next.pickupLng = ''; }
+        else { next.destinationLat = ''; next.destinationLng = ''; }
+      }
+      return next;
+    });
+  };
+
+  const handleClientPhoneInput = (phone: string) => {
+    setCreateForm(prev => ({ ...prev, clientPhone: phone }));
+    setClientAddresses([]);
+  };
+
+  // Phone → client's saved addresses (from their order history).
+  const handleClientSelect = async (s: PhoneSuggestion) => {
+    setCreateForm(prev => ({ ...prev, clientPhone: s.phone }));
+    setClientAddresses([]);
+    setLoadingClientAddresses(true);
+    try {
+      setClientAddresses(await fetchClientRecentAddresses(s.phone));
+    } catch {
+      setClientAddresses([]);
+    } finally {
+      setLoadingClientAddresses(false);
+    }
+  };
+
+  const resetCreateForm = () => {
+    setCreateForm({ clientPhone: '', comment: '', courierId: '', deliveryType: 'default', pickupAddress: '', pickupLat: '', pickupLng: '', destinationAddress: '', destinationLat: '', destinationLng: '' });
+    setClientAddresses([]);
+    coordSourceRef.current = { pickup: null, destination: null };
+    selectedAddressRef.current = { pickup: null, destination: null };
+  };
+
+  const closeCreateDialog = () => {
+    setCreateOpen(false);
+    resetCreateForm();
   };
 
   const handleCreateMarketplaceOrder = async () => {
@@ -424,7 +502,7 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
         alert(`✅ Заказ создан. Доступно курьеров: ${result?.data?.availableCouriers ?? 0}`);
       }
       setCreateOpen(false);
-      setCreateForm({ clientPhone: '', comment: '', courierId: '', deliveryType: 'default', pickupAddress: '', pickupLat: '', pickupLng: '', destinationAddress: '', destinationLat: '', destinationLng: '' });
+      resetCreateForm();
       loadDeliveries();
     } catch (error: any) {
       alert('Ошибка создания заказа: ' + (error.message || 'Неизвестная ошибка'));
@@ -625,12 +703,44 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
         </DialogActions>
       </Dialog>
 
-      <Dialog open={createOpen} onClose={() => setCreateOpen(false)} maxWidth="md" fullWidth>
+      <Dialog open={createOpen} onClose={closeCreateDialog} maxWidth="md" fullWidth>
         <DialogTitle>Создать заказ</DialogTitle>
         <DialogContent>
           <Grid container spacing={2} sx={{ mt: 0.5 }}>
-            <Grid item xs={12} md={6}><TextField fullWidth label="Телефон клиента" value={createForm.clientPhone} onChange={(e) => setCreateForm(prev => ({ ...prev, clientPhone: e.target.value }))} /></Grid>
+            <Grid item xs={12} md={6}>
+              <ClientPhoneAutocomplete
+                value={createForm.clientPhone}
+                onInputChange={handleClientPhoneInput}
+                onSelect={handleClientSelect}
+                recentDeliveries={deliveries}
+              />
+            </Grid>
             <Grid item xs={12} md={6}><TextField fullWidth label="Комментарий" value={createForm.comment} onChange={(e) => setCreateForm(prev => ({ ...prev, comment: e.target.value }))} /></Grid>
+            {(loadingClientAddresses || clientAddresses.length > 0) && (
+              <Grid item xs={12}>
+                <Box sx={{ p: 1.5, border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
+                  <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>Последние адреса клиента:</Typography>
+                  {loadingClientAddresses ? (
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <CircularProgress size={18} />
+                      <Typography variant="body2" color="text.secondary">Загрузка адресов...</Typography>
+                    </Box>
+                  ) : (
+                    <Stack spacing={0.5}>
+                      {clientAddresses.map(a => (
+                        <Stack key={a.address} direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ xs: 'flex-start', sm: 'center' }}>
+                          <Typography variant="body2" sx={{ flex: 1 }}>{a.address}</Typography>
+                          <Stack direction="row" spacing={1}>
+                            <Button size="small" variant="outlined" onClick={() => applyAddressSuggestion('pickup', a)}>Откуда</Button>
+                            <Button size="small" variant="outlined" onClick={() => applyAddressSuggestion('destination', a)}>Куда</Button>
+                          </Stack>
+                        </Stack>
+                      ))}
+                    </Stack>
+                  )}
+                </Box>
+              </Grid>
+            )}
             <Grid item xs={12}>
               <TextField
                 select
@@ -682,17 +792,33 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
               </Stack>
             </Grid>
             <Grid item xs={12}><Divider>Откуда (обязательно)</Divider></Grid>
-            <Grid item xs={12}><TextField fullWidth label="Адрес откуда" value={createForm.pickupAddress} onChange={(e) => setCreateForm(prev => ({ ...prev, pickupAddress: e.target.value }))} /></Grid>
+            <Grid item xs={12}>
+              <AddressAutocomplete
+                label="Адрес откуда"
+                value={createForm.pickupAddress}
+                onInputChange={(t) => handleAddressInputChange('pickup', t)}
+                onSelect={(s) => applyAddressSuggestion('pickup', s)}
+                recentDeliveries={deliveries}
+              />
+            </Grid>
             <Grid item xs={12} md={6}><TextField fullWidth label="Широта" value={createForm.pickupLat} onChange={(e) => setCreateForm(prev => ({ ...prev, pickupLat: e.target.value }))} /></Grid>
             <Grid item xs={12} md={6}><TextField fullWidth label="Долгота" value={createForm.pickupLng} onChange={(e) => setCreateForm(prev => ({ ...prev, pickupLng: e.target.value }))} /></Grid>
             <Grid item xs={12}><Divider>Куда (необязательно)</Divider></Grid>
-            <Grid item xs={12}><TextField fullWidth label="Адрес куда" value={createForm.destinationAddress} onChange={(e) => setCreateForm(prev => ({ ...prev, destinationAddress: e.target.value }))} /></Grid>
+            <Grid item xs={12}>
+              <AddressAutocomplete
+                label="Адрес куда"
+                value={createForm.destinationAddress}
+                onInputChange={(t) => handleAddressInputChange('destination', t)}
+                onSelect={(s) => applyAddressSuggestion('destination', s)}
+                recentDeliveries={deliveries}
+              />
+            </Grid>
             <Grid item xs={12} md={6}><TextField fullWidth label="Широта" value={createForm.destinationLat} onChange={(e) => setCreateForm(prev => ({ ...prev, destinationLat: e.target.value }))} /></Grid>
             <Grid item xs={12} md={6}><TextField fullWidth label="Долгота" value={createForm.destinationLng} onChange={(e) => setCreateForm(prev => ({ ...prev, destinationLng: e.target.value }))} /></Grid>
           </Grid>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setCreateOpen(false)}>Отмена</Button>
+          <Button onClick={closeCreateDialog}>Отмена</Button>
           <Button variant="contained" onClick={handleCreateMarketplaceOrder} disabled={isCreatingOrder}>{isCreatingOrder ? 'Создание...' : 'Создать заказ'}</Button>
         </DialogActions>
       </Dialog>
