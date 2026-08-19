@@ -227,28 +227,6 @@ function computeCost(
   return Math.max(baseCost, Math.round(cost * 100) / 100);
 }
 
-function getEtaMinutes(from: any, to: any): number | null {
-  if (
-    !from ||
-    !to ||
-    typeof from.latitude !== "number" ||
-    typeof from.longitude !== "number" ||
-    typeof to.latitude !== "number" ||
-    typeof to.longitude !== "number"
-  ) {
-    return null;
-  }
-
-  const distanceMeters = haversineDistance(
-    from.latitude,
-    from.longitude,
-    to.latitude,
-    to.longitude
-  );
-  const averageSpeedMps = 8.33;
-  return Math.max(1, Math.ceil(distanceMeters / averageSpeedMps / 60));
-}
-
 async function getDefaultTariffSnapshot(): Promise<DeliveryTariffSnapshot> {
   const tariffDoc = await db.collection("tariffs").doc("default").get();
   const tariffData = tariffDoc.exists ? tariffDoc.data()! : {};
@@ -1360,19 +1338,12 @@ export const acceptMarketplaceDelivery = functions.https.onCall(async (data, con
 
   await syncCourierStatus(courierId, "acceptMarketplaceDelivery: order accepted by courier");
 
-  const etaMinutes = getEtaMinutes(
-    acceptanceResult.courierData.lastLocation,
-    acceptanceResult.deliveryData.pickup
-  );
   const courierName = acceptanceResult.courierData.name || "";
   const courierPhone = acceptanceResult.courierData.phone || "";
 
   let smsText = `Салом! Курьери ZaKi фармоиши шуморо қабул кард. ${courierName}`;
   if (courierPhone) {
     smsText += `, тел: ${courierPhone}`;
-  }
-  if (etaMinutes !== null) {
-    smsText += `. Тахминан то шумо: ${etaMinutes} дақиқа`;
   }
   smsText += `.`;
 
@@ -1383,7 +1354,6 @@ export const acceptMarketplaceDelivery = functions.https.onCall(async (data, con
     deliveryId,
     courierName,
     courierPhone,
-    etaMinutes,
   };
 });
 
