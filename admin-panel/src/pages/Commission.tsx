@@ -1,13 +1,20 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box, Typography, Card, CardContent, TextField, Button, Alert, Grid,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
   Dialog, DialogTitle, DialogContent, DialogActions, Chip, IconButton,
-  InputAdornment, Tooltip
+  InputAdornment, Tooltip, Autocomplete, Select, MenuItem, InputLabel,
+  FormControl, Stack, LinearProgress,
 } from '@mui/material';
-import { Add, Save, Edit } from '@mui/icons-material';
-import { doc, getDoc, collection, query, where, getDocs, orderBy } from 'firebase/firestore';
+import {
+  Add, Save, Edit, FilterList, FilterAltOff,
+} from '@mui/icons-material';
+import {
+  doc, getDoc, collection, query, where, getDocs, orderBy, limit, startAfter,
+  QueryConstraint, QueryDocumentSnapshot, DocumentData,
+} from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
+import { useSearchParams } from 'react-router-dom';
 import { db, functions } from '../firebase';
 
 interface CommissionProps {
@@ -33,7 +40,85 @@ interface Transaction {
   createdAt: number;
 }
 
+type PeriodKey = 'all' | 'today' | 'yesterday' | 'last7' | 'last30' | 'thisMonth' | 'lastMonth' | 'thisYear' | 'custom';
+
+interface Filters {
+  courierId: string;
+  period: PeriodKey;
+  start: string;
+  end: string;
+  type: string;
+}
+
+interface TransactionStats {
+  count: number;
+  income: number;
+  expense: number;
+  commission: number;
+  topUp: number;
+  refund: number;
+  balance: number;
+}
+
+const EMPTY_FILTERS: Filters = { courierId: '', period: 'all', start: '', end: '', type: '' };
+
+const PERIODS: Array<{ key: PeriodKey; label: string }> = [
+  { key: 'all', label: 'Весь период' },
+  { key: 'today', label: 'Сегодня' },
+  { key: 'yesterday', label: 'Вчера' },
+  { key: 'last7', label: 'Последние 7 дней' },
+  { key: 'last30', label: 'Последние 30 дней' },
+  { key: 'thisMonth', label: 'Этот месяц' },
+  { key: 'lastMonth', label: 'Прошлый месяц' },
+  { key: 'thisYear', label: 'Этот год' },
+  { key: 'custom', label: 'Произвольный период' },
+];
+
+const PERIOD_LABELS: Record<PeriodKey, string> = PERIODS.reduce((acc, p) => {
+  acc[p.key] = p.label;
+  return acc;
+}, {} as Record<PeriodKey, string>);
+
+const TYPE_OPTIONS: Array<{ key: string; label: string }> = [
+  { key: '', label: 'Все операции' },
+  { key: 'COMMISSION', label: 'Комиссия' },
+  { key: 'TOP_UP', label: 'Пополнение' },
+  { key: 'COMMISSION_REFUND', label: 'Возврат комиссии' },
+];
+
+const TYPE_META: Record<string, { label: string; color: 'default' | 'primary' | 'secondary' | 'error' | 'info' | 'success' | 'warning' }> = {
+  COMMISSION: { label: 'Комиссия', color: 'warning' },
+  TOP_UP: { label: 'Пополнение', color: 'success' },
+  COMMISSION_REFUND: { label: 'Возврат комиссии', color: 'info' },
+};
+
+const PAGE_SIZE = 50;
+
+function filtersFromParams(params: URLSearchParams): Filters {
+  const period = (params.get('period') || '') as PeriodKey;
+  return {
+    courierId: params.get('courierId') || '',
+    period: PERIOD_LABELS[period] ? period : 'all',
+    start: params.get('start') || '',
+    end: params.get('end') || '',
+    type: params.get('type') || '',
+  };
+}
+
+function filtersToParams(f: Filters): Record<string, string> {
+  const p: Record<string, string> = {};
+  if (f.courierId) p.courierId = f.courierId;
+  if (f.period !== 'all') p.period = f.period;
+  if (f.period === 'custom') {
+    if (f.start) p.start = f.start;
+    if (f.end) p.end = f.end;
+  }
+  if (f.type) p.type = f.type;
+  return p;
+}
+
 const Commission: React.FC<CommissionProps> = ({ adminId }) => {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [globalCommission, setGlobalCommission] = useState('10');
   const [couriers, setCouriers] = useState<Courier[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -53,11 +138,46 @@ const Commission: React.FC<CommissionProps> = ({ adminId }) => {
   const [topUpNote, setTopUpNote] = useState('');
   const [topUpLoading, setTopUpLoading] = useState(false);
 
+  // Applied filters (active queries) — initialised from the URL so a page
+  // reload keeps the current view.
+  const [applied, setApplied] = useState<Filters>(() => filtersFromParams(searchParams));
+
+  // Draft filter form (committed with "Применить")
+  const [draftCourier, setDraftCourier] = useState<Courier | null>(null);
+  const [draftPeriod, setDraftPeriod] = useState<PeriodKey>(applied.period);
+  const [draftCustomStart, setDraftCustomStart] = useState(applied.start);
+  const [draftCustomEnd, setDraftCustomEnd] = useState(applied.end);
+  const [draftType, setDraftType] = useState(applied.type);
+
+  // Transactions + pagination
+  const [txLoading, setTxLoading] = useState(false);
+  const [txLoadingMore, setTxLoadingMore] = useState(false);
+  const [lastDoc, setLastDoc] = useState<QueryDocumentSnapshot<DocumentData> | null>(null);
+  const [hasMore, setHasMore] = useState(false);
+  const requestSeq = useRef(0);
+
+  // Filtered statistics
+  const [stats, setStats] = useState<TransactionStats | null>(null);
+  const [statsLoading, setStatsLoading] = useState(false);
+
   useEffect(() => {
     loadCommission();
     loadCouriers();
-    loadTransactions();
+    loadFirstPage(applied);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Resolve the applied courier from the URL into the draft once couriers load.
+  const courierDraftInitialized = useRef(false);
+  useEffect(() => {
+    if (couriers.length === 0 || courierDraftInitialized.current) return;
+    courierDraftInitialized.current = true;
+    if (applied.courierId) {
+      const courier = couriers.find(c => c.id === applied.courierId);
+      if (courier) setDraftCourier(courier);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [couriers]);
 
   const loadCommission = async () => {
     try {
@@ -83,23 +203,218 @@ const Commission: React.FC<CommissionProps> = ({ adminId }) => {
     setCouriers(data);
   };
 
-  const loadTransactions = async () => {
+  // ─── Filter helpers ────────────────────────────────────────────────────────
+  // All ranges are built in the admin's local timezone so boundary operations
+  // at the start/end of a day are not dropped.
+  const getDateRange = (f: Filters): { start?: number; end?: number } => {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = now.getMonth();
+    const d = now.getDate();
+    const dayStart = new Date(y, m, d).getTime();
+
+    switch (f.period) {
+      case 'today':
+        return { start: dayStart };
+      case 'yesterday':
+        return { start: new Date(y, m, d - 1).getTime(), end: dayStart - 1 };
+      case 'last7':
+        return { start: new Date(y, m, d - 6).getTime() };
+      case 'last30':
+        return { start: new Date(y, m, d - 29).getTime() };
+      case 'thisMonth':
+        return { start: new Date(y, m, 1).getTime() };
+      case 'lastMonth':
+        return { start: new Date(y, m - 1, 1).getTime(), end: new Date(y, m, 1).getTime() - 1 };
+      case 'thisYear':
+        return { start: new Date(y, 0, 1).getTime() };
+      case 'custom': {
+        if (!f.start || !f.end) return {};
+        const s = new Date(`${f.start}T00:00:00`);
+        const e = new Date(`${f.end}T23:59:59.999`);
+        if (Number.isNaN(s.getTime()) || Number.isNaN(e.getTime())) return {};
+        return { start: s.getTime(), end: e.getTime() };
+      }
+      default:
+        return {};
+    }
+  };
+
+  const buildConstraints = (f: Filters): QueryConstraint[] => {
+    const cs: QueryConstraint[] = [];
+    if (f.courierId) cs.push(where('courierId', '==', f.courierId));
+    if (f.type) cs.push(where('type', '==', f.type));
+    const range = getDateRange(f);
+    if (range.start != null) cs.push(where('createdAt', '>=', range.start));
+    if (range.end != null) cs.push(where('createdAt', '<=', range.end));
+    cs.push(orderBy('createdAt', 'desc'));
+    return cs;
+  };
+
+  const loadFirstPage = async (f: Filters) => {
+    const seq = ++requestSeq.current;
+    setTxLoading(true);
+    setLastDoc(null);
+    setHasMore(false);
     try {
       const q = query(
         collection(db, 'transactions'),
-        orderBy('createdAt', 'desc'),
+        ...buildConstraints(f),
+        limit(PAGE_SIZE),
       );
       const snapshot = await getDocs(q);
-      const data = snapshot.docs.slice(0, 50).map(d => ({
+      if (seq !== requestSeq.current) return;
+      const data = snapshot.docs.map(d => ({
         id: d.id,
         ...d.data(),
       })) as Transaction[];
       setTransactions(data);
+      setLastDoc(snapshot.docs.length > 0 ? snapshot.docs[snapshot.docs.length - 1] : null);
+      setHasMore(snapshot.docs.length === PAGE_SIZE);
     } catch (err) {
-      console.error(err);
+      console.error('Error loading transactions:', err);
+    } finally {
+      if (seq === requestSeq.current) setTxLoading(false);
+    }
+    loadStats(f, seq);
+  };
+
+  const loadMore = async () => {
+    if (!lastDoc) return;
+    const seq = requestSeq.current;
+    setTxLoadingMore(true);
+    try {
+      const q = query(
+        collection(db, 'transactions'),
+        ...buildConstraints(applied),
+        startAfter(lastDoc),
+        limit(PAGE_SIZE),
+      );
+      const snapshot = await getDocs(q);
+      if (seq !== requestSeq.current) return;
+      const data = snapshot.docs.map(d => ({
+        id: d.id,
+        ...d.data(),
+      })) as Transaction[];
+      setTransactions(prev => [...prev, ...data]);
+      setLastDoc(snapshot.docs.length > 0 ? snapshot.docs[snapshot.docs.length - 1] : null);
+      setHasMore(snapshot.docs.length === PAGE_SIZE);
+    } catch (err) {
+      console.error('Error loading more transactions:', err);
+    } finally {
+      if (seq === requestSeq.current) setTxLoadingMore(false);
     }
   };
 
+  const loadStats = async (f: Filters, seq: number) => {
+    setStatsLoading(true);
+    try {
+      const q = query(collection(db, 'transactions'), ...buildConstraints(f));
+      const snapshot = await getDocs(q);
+      if (seq !== requestSeq.current) return;
+      let count = 0;
+      let income = 0;
+      let expense = 0;
+      let commission = 0;
+      let topUp = 0;
+      let refund = 0;
+      snapshot.forEach(doc => {
+        const data = doc.data();
+        const amount = Number(data.amount) || 0;
+        const type = data.type || '';
+        count += 1;
+        if (amount > 0) income += amount;
+        else expense += Math.abs(amount);
+        if (type === 'COMMISSION') commission += Math.abs(amount);
+        if (type === 'TOP_UP') topUp += amount;
+        if (type === 'COMMISSION_REFUND') refund += amount;
+      });
+      setStats({ count, income, expense, commission, topUp, refund, balance: income - expense });
+    } catch (err) {
+      console.error('Error loading statistics:', err);
+    } finally {
+      if (seq === requestSeq.current) setStatsLoading(false);
+    }
+  };
+
+  // ─── Filter actions ────────────────────────────────────────────────────────
+  const applyFilters = () => {
+    const next: Filters = {
+      courierId: draftCourier?.id || '',
+      period: draftPeriod,
+      start: draftPeriod === 'custom' ? draftCustomStart : '',
+      end: draftPeriod === 'custom' ? draftCustomEnd : '',
+      type: draftType,
+    };
+    setApplied(next);
+    setSearchParams(filtersToParams(next), { replace: true });
+    loadFirstPage(next);
+  };
+
+  const resetFilters = () => {
+    setDraftCourier(null);
+    setDraftPeriod('all');
+    setDraftCustomStart('');
+    setDraftCustomEnd('');
+    setDraftType('');
+    setApplied(EMPTY_FILTERS);
+    setSearchParams({}, { replace: true });
+    loadFirstPage(EMPTY_FILTERS);
+  };
+
+  const removeCourierFilter = () => {
+    const next = { ...applied, courierId: '' };
+    setDraftCourier(null);
+    setApplied(next);
+    setSearchParams(filtersToParams(next), { replace: true });
+    loadFirstPage(next);
+  };
+
+  const removePeriodFilter = () => {
+    const next: Filters = { ...applied, period: 'all', start: '', end: '' };
+    setDraftPeriod('all');
+    setDraftCustomStart('');
+    setDraftCustomEnd('');
+    setApplied(next);
+    setSearchParams(filtersToParams(next), { replace: true });
+    loadFirstPage(next);
+  };
+
+  const removeTypeFilter = () => {
+    const next = { ...applied, type: '' };
+    setDraftType('');
+    setApplied(next);
+    setSearchParams(filtersToParams(next), { replace: true });
+    loadFirstPage(next);
+  };
+
+  const activeFilterCount = () => {
+    let n = 0;
+    if (applied.courierId) n += 1;
+    if (applied.period !== 'all') n += 1;
+    if (applied.type) n += 1;
+    return n;
+  };
+
+  const formatShortDate = (s: string) => {
+    const d = new Date(`${s}T00:00:00`);
+    return `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}`;
+  };
+
+  const periodChipLabel = () => {
+    if (applied.period === 'custom' && applied.start && applied.end) {
+      return `Период: ${formatShortDate(applied.start)} — ${formatShortDate(applied.end)}`;
+    }
+    if (applied.period !== 'all') return `Период: ${PERIOD_LABELS[applied.period]}`;
+    return null;
+  };
+
+  const appliedCourier = useMemo(
+    () => couriers.find(c => c.id === applied.courierId),
+    [couriers, applied.courierId],
+  );
+
+  // ─── Handlers (unchanged behaviour) ────────────────────────────────────────
   const handleSaveGlobalCommission = async () => {
     setError('');
     setSuccess('');
@@ -152,7 +467,7 @@ const Commission: React.FC<CommissionProps> = ({ adminId }) => {
       setTopUpAmount('');
       setTopUpNote('');
       loadCouriers();
-      loadTransactions();
+      loadFirstPage(applied);
     } catch (err: any) {
       setError(err.message || 'Ошибка пополнения');
     } finally {
@@ -170,6 +485,44 @@ const Commission: React.FC<CommissionProps> = ({ adminId }) => {
     if (diram > 0) return `${sign}${somoni.toLocaleString()}.${String(diram).padStart(2, '0')} сомони`;
     return `${sign}${somoni.toLocaleString()} сомони`;
   };
+
+  const courierOptions = useMemo<Array<Courier | null>>(() => [null, ...couriers], [couriers]);
+
+  const renderStatCard = (
+    title: string,
+    value: string | number | null,
+    color: string,
+    loading: boolean,
+  ) => (
+    <Grid item xs={6} md={3}>
+      <Card sx={{ height: '100%' }}>
+        <CardContent sx={{ textAlign: 'center', p: 2.5 }}>
+          <Typography variant="body2" color="text.secondary" noWrap>{title}</Typography>
+          <Typography variant="h5" sx={{ fontWeight: 700, color, mt: 0.5 }}>
+            {loading ? '…' : value}
+          </Typography>
+        </CardContent>
+      </Card>
+    </Grid>
+  );
+
+  const renderMiniStatCard = (
+    title: string,
+    value: string | number | null,
+    color: string,
+    loading: boolean,
+  ) => (
+    <Grid item xs={4} md={4}>
+      <Card sx={{ height: '100%' }}>
+        <CardContent sx={{ textAlign: 'center', p: 2 }}>
+          <Typography variant="body2" color="text.secondary" noWrap>{title}</Typography>
+          <Typography variant="h6" sx={{ fontWeight: 700, color, mt: 0.5 }}>
+            {loading ? '…' : value}
+          </Typography>
+        </CardContent>
+      </Card>
+    </Grid>
+  );
 
   return (
     <Box>
@@ -314,50 +667,237 @@ const Commission: React.FC<CommissionProps> = ({ adminId }) => {
           </Card>
         </Grid>
 
-        {/* Transaction history */}
+        {/* Filtered statistics */}
+        <Grid item xs={12}>
+          <Grid container spacing={2.5}>
+            {statsLoading && (
+              <Grid item xs={12}>
+                <LinearProgress sx={{ borderRadius: 1 }} />
+              </Grid>
+            )}
+            {renderStatCard('Операций', stats ? stats.count : null, 'primary.main', statsLoading)}
+            {renderStatCard('Доход', stats ? formatCost(stats.income) : null, '#00C853', statsLoading)}
+            {renderStatCard('Расход', stats ? formatCost(stats.expense) : null, '#D32F2F', statsLoading)}
+            {renderStatCard(
+              'Баланс',
+              stats ? formatCost(stats.balance) : null,
+              (stats?.balance ?? 0) >= 0 ? '#00C853' : '#D32F2F',
+              statsLoading,
+            )}
+            {renderMiniStatCard('Комиссия', stats ? formatCost(stats.commission) : null, '#FF6D00', statsLoading)}
+            {renderMiniStatCard('Пополнения', stats ? formatCost(stats.topUp) : null, '#2196F3', statsLoading)}
+            {renderMiniStatCard('Возвраты', stats ? formatCost(stats.refund) : null, '#7B1FA2', statsLoading)}
+          </Grid>
+        </Grid>
+
+        {/* Transaction history with filters */}
         <Grid item xs={12}>
           <Card>
             <CardContent>
-              <Typography variant="h6" sx={{ mb: 2 }}>История операций</Typography>
-              <TableContainer>
-                <Table size="small">
-                  <TableHead>
-                    <TableRow>
-                      <TableCell>Дата</TableCell>
-                      <TableCell>Курьер</TableCell>
-                      <TableCell>Тип</TableCell>
-                      <TableCell>Сумма</TableCell>
-                      <TableCell>Баланс после</TableCell>
-                      <TableCell>Описание</TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {transactions.map((tx) => (
-                      <TableRow key={tx.id}>
-                        <TableCell>{formatDate(tx.createdAt)}</TableCell>
-                        <TableCell>{tx.courierName}</TableCell>
-                        <TableCell>
-                          <Chip
-                            label={tx.type === 'TOP_UP' ? 'Пополнение' : 'Комиссия'}
-                            color={tx.type === 'TOP_UP' ? 'success' : 'warning'}
-                            size="small"
-                          />
-                        </TableCell>
-                        <TableCell sx={{ color: tx.amount >= 0 ? 'green' : 'red', fontWeight: 600 }}>
-                          {tx.amount >= 0 ? '+' : ''}{formatCost(tx.amount)}
-                        </TableCell>
-                        <TableCell>{formatCost(tx.balanceAfter)}</TableCell>
-                        <TableCell>{tx.description}</TableCell>
-                      </TableRow>
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2, flexWrap: 'wrap', gap: 1 }}>
+                <Typography variant="h6">История операций</Typography>
+                {activeFilterCount() > 0 && (
+                  <Button
+                    size="small"
+                    variant="text"
+                    startIcon={<FilterAltOff />}
+                    onClick={resetFilters}
+                  >
+                    Сбросить все
+                  </Button>
+                )}
+              </Box>
+
+              {/* Filter panel */}
+              <Stack
+                direction="row"
+                spacing={2}
+                flexWrap="wrap"
+                useFlexGap
+                alignItems="center"
+                sx={{ mb: 2 }}
+              >
+                <Autocomplete
+                  options={courierOptions}
+                  value={draftCourier}
+                  onChange={(_, value) => setDraftCourier(value as Courier | null)}
+                  getOptionLabel={(o) => (o ? o.name : 'Все курьеры')}
+                  isOptionEqualToValue={(o, v) => (o && v ? o.id === v.id : o === v)}
+                  filterOptions={(options, state) => {
+                    const q = state.inputValue.trim().toLowerCase();
+                    if (!q) return options;
+                    return options.filter(o =>
+                      !o
+                      || o.name.toLowerCase().includes(q)
+                      || (o.phone || '').toLowerCase().includes(q)
+                    );
+                  }}
+                  renderInput={(params) => (
+                    <TextField {...params} label="Курьер" size="small" sx={{ minWidth: 200 }} />
+                  )}
+                  sx={{ width: { xs: '100%', sm: 260 } }}
+                />
+
+                <FormControl size="small" sx={{ width: { xs: '100%', sm: 210 } }}>
+                  <InputLabel id="period-filter-label">Период</InputLabel>
+                  <Select
+                    labelId="period-filter-label"
+                    label="Период"
+                    value={draftPeriod}
+                    onChange={(e) => setDraftPeriod(e.target.value as PeriodKey)}
+                  >
+                    {PERIODS.map(p => (
+                      <MenuItem key={p.key} value={p.key}>{p.label}</MenuItem>
                     ))}
-                    {transactions.length === 0 && (
-                      <TableRow>
-                        <TableCell colSpan={6} align="center">Нет операций</TableCell>
-                      </TableRow>
-                    )}
-                  </TableBody>
-                </Table>
-              </TableContainer>
+                  </Select>
+                </FormControl>
+
+                <FormControl size="small" sx={{ width: { xs: '100%', sm: 200 } }}>
+                  <InputLabel id="type-filter-label">Тип операции</InputLabel>
+                  <Select
+                    labelId="type-filter-label"
+                    label="Тип операции"
+                    value={draftType}
+                    onChange={(e) => setDraftType(e.target.value)}
+                  >
+                    {TYPE_OPTIONS.map(t => (
+                      <MenuItem key={t.key || 'all'} value={t.key}>{t.label}</MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+
+                <Button
+                  variant="contained"
+                  startIcon={<FilterList />}
+                  onClick={applyFilters}
+                  sx={{ width: { xs: '100%', sm: 'auto' } }}
+                >
+                  Применить
+                </Button>
+                <Button
+                  variant="outlined"
+                  onClick={resetFilters}
+                  sx={{ width: { xs: '100%', sm: 'auto' } }}
+                >
+                  Сбросить
+                </Button>
+              </Stack>
+
+              {/* Custom period date fields */}
+              {draftPeriod === 'custom' && (
+                <Stack
+                  direction="row"
+                  spacing={2}
+                  flexWrap="wrap"
+                  useFlexGap
+                  alignItems="center"
+                  sx={{ mb: 2 }}
+                >
+                  <TextField
+                    type="date"
+                    label="Дата от"
+                    size="small"
+                    InputLabelProps={{ shrink: true }}
+                    value={draftCustomStart}
+                    onChange={(e) => setDraftCustomStart(e.target.value)}
+                  />
+                  <TextField
+                    type="date"
+                    label="Дата до"
+                    size="small"
+                    InputLabelProps={{ shrink: true }}
+                    value={draftCustomEnd}
+                    onChange={(e) => setDraftCustomEnd(e.target.value)}
+                  />
+                </Stack>
+              )}
+
+              {/* Active filter chips */}
+              {activeFilterCount() > 0 && (
+                <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap sx={{ mb: 2 }}>
+                  {appliedCourier && (
+                    <Chip
+                      size="small"
+                      color="primary"
+                      onDelete={removeCourierFilter}
+                      label={`Курьер: ${appliedCourier.name}`}
+                    />
+                  )}
+                  {periodChipLabel() && (
+                    <Chip size="small" color="primary" onDelete={removePeriodFilter} label={periodChipLabel()} />
+                  )}
+                  {applied.type && TYPE_META[applied.type] && (
+                    <Chip
+                      size="small"
+                      color="primary"
+                      onDelete={removeTypeFilter}
+                      label={`Тип: ${TYPE_META[applied.type].label}`}
+                    />
+                  )}
+                </Stack>
+              )}
+
+              {txLoading ? (
+                <LinearProgress sx={{ my: 3 }} />
+              ) : transactions.length === 0 ? (
+                <Box sx={{ textAlign: 'center', py: 6 }}>
+                  <Typography variant="h6" sx={{ mb: 1 }}>Операции не найдены</Typography>
+                  <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                    По выбранным фильтрам операций нет.
+                  </Typography>
+                  <Button
+                    variant="outlined"
+                    startIcon={<FilterAltOff />}
+                    onClick={resetFilters}
+                  >
+                    Сбросить фильтры
+                  </Button>
+                </Box>
+              ) : (
+                <>
+                  <TableContainer>
+                    <Table size="small">
+                      <TableHead>
+                        <TableRow>
+                          <TableCell>Дата</TableCell>
+                          <TableCell>Курьер</TableCell>
+                          <TableCell>Тип</TableCell>
+                          <TableCell>Сумма</TableCell>
+                          <TableCell>Баланс после</TableCell>
+                          <TableCell>Описание</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {transactions.map((tx) => (
+                          <TableRow key={tx.id}>
+                            <TableCell>{formatDate(tx.createdAt)}</TableCell>
+                            <TableCell>{tx.courierName}</TableCell>
+                            <TableCell>
+                              <Chip
+                                label={TYPE_META[tx.type]?.label || tx.type}
+                                color={TYPE_META[tx.type]?.color || 'default'}
+                                size="small"
+                              />
+                            </TableCell>
+                            <TableCell sx={{ color: tx.amount >= 0 ? 'green' : 'red', fontWeight: 600 }}>
+                              {tx.amount >= 0 ? '+' : ''}{formatCost(tx.amount)}
+                            </TableCell>
+                            <TableCell>{formatCost(tx.balanceAfter)}</TableCell>
+                            <TableCell>{tx.description}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                  {hasMore && (
+                    <Box sx={{ textAlign: 'center', mt: 2 }}>
+                      <Button variant="outlined" onClick={loadMore} disabled={txLoadingMore}>
+                        {txLoadingMore ? 'Загрузка…' : 'Загрузить ещё'}
+                      </Button>
+                    </Box>
+                  )}
+                </>
+              )}
             </CardContent>
           </Card>
         </Grid>
