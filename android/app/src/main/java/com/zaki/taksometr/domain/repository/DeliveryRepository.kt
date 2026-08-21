@@ -43,6 +43,14 @@ interface DeliveryRepository {
      * empty afterwards, Error when some items still need another attempt.
      */
     suspend fun syncPendingCompletions(): Resource<Unit>
+    /**
+     * Replays the generic offline operation queue (`pending_operations`):
+     * offline-created deliveries, cancellations, marketplace stage changes and
+     * the buffered courier location. Also flushes the offline completion queue.
+     * Returns Success when everything was synced, Error when some operations
+     * need another attempt.
+     */
+    suspend fun syncPendingOperations(): Resource<Unit>
 }
 
 data class TodayStats(

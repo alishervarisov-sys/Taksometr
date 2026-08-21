@@ -28,3 +28,6 @@ Thumbs.db
 *.keystore
 serviceAccountKey.json
 auva-70253-firebase-adminsdk-fbsvc-ab3de45e52.json
+
+# Logs
+firebase/firebase-debug.log

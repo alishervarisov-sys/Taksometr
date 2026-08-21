@@ -373,7 +373,7 @@ async function syncCourierStatus(courierId: string, reason: string): Promise<voi
 
 // ============ CREATE DELIVERY ============
 export const createDelivery = functions.https.onCall(async (data, context) => {
-  const {courierId, clientPhone, deliveryType} = data;
+  const {courierId, clientPhone, deliveryType, deliveryId} = data;
 
   if (!courierId || !clientPhone) {
     throw new functions.https.HttpsError(
@@ -381,6 +381,12 @@ export const createDelivery = functions.https.onCall(async (data, context) => {
       "courierId and clientPhone are required"
     );
   }
+
+  // Optional client-generated id (offline-first). When provided it is used as
+  // the Firestore document id, which makes replays of the same request
+  // idempotent: a retried offline create can never duplicate the order.
+  const isClientSuppliedId =
+    typeof deliveryId === "string" && /^[A-Za-z0-9_-]{1,100}$/.test(deliveryId);
 
   // Get courier info
   const courierDoc = await db.collection("users").doc(courierId).get();
@@ -456,9 +462,22 @@ export const createDelivery = functions.https.onCall(async (data, context) => {
   // ---- TRANSACTION: atomically check active count and create delivery ----
   // This prevents the race condition where two simultaneous requests both
   // pass the active-delivery check and create duplicate records.
-  const deliveryRef = db.collection("deliveries").doc();
+  const deliveryRef = isClientSuppliedId
+    ? db.collection("deliveries").doc(deliveryId)
+    : db.collection("deliveries").doc();
 
+  let replayedExisting = false;
   await db.runTransaction(async (transaction) => {
+    // Idempotent replay of an offline-created delivery: the document already
+    // exists (created by an earlier attempt), so do nothing.
+    if (isClientSuppliedId) {
+      const existing = await transaction.get(deliveryRef);
+      if (existing.exists) {
+        replayedExisting = true;
+        return;
+      }
+    }
+
     const activeDeliveries = await transaction.get(
       db.collection("deliveries")
         .where("courierId", "==", courierId)
@@ -490,6 +509,20 @@ export const createDelivery = functions.https.onCall(async (data, context) => {
     console.log("Saving delivery to Firestore (inside transaction):", deliveryData);
     transaction.set(deliveryRef, deliveryData);
   });
+
+  // The order was already created by an earlier (possibly timed-out) attempt —
+  // return its data without sending a duplicate SMS or re-running side effects.
+  if (replayedExisting) {
+    const existingDoc = await deliveryRef.get();
+    const existingData = existingDoc.data() || {};
+    console.log(`createDelivery: idempotent replay for existing delivery ${deliveryRef.id}`);
+    return {
+      deliveryId: deliveryRef.id,
+      courierName: existingData.courierName || courierData.name || "",
+      deliveryType: existingData.deliveryType || "default",
+      fixedPrice: existingData.fixedPrice ?? null,
+    };
+  }
 
   // ---- Sync courier status: delivery IN_PROGRESS → courier must be ONLINE ----
   await syncCourierStatus(courierId, "createDelivery: new delivery set to IN_PROGRESS");
@@ -925,6 +958,13 @@ export const cancelDelivery = functions.https.onCall(async (data, context) => {
       "permission-denied",
       "Not authorized"
     );
+  }
+
+  // Idempotent: an offline cancel may be replayed after it already succeeded
+  // (or after an admin cancelled the order) — treat it as a success instead of
+  // re-running the side effects below.
+  if (deliveryData.status === "CANCELLED") {
+    return {success: true};
   }
 
     await deliveryRef.update({

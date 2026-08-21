@@ -69,9 +69,9 @@ object AppModule {
         ZaKiDatabase::class.java,
         "zaki_database"
     )
-        .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
-        .fallbackToDestructiveMigration()
-        .build()
+    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+    .fallbackToDestructiveMigration()
+    .build()
 
     private val MIGRATION_1_2 = object : androidx.room.migration.Migration(1, 2) {
         override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
@@ -156,6 +156,35 @@ object AppModule {
         }
     }
 
+    // Adds the generic offline operation queue (offline-created deliveries,
+    // cancellations, marketplace stage changes, buffered courier location) and
+    // the offline tariff cache used by the taxometer.
+    private val MIGRATION_6_7 = object : androidx.room.migration.Migration(6, 7) {
+        override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+            db.execSQL("""
+                CREATE TABLE IF NOT EXISTS pending_operations (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    type TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    createdAt INTEGER NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0
+                )
+            """.trimIndent())
+            db.execSQL("""
+                CREATE TABLE IF NOT EXISTS tariff_cache (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    baseCost REAL NOT NULL,
+                    baseDistanceKm REAL NOT NULL,
+                    costPerKm REAL NOT NULL,
+                    fixedTypesJson TEXT NOT NULL,
+                    heavyCargoJson TEXT NOT NULL,
+                    currency TEXT NOT NULL,
+                    updatedAt INTEGER NOT NULL
+                )
+            """.trimIndent())
+        }
+    }
+
     @Provides
     @Singleton
     fun provideRoutePointDao(database: ZaKiDatabase): RoutePointDao = database.routePointDao()
@@ -181,6 +210,16 @@ object AppModule {
 
     @Provides
     @Singleton
+    fun providePendingOperationDao(database: ZaKiDatabase): com.zaki.taksometr.data.local.dao.PendingOperationDao =
+        database.pendingOperationDao()
+
+    @Provides
+    @Singleton
+    fun provideTariffCacheDao(database: ZaKiDatabase): com.zaki.taksometr.data.local.dao.TariffCacheDao =
+        database.tariffCacheDao()
+
+    @Provides
+    @Singleton
     fun provideAuthRepository(
         @ApplicationContext context: Context,
         firestore: FirebaseFirestore,
@@ -196,11 +235,12 @@ object AppModule {
         deliveryDao: DeliveryDao,
         routePointDao: RoutePointDao,
         pendingCompletionDao: PendingCompletionDao,
+        pendingOperationDao: com.zaki.taksometr.data.local.dao.PendingOperationDao,
         tariffRepository: TariffRepository,
         prefs: SharedPreferences
     ): DeliveryRepository = DeliveryRepositoryImpl(
         context, firestore, functions, deliveryDao, routePointDao,
-        pendingCompletionDao, tariffRepository, prefs
+        pendingCompletionDao, pendingOperationDao, tariffRepository, prefs
     )
 
     @Provides
@@ -222,15 +262,18 @@ object AppModule {
         @ApplicationContext context: Context,
         fusedLocationClient: FusedLocationProviderClient,
         routePointDao: RoutePointDao,
-        firestore: FirebaseFirestore
+        firestore: FirebaseFirestore,
+        pendingOperationDao: com.zaki.taksometr.data.local.dao.PendingOperationDao
     ): LocationRepository = LocationRepositoryImpl(
-        context, fusedLocationClient, routePointDao, firestore
+        context, fusedLocationClient, routePointDao, firestore, pendingOperationDao
     )
 
     @Provides
     @Singleton
     fun provideTariffRepository(
+        @ApplicationContext context: Context,
         firestore: FirebaseFirestore,
-        functions: FirebaseFunctions
-    ): TariffRepository = TariffRepositoryImpl(firestore, functions)
+        functions: FirebaseFunctions,
+        tariffCacheDao: com.zaki.taksometr.data.local.dao.TariffCacheDao
+    ): TariffRepository = TariffRepositoryImpl(context, firestore, functions, tariffCacheDao)
 }

@@ -15,6 +15,11 @@ class ZaKiApp : Application() {
         // Flush any deliveries that were completed offline in a previous session
         // once the network is available again.
         com.zaki.taksometr.service.CompletionSyncWorker.schedule(this)
+        // Replay the offline operation queue (offline-created deliveries,
+        // cancellations, stage changes, buffered location) when online, plus a
+        // periodic safety net every 15 minutes.
+        com.zaki.taksometr.service.OperationSyncWorker.schedule(this)
+        com.zaki.taksometr.service.OperationSyncWorker.schedulePeriodic(this)
     }
 
     private fun createNotificationChannels() {

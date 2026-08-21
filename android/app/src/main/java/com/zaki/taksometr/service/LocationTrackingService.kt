@@ -16,7 +16,9 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.zaki.taksometr.R
 import com.zaki.taksometr.ZaKiApp
 import com.zaki.taksometr.data.local.dao.DeliveryDao
+import com.zaki.taksometr.data.local.dao.PendingOperationDao
 import com.zaki.taksometr.data.local.dao.RoutePointDao
+import com.zaki.taksometr.data.local.entity.PendingOperationEntity
 import com.zaki.taksometr.data.local.entity.RoutePointEntity
 import com.zaki.taksometr.domain.model.GeoPoint
 import com.zaki.taksometr.domain.repository.TariffRepository
@@ -38,6 +40,7 @@ class LocationTrackingService : Service() {
     @Inject lateinit var firestore: FirebaseFirestore
     @Inject lateinit var prefs: SharedPreferences
     @Inject lateinit var tariffRepository: TariffRepository
+    @Inject lateinit var pendingOperationDao: PendingOperationDao
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var wakeLock: PowerManager.WakeLock? = null
@@ -295,9 +298,33 @@ class LocationTrackingService : Service() {
         if (now - lastFirestoreUpdate < 10000) return
         lastFirestoreUpdate = now
 
+        val cId = courierId
+        if (cId.isEmpty()) return
+
+        // Offline: buffer the latest position in the pending-operations queue
+        // (single REPLACE row) instead of silently dropping it. It is pushed to
+        // Firestore by OperationSyncWorker once the network is back.
+        if (!isNetworkAvailable()) {
+            try {
+                pendingOperationDao.insert(
+                    PendingOperationEntity(
+                        id = PendingOperationEntity.LOCATION_OP_ID,
+                        type = PendingOperationEntity.TYPE_COURIER_LOCATION,
+                        payload = org.json.JSONObject()
+                            .put("courierId", cId)
+                            .put("latitude", point.latitude)
+                            .put("longitude", point.longitude)
+                            .put("timestamp", point.timestamp)
+                            .toString()
+                    )
+                )
+            } catch (_: Exception) {}
+            return
+        }
+
         try {
             firestore.collection(Constants.COLLECTION_USERS)
-                .document(courierId)
+                .document(cId)
                 .update(
                     mapOf(
                         "lastLocation" to mapOf(
@@ -308,7 +335,35 @@ class LocationTrackingService : Service() {
                     )
                 )
                 .await()
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            // Network dropped mid-call — buffer for later replay.
+            try {
+                pendingOperationDao.insert(
+                    PendingOperationEntity(
+                        id = PendingOperationEntity.LOCATION_OP_ID,
+                        type = PendingOperationEntity.TYPE_COURIER_LOCATION,
+                        payload = org.json.JSONObject()
+                            .put("courierId", cId)
+                            .put("latitude", point.latitude)
+                            .put("longitude", point.longitude)
+                            .put("timestamp", point.timestamp)
+                            .toString()
+                    )
+                )
+            } catch (_: Exception) {}
+        }
+    }
+
+    private fun isNetworkAvailable(): Boolean {
+        return try {
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
+                ?: return false
+            val network = cm.activeNetwork ?: return false
+            val caps = cm.getNetworkCapabilities(network) ?: return false
+            caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        } catch (_: Exception) {
+            false
+        }
     }
 
     private fun startWidgetTimer() {

@@ -9,9 +9,11 @@ import com.google.firebase.firestore.Query
 import com.google.firebase.functions.FirebaseFunctions
 import com.zaki.taksometr.data.local.dao.DeliveryDao
 import com.zaki.taksometr.data.local.dao.PendingCompletionDao
+import com.zaki.taksometr.data.local.dao.PendingOperationDao
 import com.zaki.taksometr.data.local.dao.RoutePointDao
 import com.zaki.taksometr.data.local.entity.DeliveryEntity
 import com.zaki.taksometr.data.local.entity.PendingCompletionEntity
+import com.zaki.taksometr.data.local.entity.PendingOperationEntity
 import com.zaki.taksometr.domain.model.Delivery
 import com.zaki.taksometr.domain.model.DeliveryStatus
 import com.zaki.taksometr.domain.model.GeoPoint
@@ -19,6 +21,7 @@ import com.zaki.taksometr.domain.repository.DeliveryRepository
 import com.zaki.taksometr.domain.repository.TariffRepository
 import com.zaki.taksometr.domain.repository.TodayStats
 import com.zaki.taksometr.service.CompletionSyncWorker
+import com.zaki.taksometr.service.OperationSyncWorker
 import com.zaki.taksometr.util.Constants
 import com.zaki.taksometr.util.LocationUtils
 import com.zaki.taksometr.util.Resource
@@ -30,6 +33,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.tasks.await
+import org.json.JSONObject
 import java.util.*
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -42,6 +46,7 @@ class DeliveryRepositoryImpl @Inject constructor(
     private val deliveryDao: DeliveryDao,
     private val routePointDao: RoutePointDao,
     private val pendingCompletionDao: PendingCompletionDao,
+    private val pendingOperationDao: PendingOperationDao,
     private val tariffRepository: TariffRepository,
     private val prefs: SharedPreferences
 ) : DeliveryRepository {
@@ -63,6 +68,14 @@ class DeliveryRepositoryImpl @Inject constructor(
         get() = prefs.getString(Constants.PREF_USER_ID, "") ?: ""
 
     override suspend fun createDelivery(clientPhone: String, deliveryType: String): Resource<Delivery> {
+        // Offline: don't block the courier. Create the delivery locally with a
+        // client-generated id (which the server later uses as the Firestore
+        // document id, so the replayed create is idempotent) and queue the
+        // server call for OperationSyncWorker.
+        if (!isNetworkAvailable()) {
+            return createDeliveryOffline(clientPhone, deliveryType)
+        }
+
         return try {
             // Call Cloud Function to create delivery (server-side validation)
             val data = hashMapOf(
@@ -82,11 +95,11 @@ class DeliveryRepositoryImpl @Inject constructor(
             @Suppress("UNCHECKED_CAST")
             val responseData = result.data as Map<String, Any>
             android.util.Log.d("DeliveryRepo", "createDelivery response: $responseData")
-            
+
             val deliveryId = responseData["deliveryId"] as String
             val responseDeliveryType = responseData["deliveryType"] as? String ?: "default"
             val responseFixedPrice = (responseData["fixedPrice"] as? Number)?.toDouble()
-            
+
             android.util.Log.d("DeliveryRepo", "Parsed - deliveryId: $deliveryId, type: $responseDeliveryType, price: $responseFixedPrice")
 
             val delivery = Delivery(
@@ -99,7 +112,7 @@ class DeliveryRepositoryImpl @Inject constructor(
                 deliveryType = responseDeliveryType,
                 fixedPrice = responseFixedPrice
             )
-            
+
             android.util.Log.d("DeliveryRepo", "Created delivery object: $delivery")
 
             // Save locally
@@ -112,39 +125,84 @@ class DeliveryRepositoryImpl @Inject constructor(
             Resource.Success(delivery)
         } catch (e: Exception) {
             android.util.Log.e("DeliveryRepo", "Error creating delivery", e)
+            // Connectivity dropped mid-call — fall back to the offline path so
+            // the courier can still start the meter right away.
+            if (!isNetworkAvailable()) {
+                android.util.Log.w("DeliveryRepo", "Network lost during create — creating offline")
+                return createDeliveryOffline(clientPhone, deliveryType)
+            }
             Resource.Error("Ошибка создания доставки: ${e.localizedMessage}")
         }
     }
 
+    /**
+     * Creates the delivery fully locally: a UUID id (later reused as the
+     * Firestore document id by the server, which makes the queued create
+     * idempotent — a replay can never produce a duplicate order), the fixed
+     * price from the local tariff cache, and a queued CREATE_DELIVERY operation
+     * that OperationSyncWorker replays once the network is back.
+     */
+    private suspend fun createDeliveryOffline(
+        clientPhone: String,
+        deliveryType: String
+    ): Resource<Delivery> {
+        val deliveryId = UUID.randomUUID().toString()
+        val courierName = prefs.getString(Constants.PREF_USER_NAME, "") ?: ""
+
+        // Resolve the fixed price locally from the tariff cache.
+        var actualType = deliveryType
+        var fixedPrice: Double? = null
+        if (deliveryType != "default" && deliveryType != "heavyCargoMeter") {
+            val fixedTypes = tariffRepository.getFixedDeliveryTypes()
+            val price = fixedTypes[deliveryType]
+            if (price != null && price > 0) {
+                fixedPrice = price
+            } else {
+                actualType = "default"
+            }
+        }
+
+        val now = System.currentTimeMillis()
+        val delivery = Delivery(
+            id = deliveryId,
+            courierId = userId,
+            courierName = courierName,
+            clientPhone = clientPhone,
+            status = DeliveryStatus.IN_PROGRESS,
+            startTime = now,
+            deliveryType = actualType,
+            fixedPrice = fixedPrice,
+            createdAt = now
+        )
+
+        deliveryDao.insert(DeliveryEntity.fromDelivery(delivery).copy(isSynced = false))
+        makeCurrent(deliveryId)
+
+        pendingOperationDao.insert(
+            PendingOperationEntity(
+                id = deliveryId,
+                type = PendingOperationEntity.TYPE_CREATE_DELIVERY,
+                payload = JSONObject()
+                    .put("deliveryId", deliveryId)
+                    .put("clientPhone", clientPhone)
+                    .put("deliveryType", actualType)
+                    .put("fixedPrice", fixedPrice ?: JSONObject.NULL)
+                    .toString()
+            )
+        )
+        OperationSyncWorker.schedule(context)
+
+        android.util.Log.w("DeliveryRepo", "Created delivery OFFLINE: $deliveryId (queued for sync)")
+        return Resource.Success(delivery)
+    }
+
     override suspend fun getFixedDeliveryTypes(): Resource<Map<String, Double>> {
+        // Served from the local tariff cache (Room + memory) — no network, no
+        // UI blocking. The cache refreshes from Firestore in the background.
         return try {
-            val doc = firestore.collection("tariffs")
-                .document("default")
-                .get()
-                .await()
-
-            if (!doc.exists()) {
-                android.util.Log.d("DeliveryRepo", "Tariff document does not exist")
-                return Resource.Success(emptyMap())
-            }
-
-            @Suppress("UNCHECKED_CAST")
-            val fixedTypes = doc.get("fixedTypes") as? Map<String, Any> ?: emptyMap()
-            
-            android.util.Log.d("DeliveryRepo", "Loaded fixedTypes: $fixedTypes")
-            
-            val result = fixedTypes.mapValues { (_, value) ->
-                when (value) {
-                    is Number -> value.toDouble()
-                    else -> 0.0
-                }
-            }
-            
-            android.util.Log.d("DeliveryRepo", "Converted result: $result")
-
-            Resource.Success(result)
+            Resource.Success(tariffRepository.getFixedDeliveryTypes())
         } catch (e: Exception) {
-            android.util.Log.e("DeliveryRepo", "Error loading tariffs", e)
+            android.util.Log.e("DeliveryRepo", "Error loading cached tariffs", e)
             Resource.Error("Ошибка загрузки тарифов: ${e.localizedMessage}")
         }
     }
@@ -387,6 +445,13 @@ class DeliveryRepositoryImpl @Inject constructor(
 
                 // The order vanished on the server — nothing to finalize.
                 if (!doc.exists()) {
+                    // Unless it was created offline and its create operation is
+                    // still queued: keep the completion so it finalizes right
+                    // after the create is replayed.
+                    if (pendingOperationDao.getById(item.deliveryId) != null) {
+                        allDone = false
+                        continue
+                    }
                     pendingCompletionDao.deleteById(item.deliveryId)
                     continue
                 }
@@ -474,10 +539,164 @@ class DeliveryRepositoryImpl @Inject constructor(
         return if (allDone) Resource.Success(Unit) else Resource.Error("Есть несинхронизированные завершения")
     }
 
+    /**
+     * Replays the generic offline operation queue in FIFO order. Each operation
+     * is idempotent on the server, so a retry after a partial failure can never
+     * apply the same change twice. Also flushes the offline completion queue
+     * afterwards.
+     */
+    override suspend fun syncPendingOperations(): Resource<Unit> {
+        val ops = pendingOperationDao.getAll()
+        if (ops.isEmpty()) {
+            // Nothing queued — still make sure offline completions are flushed.
+            return syncPendingCompletions()
+        }
+
+        android.util.Log.d("DeliveryRepo", "syncPendingOperations: ${ops.size} queued")
+        var allDone = true
+
+        for (op in ops) {
+            try {
+                when (op.type) {
+                    PendingOperationEntity.TYPE_CREATE_DELIVERY -> {
+                        val payload = op.payloadJson()
+                        val deliveryId = payload.getString("deliveryId")
+                        functions.getHttpsCallable("createDelivery")
+                            .call(hashMapOf(
+                                "deliveryId" to deliveryId,
+                                "courierId" to userId,
+                                "clientPhone" to payload.getString("clientPhone"),
+                                "deliveryType" to payload.optString("deliveryType", "default")
+                            ))
+                            .await()
+                        // The server reused our id / the doc already existed —
+                        // either way it now exists server-side. Reconcile fields.
+                        deliveryDao.getById(deliveryId)?.let { entity ->
+                            val remote = firestore.collection(Constants.COLLECTION_DELIVERIES)
+                                .document(deliveryId)
+                                .get()
+                                .await()
+                            val updated = if (remote.exists()) {
+                                entity.copy(
+                                    courierName = remote.getString("courierName") ?: entity.courierName,
+                                    deliveryType = remote.getString("deliveryType") ?: entity.deliveryType,
+                                    fixedPrice = remote.getDouble("fixedPrice") ?: entity.fixedPrice,
+                                    startTime = remote.getLong("startTime") ?: entity.startTime,
+                                    isSynced = true
+                                )
+                            } else {
+                                entity.copy(isSynced = true)
+                            }
+                            deliveryDao.update(updated)
+                        }
+                        pendingOperationDao.deleteById(op.id)
+                        android.util.Log.d("DeliveryRepo", "Pending create synced: $deliveryId")
+                    }
+
+                    PendingOperationEntity.TYPE_CANCEL_DELIVERY -> {
+                        val payload = op.payloadJson()
+                        val deliveryId = payload.getString("deliveryId")
+                        functions.getHttpsCallable("cancelDelivery")
+                            .call(hashMapOf(
+                                "deliveryId" to deliveryId,
+                                "courierId" to userId
+                            ))
+                            .await()
+                        pendingOperationDao.deleteById(op.id)
+                        android.util.Log.d("DeliveryRepo", "Pending cancel synced: $deliveryId")
+                    }
+
+                    PendingOperationEntity.TYPE_MARKETPLACE_STAGE -> {
+                        val payload = op.payloadJson()
+                        val data = hashMapOf<String, Any>(
+                            "deliveryId" to payload.getString("deliveryId"),
+                            "courierId" to userId
+                        )
+                        if (!payload.isNull("stage")) data["stage"] = payload.getString("stage")
+                        if (!payload.isNull("waitingAction")) data["waitingAction"] = payload.getString("waitingAction")
+                        functions.getHttpsCallable("updateMarketplaceDeliveryStage")
+                            .call(data)
+                            .await()
+                        pendingOperationDao.deleteById(op.id)
+                        android.util.Log.d("DeliveryRepo", "Pending stage synced: ${payload.getString("deliveryId")}")
+                    }
+
+                    PendingOperationEntity.TYPE_COURIER_LOCATION -> {
+                        val payload = op.payloadJson()
+                        firestore.collection(Constants.COLLECTION_USERS)
+                            .document(payload.getString("courierId"))
+                            .update(mapOf(
+                                "lastLocation" to mapOf(
+                                    "latitude" to payload.getDouble("latitude"),
+                                    "longitude" to payload.getDouble("longitude"),
+                                    "timestamp" to payload.getLong("timestamp")
+                                )
+                            ))
+                            .await()
+                        pendingOperationDao.deleteById(op.id)
+                    }
+                }
+            } catch (e: Exception) {
+                val message = e.message ?: ""
+                val isTerminal = when (op.type) {
+                    PendingOperationEntity.TYPE_CREATE_DELIVERY ->
+                        // Server permanently refuses this create (courier blocked,
+                        // balance too low, or above the concurrency limit).
+                        message.contains("blocked") ||
+                            message.contains("Недостаточно средств") ||
+                            message.contains("maximum number of active deliveries")
+                    PendingOperationEntity.TYPE_CANCEL_DELIVERY ->
+                        message.contains("not found") || message.contains("Delivery not found")
+                    PendingOperationEntity.TYPE_MARKETPLACE_STAGE ->
+                        // The order was completed/cancelled/reassigned server-side
+                        // in the meantime — the server state is authoritative.
+                        message.contains("not found") ||
+                            message.contains("Not authorized") ||
+                            message.contains("not a marketplace") ||
+                            message.contains("not in progress") ||
+                            message.contains("Delivery is not in progress")
+                    else -> false
+                }
+
+                if (isTerminal) {
+                    android.util.Log.w("DeliveryRepo", "Dropping terminal-failed op ${op.id}: $message")
+                    pendingOperationDao.deleteById(op.id)
+                    if (op.type == PendingOperationEntity.TYPE_CREATE_DELIVERY) {
+                        // The server refused the offline-created order — cancel it
+                        // locally so the courier's active list stays consistent.
+                        val deliveryId = op.payloadJson().getString("deliveryId")
+                        deliveryDao.getById(deliveryId)?.let { entity ->
+                            deliveryDao.update(
+                                entity.copy(status = DeliveryStatus.CANCELLED.name, isSynced = true)
+                            )
+                        }
+                        routePointDao.deleteByDeliveryId(deliveryId)
+                        switchToRemainingActiveOrClear(deliveryId)
+                    }
+                } else {
+                    android.util.Log.e("DeliveryRepo", "syncPendingOperations op failed: ${op.id}", e)
+                    pendingOperationDao.incrementAttempts(op.id)
+                    allDone = false
+                    if (!isNetworkAvailable()) break
+                }
+            }
+        }
+
+        if (!allDone) {
+            return Resource.Error("Есть несинхронизированные операции")
+        }
+        return syncPendingCompletions()
+    }
+
         override suspend fun cancelDelivery(deliveryId: String): Resource<Unit> {
         android.util.Log.d("DeliveryRepo", "=== CANCEL DELIVERY ===")
         android.util.Log.d("DeliveryRepo", "deliveryId=$deliveryId")
-        
+
+        // Offline: cancel locally and queue the server call.
+        if (!isNetworkAvailable()) {
+            return cancelDeliveryOffline(deliveryId)
+        }
+
         return try {
             val data = hashMapOf(
                 "deliveryId" to deliveryId,
@@ -491,7 +710,7 @@ class DeliveryRepositoryImpl @Inject constructor(
             val entity = deliveryDao.getById(deliveryId)
             entity?.let {
                 android.util.Log.d("DeliveryRepo", "Updating local status to CANCELLED")
-                deliveryDao.update(it.copy(status = DeliveryStatus.CANCELLED.name))
+                deliveryDao.update(it.copy(status = DeliveryStatus.CANCELLED.name, isSynced = true))
             }
 
             // Clear route points
@@ -504,8 +723,41 @@ class DeliveryRepositoryImpl @Inject constructor(
         } catch (e: Exception) {
             android.util.Log.e("DeliveryRepo", "=== CANCEL DELIVERY ERROR ===")
             android.util.Log.e("DeliveryRepo", "Error: ${e.message}", e)
+            // Connectivity dropped mid-call — fall back to the offline path.
+            if (!isNetworkAvailable()) {
+                return cancelDeliveryOffline(deliveryId)
+            }
             Resource.Error("Ошибка отмены доставки: ${e.localizedMessage}")
         }
+    }
+
+    /**
+     * Cancels the delivery locally and queues a CANCEL_DELIVERY operation; the
+     * server call is replayed by OperationSyncWorker once the network is back.
+     */
+    private suspend fun cancelDeliveryOffline(deliveryId: String): Resource<Unit> {
+        val entity = deliveryDao.getById(deliveryId)
+            ?: return Resource.Error("Доставка не найдена локально")
+
+        deliveryDao.update(
+            entity.copy(status = DeliveryStatus.CANCELLED.name, isSynced = false)
+        )
+        routePointDao.deleteByDeliveryId(deliveryId)
+        switchToRemainingActiveOrClear(deliveryId)
+
+        pendingOperationDao.insert(
+            PendingOperationEntity(
+                id = "cancel_$deliveryId",
+                type = PendingOperationEntity.TYPE_CANCEL_DELIVERY,
+                payload = JSONObject()
+                    .put("deliveryId", deliveryId)
+                    .toString()
+            )
+        )
+        OperationSyncWorker.schedule(context)
+
+        android.util.Log.w("DeliveryRepo", "Cancelled delivery OFFLINE: $deliveryId (queued for sync)")
+        return Resource.Success(Unit)
     }
 
     override fun getActiveDelivery(): Flow<Delivery?> {
@@ -735,53 +987,107 @@ class DeliveryRepositoryImpl @Inject constructor(
         stage: String?,
         waitingAction: String?
     ): Resource<Unit> {
-        return try {
-            val data = hashMapOf<String, Any>(
-                "deliveryId" to deliveryId,
-                "courierId" to userId
-            )
-            if (stage != null) data["stage"] = stage
-            if (waitingAction != null) data["waitingAction"] = waitingAction
+        val data = hashMapOf<String, Any>(
+            "deliveryId" to deliveryId,
+            "courierId" to userId
+        )
+        if (stage != null) data["stage"] = stage
+        if (waitingAction != null) data["waitingAction"] = waitingAction
 
+        // Offline: update the local state immediately (optimistic, the meter
+        // and waiting timer must not depend on the network) and queue the
+        // server call for OperationSyncWorker.
+        if (!isNetworkAvailable()) {
+            return updateMarketplaceStageOffline(deliveryId, stage, waitingAction)
+        }
+
+        return try {
             functions.getHttpsCallable("updateMarketplaceDeliveryStage")
                 .call(data)
                 .await()
 
-            val now = System.currentTimeMillis()
-            val current = deliveryDao.getById(deliveryId)
-            current?.let {
-                // Maintain persisted waiting so it survives pausing/switching.
-                var accumulated = it.waitingAccumulatedMs
-                var waitingStartedAt = it.waitingStartedAt
-                when (waitingAction) {
-                    "START" -> if (waitingStartedAt == null) waitingStartedAt = now
-                    "STOP" -> if (waitingStartedAt != null) {
-                        accumulated += (now - waitingStartedAt).coerceAtLeast(0L)
-                        waitingStartedAt = null
-                    }
-                }
-                val onTheWayStartedAt = if (stage == "ON_THE_WAY" && it.onTheWayStartedAt == null) {
-                    now
-                } else {
-                    it.onTheWayStartedAt
-                }
-                deliveryDao.update(it.copy(
-                    adminOrderStage = stage ?: it.adminOrderStage,
-                    waitingStartedAt = waitingStartedAt,
-                    waitingAccumulatedMs = accumulated,
-                    onTheWayStartedAt = onTheWayStartedAt
-                ))
-            }
-            if (stage == "ON_THE_WAY") {
-                // Keep the legacy global pref for backward compatibility (used as a
-                // fallback for deliveries that reached ON_THE_WAY before this update).
-                prefs.edit()
-                    .putLong(Constants.PREF_ON_THE_WAY_STARTED_AT, now)
-                    .apply()
-            }
+            applyMarketplaceStageLocally(deliveryId, stage, waitingAction)
             Resource.Success(Unit)
         } catch (e: Exception) {
+            android.util.Log.e("DeliveryRepo", "Error updating marketplace stage", e)
+            // Connectivity dropped mid-call — apply locally and queue.
+            if (!isNetworkAvailable()) {
+                return updateMarketplaceStageOffline(deliveryId, stage, waitingAction)
+            }
             Resource.Error("Ошибка обновления статуса заказа: ${e.localizedMessage}")
+        }
+    }
+
+    /**
+     * Applies the stage/waiting change to the local DB right away and queues a
+     * MARKETPLACE_STAGE operation. The server call is idempotent (it sets an
+     * absolute stage and guards START/STOP), so a replay is safe.
+     */
+    private suspend fun updateMarketplaceStageOffline(
+        deliveryId: String,
+        stage: String?,
+        waitingAction: String?
+    ): Resource<Unit> {
+        applyMarketplaceStageLocally(deliveryId, stage, waitingAction)
+
+        pendingOperationDao.insert(
+            PendingOperationEntity(
+                // One queued op per stage/waiting action, newest wins on replay.
+                id = "stage_${deliveryId}_${stage ?: waitingAction ?: ""}_${System.currentTimeMillis()}",
+                type = PendingOperationEntity.TYPE_MARKETPLACE_STAGE,
+                payload = JSONObject()
+                    .put("deliveryId", deliveryId)
+                    .put("stage", stage ?: JSONObject.NULL)
+                    .put("waitingAction", waitingAction ?: JSONObject.NULL)
+                    .toString()
+            )
+        )
+        OperationSyncWorker.schedule(context)
+
+        android.util.Log.w(
+            "DeliveryRepo",
+            "Marketplace stage updated OFFLINE: $deliveryId stage=$stage waiting=$waitingAction (queued)"
+        )
+        return Resource.Success(Unit)
+    }
+
+    /** Persists the stage/waiting change to the local DB (shared online/offline path). */
+    private suspend fun applyMarketplaceStageLocally(
+        deliveryId: String,
+        stage: String?,
+        waitingAction: String?
+    ) {
+        val now = System.currentTimeMillis()
+        val current = deliveryDao.getById(deliveryId)
+        current?.let {
+            // Maintain persisted waiting so it survives pausing/switching.
+            var accumulated = it.waitingAccumulatedMs
+            var waitingStartedAt = it.waitingStartedAt
+            when (waitingAction) {
+                "START" -> if (waitingStartedAt == null) waitingStartedAt = now
+                "STOP" -> if (waitingStartedAt != null) {
+                    accumulated += (now - waitingStartedAt).coerceAtLeast(0L)
+                    waitingStartedAt = null
+                }
+            }
+            val onTheWayStartedAt = if (stage == "ON_THE_WAY" && it.onTheWayStartedAt == null) {
+                now
+            } else {
+                it.onTheWayStartedAt
+            }
+            deliveryDao.update(it.copy(
+                adminOrderStage = stage ?: it.adminOrderStage,
+                waitingStartedAt = waitingStartedAt,
+                waitingAccumulatedMs = accumulated,
+                onTheWayStartedAt = onTheWayStartedAt
+            ))
+        }
+        if (stage == "ON_THE_WAY") {
+            // Keep the legacy global pref for backward compatibility (used as a
+            // fallback for deliveries that reached ON_THE_WAY before this update).
+            prefs.edit()
+                .putLong(Constants.PREF_ON_THE_WAY_STARTED_AT, now)
+                .apply()
         }
     }
 
@@ -905,6 +1211,15 @@ class DeliveryRepositoryImpl @Inject constructor(
             
             if (!doc.exists()) {
                 android.util.Log.w("DeliveryRepo", "Delivery $deliveryId not found in Firestore!")
+                // An offline-created delivery has no server document yet — its
+                // create operation is still queued. Never delete it; schedule a
+                // sync instead so the document appears as soon as possible.
+                if (pendingOperationDao.getById(deliveryId) != null) {
+                    android.util.Log.d("DeliveryRepo", "Delivery $deliveryId has a pending create op — keeping local")
+                    OperationSyncWorker.schedule(context)
+                    val localEntity = deliveryDao.getById(deliveryId)
+                    return Resource.Success(localEntity?.toDelivery())
+                }
                 // Delete from local and clear prefs
                 deliveryDao.deleteById(deliveryId)
                 prefs.edit().remove(Constants.PREF_ACTIVE_DELIVERY_ID).apply()
