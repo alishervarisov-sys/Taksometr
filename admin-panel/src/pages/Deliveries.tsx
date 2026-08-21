@@ -10,7 +10,7 @@ import {
   AddressSuggestion, PhoneSuggestion,
 } from '../components/OrderAutocomplete';
 import { Search } from '@mui/icons-material';
-import { collection, getDocs, query, orderBy, limit, doc, getDoc, where, onSnapshot } from 'firebase/firestore';
+import { collection, getDocs, query, orderBy, limit, doc, getDoc, where, onSnapshot, startAfter, QueryDocumentSnapshot, DocumentData, QueryConstraint } from 'firebase/firestore';
 import { GoogleMap, useJsApiLoader, PolylineF, MarkerF } from '@react-google-maps/api';
 import { db, GOOGLE_MAPS_API_KEY, functions } from '../firebase';
 import { httpsCallable } from 'firebase/functions';
@@ -46,7 +46,7 @@ interface CourierOption {
   name: string;
 }
 
-type Period = 'all' | 'today' | 'yesterday' | 'week' | 'month' | 'year';
+type Period = 'all' | 'today' | 'yesterday' | 'week' | 'month' | 'year' | 'custom';
 type ReportType = 'commission' | 'earnings';
 
 interface DeliveriesProps {
@@ -60,9 +60,18 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
   const [detailOpen, setDetailOpen] = useState(false);
   const [couriers, setCouriers] = useState<CourierOption[]>([]);
   const [selectedCourier, setSelectedCourier] = useState('all');
-  const [period, setPeriod] = useState<Period>('all');
+  // Default 'today': the deliveries table opens with today's orders only.
+  // The toggle also filters the live table immediately (not just the report).
+  const [period, setPeriod] = useState<Period>('today');
+  // Custom date range ("от" — "до") for the 'custom' period, as yyyy-MM-dd strings.
+  const [customFrom, setCustomFrom] = useState('');
+  const [customTo, setCustomTo] = useState('');
   const [reportType, setReportType] = useState<ReportType>('earnings');
   const [reportResult, setReportResult] = useState<{ total: number; count: number } | null>(null);
+  // Deliveries fetched from Firestore for the calculated report period. When set,
+  // the table shows this snapshot instead of the live (limit 200) subscription.
+  const [reportDeliveries, setReportDeliveries] = useState<Delivery[] | null>(null);
+  const [isCalculating, setIsCalculating] = useState(false);
   const [problemDeliveries, setProblemDeliveries] = useState<Delivery[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
@@ -216,41 +225,117 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
 
   const getDateRange = (p: Period): { start: number; end: number } => {
     const now = new Date();
-    let start = 0;
-    let end = now.getTime();
+    // End of the current local day (23:59:59.999), so orders near the day
+    // boundary are not lost due to timezone/client clock differences.
+    const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime() - 1;
 
     switch (p) {
       case 'today': {
-        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-        start = todayStart.getTime();
-        break;
+        // Start of the current local day (00:00:00.000).
+        const start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+        return { start, end: endOfToday };
       }
       case 'yesterday': {
-        const yesterdayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
-        const yesterdayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-        start = yesterdayStart.getTime();
-        end = yesterdayEnd.getTime() - 1;
-        break;
+        const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1).getTime();
+        const end = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() - 1;
+        return { start, end };
       }
-      case 'week': start = end - 7 * 86400000; break;
-      case 'month': start = end - 30 * 86400000; break;
-      case 'year': start = end - 365 * 86400000; break;
-      default: start = 0;
+      case 'week': {
+        // Last 7 days (rolling), aligned to the start of that day.
+        const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6).getTime();
+        return { start, end: endOfToday };
+      }
+      case 'month': {
+        // Calendar month: from the 1st of the current month to today inclusive.
+        const start = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+        return { start, end: endOfToday };
+      }
+      case 'year': {
+        // Calendar year: from January 1st of the current year.
+        const start = new Date(now.getFullYear(), 0, 1).getTime();
+        return { start, end: endOfToday };
+      }
+      case 'custom': {
+        // Explicit "от — до" range picked by the user. Each boundary is
+        // inclusive: from 00:00:00.000 of the start date to 23:59:59.999
+        // of the end date (local time).
+        const fromDate = customFrom ? new Date(customFrom + 'T00:00:00') : null;
+        const toDate = customTo ? new Date(customTo + 'T23:59:59.999') : null;
+        return {
+          start: fromDate ? fromDate.getTime() : 0,
+          end: toDate ? toDate.getTime() : Number.MAX_SAFE_INTEGER,
+        };
+      }
+      default:
+        return { start: 0, end: Number.MAX_SAFE_INTEGER };
     }
-    return { start, end };
   };
 
-  const handleCalculate = () => {
-    const { start, end } = getDateRange(period);
-    const filtered = deliveries.filter(d => {
-      if (d.status !== 'COMPLETED') return false;
-      if (selectedCourier !== 'all' && d.courierId !== selectedCourier) return false;
-      if (period !== 'all' && (d.createdAt < start || d.createdAt > end)) return false;
-      return true;
-    });
+  // Fetch ALL deliveries within [start, end] from Firestore using cursor
+  // pagination (no single huge limit). Status/courier filters are applied
+  // client-side afterwards, so no composite Firestore indexes are required.
+  const fetchDeliveriesInRange = async (start: number, end: number): Promise<Delivery[]> => {
+    const PAGE_SIZE = 500;
+    const MAX_PAGES = 40; // safety cap: 40 * 500 = 20000 docs
+    const result: Delivery[] = [];
+    let cursor: QueryDocumentSnapshot<DocumentData> | null = null;
+    for (let page = 0; page < MAX_PAGES; page++) {
+      const constraints: QueryConstraint[] = [
+        where('createdAt', '>=', start),
+        where('createdAt', '<=', end),
+        orderBy('createdAt', 'desc'),
+        limit(PAGE_SIZE),
+      ];
+      if (cursor) constraints.push(startAfter(cursor));
+      const q = query(collection(db, 'deliveries'), ...constraints);
+      const snapshot = await getDocs(q);
+      result.push(...snapshot.docs.map(d => ({ id: d.id, ...d.data() })) as Delivery[]);
+      if (snapshot.docs.length < PAGE_SIZE) return result;
+      cursor = snapshot.docs[snapshot.docs.length - 1];
+    }
+    alert(`Загружено максимум ${MAX_PAGES * PAGE_SIZE} доставок. Итоги и таблица могут быть неполными — уточните период.`);
+    return result;
+  };
 
-    const total = filtered.reduce((sum, d) => sum + (reportType === 'commission' ? (d.commission || 0) : (d.cost || 0)), 0);
-    setReportResult({ total, count: filtered.length });
+  const handleCalculate = async () => {
+    if (period === 'custom') {
+      if (!customFrom || !customTo) {
+        alert('Выберите обе даты диапазона: «от» и «до»');
+        return;
+      }
+      if (new Date(customFrom) > new Date(customTo)) {
+        alert('Дата «от» не может быть позже даты «до»');
+        return;
+      }
+    }
+    setIsCalculating(true);
+    try {
+      const { start, end } = getDateRange(period);
+      const rangeDeliveries = await fetchDeliveriesInRange(start, end);
+
+      const filtered = rangeDeliveries.filter(d => {
+        if (d.status !== 'COMPLETED') return false;
+        if (selectedCourier !== 'all' && d.courierId !== selectedCourier) return false;
+        return true;
+      });
+
+      const total = filtered.reduce((sum, d) => sum + (reportType === 'commission' ? (d.commission || 0) : (d.cost || 0)), 0);
+      setReportResult({ total, count: filtered.length });
+      // The table now shows exactly the selected period (search and courier
+      // filters are applied on top of this list below).
+      setReportDeliveries(rangeDeliveries);
+    } catch (error) {
+      console.error('Ошибка расчёта отчёта:', error);
+      alert('Ошибка расчёта отчёта: ' + (error as Error).message);
+    } finally {
+      setIsCalculating(false);
+    }
+  };
+
+  // Exit the report view and return to the live deliveries list.
+  const handleResetReport = () => {
+    setReportResult(null);
+    setReportDeliveries(null);
   };
 
   // Unified status switch: works for any current status and can toggle
@@ -380,14 +465,17 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
     setDetailOpen(true);
   };
 
-  const filteredDeliveries = deliveries.filter(d => {
+  // In report mode the table renders the period snapshot fetched from Firestore;
+  // otherwise it renders the live (latest 200) subscription filtered by the
+  // selected period (default: today). Search and courier filters are applied
+  // on top of either source and never reset the period.
+  const sourceDeliveries = reportDeliveries ?? deliveries;
+  const liveRange = reportDeliveries ? null : getDateRange(period);
+  const filteredDeliveries = sourceDeliveries.filter(d => {
+    if (liveRange && ((d.createdAt || 0) < liveRange.start || (d.createdAt || 0) > liveRange.end)) return false;
     const matchesSearch = d.clientPhone?.includes(searchQuery) || d.courierName?.toLowerCase().includes(searchQuery.toLowerCase());
     if (!matchesSearch) return false;
     if (selectedCourier !== 'all' && d.courierId !== selectedCourier) return false;
-    if (reportResult && period !== 'all') {
-      const { start, end } = getDateRange(period);
-      if (d.createdAt < start || d.createdAt > end) return false;
-    }
     return true;
   });
 
@@ -601,19 +689,50 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
       </Card>
 
       <Card sx={{ mb: 3, p: 2 }}>
-        <Typography variant="subtitle1" fontWeight={600} sx={{ mb: 1.5 }}>Отчёт</Typography>
+        <Typography variant="subtitle1" fontWeight={600} sx={{ mb: 1.5 }}>Отчёт и фильтр списка</Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>Период фильтрует таблицу доставок сразу. По умолчанию показываются доставки за сегодня.</Typography>
         <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} alignItems="center">
           <TextField select size="small" label="Курьер" value={selectedCourier} onChange={(e) => setSelectedCourier(e.target.value)} sx={{ minWidth: 180 }}>
             <MenuItem value="all">Все курьеры</MenuItem>
             {couriers.map(c => <MenuItem key={c.id} value={c.id}>{c.name}</MenuItem>)}
           </TextField>
           <ToggleButtonGroup value={period} exclusive size="small" onChange={(_, v) => v && setPeriod(v)}>
-            <ToggleButton value="today">Сегодня</ToggleButton><ToggleButton value="yesterday">Вчера</ToggleButton><ToggleButton value="week">Неделя</ToggleButton><ToggleButton value="month">Месяц</ToggleButton><ToggleButton value="year">Год</ToggleButton><ToggleButton value="all">Все</ToggleButton>
+            <ToggleButton value="today">Сегодня</ToggleButton><ToggleButton value="yesterday">Вчера</ToggleButton><ToggleButton value="week">Неделя</ToggleButton><ToggleButton value="month">Месяц</ToggleButton><ToggleButton value="year">Год</ToggleButton><ToggleButton value="all">Все</ToggleButton><ToggleButton value="custom">От — До</ToggleButton>
           </ToggleButtonGroup>
+          {period === 'custom' && (
+            <Stack direction="row" spacing={1} alignItems="center">
+              <TextField
+                size="small"
+                type="date"
+                label="От"
+                value={customFrom}
+                onChange={(e) => setCustomFrom(e.target.value)}
+                inputProps={{ max: customTo || undefined }}
+                InputLabelProps={{ shrink: true }}
+                sx={{ width: 160 }}
+              />
+              <Typography variant="body2" color="text.secondary">—</Typography>
+              <TextField
+                size="small"
+                type="date"
+                label="До"
+                value={customTo}
+                onChange={(e) => setCustomTo(e.target.value)}
+                inputProps={{ min: customFrom || undefined }}
+                InputLabelProps={{ shrink: true }}
+                sx={{ width: 160 }}
+              />
+            </Stack>
+          )}
           <ToggleButtonGroup value={reportType} exclusive size="small" onChange={(_, v) => v && setReportType(v)}>
             <ToggleButton value="earnings">Заработок</ToggleButton><ToggleButton value="commission">Комиссия</ToggleButton>
           </ToggleButtonGroup>
-          <Button variant="contained" size="small" onClick={handleCalculate}>Рассчитать</Button>
+          <Button variant="contained" size="small" onClick={handleCalculate} disabled={isCalculating}>
+            {isCalculating ? 'Расчёт...' : 'Рассчитать'}
+          </Button>
+          {reportDeliveries && (
+            <Button variant="outlined" size="small" onClick={handleResetReport} disabled={isCalculating}>Сбросить</Button>
+          )}
           {reportResult && <Alert severity="info" sx={{ py: 0 }}>{reportType === 'commission' ? 'Комиссия' : 'Заработок'}: <strong>{formatCost(reportResult.total)}</strong> ({reportResult.count} доставок)</Alert>}
         </Stack>
       </Card>
