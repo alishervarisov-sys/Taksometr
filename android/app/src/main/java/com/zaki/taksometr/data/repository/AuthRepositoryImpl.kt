@@ -3,6 +3,7 @@ package com.zaki.taksometr.data.repository
 import android.content.Context
 import android.content.SharedPreferences
 import com.google.firebase.firestore.FirebaseFirestore
+import com.zaki.taksometr.domain.model.AppVersionConfig
 import com.zaki.taksometr.domain.model.User
 import com.zaki.taksometr.domain.model.UserRole
 import com.zaki.taksometr.domain.repository.AuthRepository
@@ -136,6 +137,45 @@ class AuthRepositoryImpl @Inject constructor(
             .document(userId)
             .update("fcmToken", token)
             .await()
+    }
+
+    override suspend fun reportAppVersion(versionCode: Int, versionName: String) {
+        val userId = prefs.getString(Constants.PREF_USER_ID, null) ?: return
+        try {
+            firestore.collection(Constants.COLLECTION_USERS)
+                .document(userId)
+                .update(
+                    mapOf(
+                        "appVersionCode" to versionCode,
+                        "appVersionName" to versionName,
+                        "appVersionUpdatedAt" to System.currentTimeMillis()
+                    )
+                )
+                .await()
+        } catch (e: Exception) {
+            // Version reporting is best-effort; never break the app over it.
+        }
+    }
+
+    override fun observeAppVersionConfig(): Flow<AppVersionConfig?> = callbackFlow {
+        val listener = firestore.collection(Constants.COLLECTION_SETTINGS)
+            .document(Constants.SETTINGS_DOC_APP_VERSION)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null || snapshot == null || !snapshot.exists()) {
+                    trySend(AppVersionConfig())
+                    return@addSnapshotListener
+                }
+                trySend(
+                    AppVersionConfig(
+                        minVersionCode = (snapshot.getLong("minVersionCode") ?: 0L).toInt(),
+                        minVersionName = snapshot.getString("minVersionName") ?: "",
+                        enabled = snapshot.getBoolean("enabled") ?: false,
+                        message = snapshot.getString("message") ?: "",
+                        updateUrl = snapshot.getString("updateUrl") ?: ""
+                    )
+                )
+            }
+        awaitClose { listener.remove() }
     }
 
     override suspend fun updateProfilePhoto(photoBase64: String): Resource<Unit> {

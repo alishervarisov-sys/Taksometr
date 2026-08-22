@@ -11,6 +11,8 @@ object Constants {
     // Continuous courier location breadcrumbs: courier_tracks/{courierId}/points/{id}
     const val COLLECTION_COURIER_TRACKS = "courier_tracks"
     const val SUBCOLLECTION_TRACK_POINTS = "points"
+    // Settings document holding the minimum required courier-app version.
+    const val SETTINGS_DOC_APP_VERSION = "appVersion"
 
     // Location
     const val LOCATION_UPDATE_INTERVAL = 3000L // 3 seconds

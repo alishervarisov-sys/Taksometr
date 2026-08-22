@@ -23,6 +23,7 @@ import {
   LocalTaxi as TaxiIcon,
   Groups as ClientsIcon,
   EmojiEvents as TrophyIcon,
+  SystemUpdate as SystemUpdateIcon,
 } from '@mui/icons-material';
 
 const drawerWidth = 260;
@@ -54,6 +55,7 @@ const Layout: React.FC<LayoutProps> = ({ onLogout, isSuperAdmin }) => {
     { text: 'Telegram Отчёт', icon: <TelegramIcon />, path: '/telegram-report' },
     { text: 'TAXI', icon: <TaxiIcon sx={{ color: '#FFC107' }} />, path: '/taxi', taxiItem: true },
     { text: 'Таксисты', icon: <PeopleIcon sx={{ color: '#FFC107' }} />, path: '/taxi-drivers', taxiItem: true },
+    { text: 'Версии', icon: <SystemUpdateIcon />, path: '/app-versions' },
   ];
 
   const drawer = (

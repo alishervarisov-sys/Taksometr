@@ -18,6 +18,7 @@ import Winner from './pages/Winner';
 import TelegramReport from './pages/TelegramReport';
 import Taxi from './pages/Taxi';
 import TaxiDrivers from './pages/TaxiDrivers';
+import AppVersions from './pages/AppVersions';
 import Login from './pages/Login';
 
 const theme = createTheme({
@@ -123,6 +124,7 @@ function App() {
               <Route path="telegram-report" element={<TelegramReport adminId={adminId!} />} />
               <Route path="taxi" element={<Taxi adminId={adminId!} />} />
               <Route path="taxi-drivers" element={<TaxiDrivers adminId={adminId!} />} />
+              <Route path="app-versions" element={<AppVersions adminId={adminId!} />} />
               <Route path="*" element={<Navigate to="/" />} />
             </Route>
           )}

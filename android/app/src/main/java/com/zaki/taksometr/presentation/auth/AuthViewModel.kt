@@ -3,6 +3,7 @@ package com.zaki.taksometr.presentation.auth
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.firebase.messaging.FirebaseMessaging
+import com.zaki.taksometr.BuildConfig
 import com.zaki.taksometr.domain.repository.AuthRepository
 import com.zaki.taksometr.domain.repository.LocationRepository
 import com.zaki.taksometr.util.Resource
@@ -66,6 +67,9 @@ class AuthViewModel @Inject constructor(
                         if (token.isNotEmpty()) {
                             viewModelScope.launch { authRepository.updateFcmToken(token) }
                         }
+                    }
+                    viewModelScope.launch {
+                        authRepository.reportAppVersion(BuildConfig.VERSION_CODE, BuildConfig.VERSION_NAME)
                     }
                     updateCourierLocationAfterLogin()
                     _state.value = _state.value.copy(isLoading = false, isSuccess = true)

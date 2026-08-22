@@ -3891,3 +3891,50 @@ export const onMotorolDeliveryStatusChange = functions.firestore
 
     return null;
   });
+
+// ============ APP VERSION CONTROL ============
+/**
+ * Sets the minimum required courier-app version. Couriers whose app reports an
+ * older version code are shown a full-screen "please update" screen in the app
+ * until they install the new build. The config is stored in settings/appVersion
+ * (only writable here, per firestore.rules).
+ */
+export const setMinAppVersion = functions.https.onCall(async (data, context) => {
+  const {
+    adminId,
+    minVersionCode,
+    minVersionName,
+    enabled,
+    message,
+    updateUrl,
+  } = data as {
+    adminId: string;
+    minVersionCode?: number;
+    minVersionName?: string;
+    enabled?: boolean;
+    message?: string;
+    updateUrl?: string;
+  };
+
+  await verifyAdmin(adminId);
+
+  const code = Number(minVersionCode);
+  if (!Number.isFinite(code) || code <= 0) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "minVersionCode must be a positive number"
+    );
+  }
+
+  await db.collection("settings").doc("appVersion").set({
+    minVersionCode: code,
+    minVersionName: String(minVersionName || ""),
+    enabled: !!enabled,
+    message: String(message || ""),
+    updateUrl: String(updateUrl || ""),
+    updatedAt: Date.now(),
+    updatedBy: adminId,
+  });
+
+  return { success: true };
+});

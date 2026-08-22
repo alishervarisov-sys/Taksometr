@@ -5,6 +5,7 @@ import android.content.res.Configuration
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.viewModels
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -16,6 +17,8 @@ import com.zaki.taksometr.domain.repository.AuthRepository
 import com.zaki.taksometr.presentation.navigation.NavGraph
 import com.zaki.taksometr.presentation.navigation.Screen
 import com.zaki.taksometr.presentation.theme.ZaKiTaksometrTheme
+import com.zaki.taksometr.presentation.version.AppVersionViewModel
+import com.zaki.taksometr.presentation.version.UpdateRequiredScreen
 import com.zaki.taksometr.util.Constants
 import com.zaki.taksometr.util.LocalizationManager
 import dagger.hilt.android.AndroidEntryPoint
@@ -26,6 +29,8 @@ import javax.inject.Inject
 class MainActivity : ComponentActivity() {
 
     @Inject lateinit var authRepository: AuthRepository
+
+    private val appVersionViewModel: AppVersionViewModel by viewModels()
 
     override fun attachBaseContext(newBase: Context) {
         val prefs = newBase.getSharedPreferences(Constants.PREFS_NAME, MODE_PRIVATE)
@@ -51,6 +56,7 @@ class MainActivity : ComponentActivity() {
             val currentLanguageCode = remember {
                 mutableStateOf(LocalizationManager.getCurrentLanguage(prefs).code)
             }
+            val appVersionState by appVersionViewModel.state.collectAsState()
 
             ZaKiTaksometrTheme {
                 com.zaki.taksometr.util.ProvideLanguage(currentLanguageCode.value) {
@@ -58,17 +64,21 @@ class MainActivity : ComponentActivity() {
                         modifier = Modifier.fillMaxSize(),
                         color = MaterialTheme.colorScheme.background
                     ) {
-                        val navController = rememberNavController()
-                        val startDestination = if (authRepository.isLoggedIn()) {
-                            Screen.Home.route
+                        if (appVersionState.updateRequired) {
+                            UpdateRequiredScreen(config = appVersionState.config)
                         } else {
-                            Screen.Auth.route
-                        }
+                            val navController = rememberNavController()
+                            val startDestination = if (authRepository.isLoggedIn()) {
+                                Screen.Home.route
+                            } else {
+                                Screen.Auth.route
+                            }
 
-                        NavGraph(
-                            navController = navController,
-                            startDestination = startDestination
-                        )
+                            NavGraph(
+                                navController = navController,
+                                startDestination = startDestination
+                            )
+                        }
                     }
                 }
             }
