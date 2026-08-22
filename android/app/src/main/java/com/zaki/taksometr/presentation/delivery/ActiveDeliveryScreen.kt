@@ -41,7 +41,6 @@ fun ActiveDeliveryScreen(
 ) {
     val state by viewModel.state.collectAsState()
     val context = LocalContext.current
-    var showCancelDialog by remember { mutableStateOf(false) }
     var showCompleteDialog by remember { mutableStateOf(false) }
     // Whether the delivery info panel is expanded. Collapsing it gives the
     // courier a much larger map view while keeping the call button reachable.
@@ -760,19 +759,6 @@ fun ActiveDeliveryScreen(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        OutlinedButton(
-                            onClick = { showCancelDialog = true },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.outlinedButtonColors(
-                                contentColor = AccentRed
-                            )
-                        ) {
-                            Icon(Icons.Default.Close, contentDescription = null)
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(str(Strings.cancel))
-                        }
-
                         Button(
                             onClick = { showCompleteDialog = true },
                             modifier = Modifier.weight(1f),
@@ -825,32 +811,6 @@ fun ActiveDeliveryScreen(
                 }
             }
         }
-    }
-
-    // Cancel dialog
-    if (showCancelDialog) {
-        AlertDialog(
-            onDismissRequest = { showCancelDialog = false },
-            title = { Text(str(Strings.cancelDelivery)) },
-            text = { Text(str(Strings.confirmCancel)) },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        showCancelDialog = false
-                        LocationTrackingService.stopService(context)
-                        viewModel.cancelDelivery { onBack() }
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = AccentRed)
-                ) {
-                    Text(str(Strings.cancelDelivery))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showCancelDialog = false }) {
-                    Text(str(Strings.no))
-                }
-            }
-        )
     }
 
     // Complete dialog
