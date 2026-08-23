@@ -4,10 +4,10 @@ import {
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
   Dialog, DialogTitle, DialogContent, DialogActions, Chip, IconButton,
   InputAdornment, Tooltip, Autocomplete, Select, MenuItem, InputLabel,
-  FormControl, Stack, LinearProgress,
+  FormControl, Stack, LinearProgress, Switch, FormControlLabel, Divider,
 } from '@mui/material';
 import {
-  Add, Save, Edit, FilterList, FilterAltOff,
+  Add, Save, Edit, FilterList, FilterAltOff, Stairs, Delete,
 } from '@mui/icons-material';
 import {
   doc, getDoc, collection, query, where, getDocs, orderBy, limit, startAfter,
@@ -27,6 +27,14 @@ interface Courier {
   phone: string;
   balance: number;
   commissionPercent?: number;
+  commissionLadderEnabled?: boolean;
+  ladderCount?: number;
+  ladderDate?: string;
+}
+
+interface LadderTierDraft {
+  threshold: string;
+  percent: string;
 }
 
 interface Transaction {
@@ -138,6 +146,15 @@ const Commission: React.FC<CommissionProps> = ({ adminId }) => {
   const [topUpNote, setTopUpNote] = useState('');
   const [topUpLoading, setTopUpLoading] = useState(false);
 
+  // Progressive commission ladder dialog
+  const [ladderOpen, setLadderOpen] = useState(false);
+  const [ladderCourier, setLadderCourier] = useState<Courier | null>(null);
+  const [ladderEnabled, setLadderEnabled] = useState(true);
+  const [ladderBase, setLadderBase] = useState('');
+  const [ladderTiers, setLadderTiers] = useState<LadderTierDraft[]>([]);
+  const [ladderLoading, setLadderLoading] = useState(false);
+  const [ladderSaving, setLadderSaving] = useState(false);
+
   // Applied filters (active queries) — initialised from the URL so a page
   // reload keeps the current view.
   const [applied, setApplied] = useState<Filters>(() => filtersFromParams(searchParams));
@@ -199,8 +216,98 @@ const Commission: React.FC<CommissionProps> = ({ adminId }) => {
       phone: d.data().phone || '',
       balance: d.data().balance || 0,
       commissionPercent: d.data().commissionPercent,
+      commissionLadderEnabled: d.data().commissionLadderEnabled === true,
+      ladderCount: d.data().ladderCount || 0,
+      ladderDate: d.data().ladderDate || '',
     }));
     setCouriers(data);
+  };
+
+  // Today's date in Tajikistan (UTC+5) as "YYYY-MM-DD" — same boundary
+  // the backend uses to reset the daily ladder counter.
+  const tjToday = () =>
+    new Date(Date.now() + 5 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+  const courierCountToday = (c: Courier) =>
+    c.ladderDate === tjToday() ? (c.ladderCount || 0) : 0;
+
+  // ─── Progressive commission ladder ────────────────────────────────────────
+  const openLadder = async (courier: Courier) => {
+    setLadderCourier(courier);
+    setLadderOpen(true);
+    setLadderLoading(true);
+    setError('');
+    try {
+      const snap = await getDocs(collection(db, 'users', courier.id, 'commissionTiers'));
+      const tiers = snap.docs
+        .map(d => d.data())
+        .sort((a: any, b: any) => (a.threshold || 0) - (b.threshold || 0))
+        .map((t: any) => ({ threshold: String(t.threshold ?? ''), percent: String(t.percent ?? '') }));
+      setLadderTiers(tiers);
+      setLadderEnabled(courier.commissionLadderEnabled === true || tiers.length > 0);
+      setLadderBase(String(courier.commissionPercent ?? globalCommission));
+    } catch (err: any) {
+      setError(err.message || 'Ошибка загрузки лестницы комиссии');
+    } finally {
+      setLadderLoading(false);
+    }
+  };
+
+  const updateLadderTier = (index: number, field: 'threshold' | 'percent', value: string) => {
+    setLadderTiers(prev => prev.map((t, i) => (i === index ? { ...t, [field]: value } : t)));
+  };
+
+  const handleSaveLadder = async () => {
+    if (!ladderCourier) return;
+
+    const tiers = ladderTiers
+      .map(t => ({ threshold: Number(t.threshold), percent: Number(t.percent) }))
+      .filter(t => Number.isFinite(t.threshold) && Number.isFinite(t.percent));
+
+    if (ladderEnabled) {
+      if (tiers.length === 0) {
+        setError('Добавьте хотя бы один шаг лестницы');
+        return;
+      }
+      const thresholds = tiers.map(t => t.threshold);
+      if (thresholds.some(t => !Number.isInteger(t) || t <= 0)) {
+        setError('Пороги должны быть целыми числами больше 0');
+        return;
+      }
+      if (new Set(thresholds).size !== thresholds.length) {
+        setError('Пороги не должны повторяться');
+        return;
+      }
+      if (tiers.some(t => t.percent < 0 || t.percent > 100)) {
+        setError('Проценты должны быть от 0 до 100');
+        return;
+      }
+      const base = Number(ladderBase);
+      if (!Number.isFinite(base) || base < 0 || base > 100) {
+        setError('Стартовая комиссия должна быть от 0 до 100');
+        return;
+      }
+    }
+
+    setLadderSaving(true);
+    setError('');
+    try {
+      const fn = httpsCallable(functions, 'updateCourierCommissionTiers');
+      await fn({
+        adminId,
+        courierId: ladderCourier.id,
+        enabled: ladderEnabled,
+        basePercent: Number(ladderBase),
+        tiers,
+      });
+      setSuccess(`Лестница комиссии сохранена для «${ladderCourier.name}»`);
+      setLadderOpen(false);
+      loadCouriers();
+    } catch (err: any) {
+      setError(err.message || 'Ошибка сохранения лестницы');
+    } finally {
+      setLadderSaving(false);
+    }
   };
 
   // ─── Filter helpers ────────────────────────────────────────────────────────
@@ -635,6 +742,29 @@ const Commission: React.FC<CommissionProps> = ({ adminId }) => {
                                   <Edit fontSize="small" />
                                 </IconButton>
                               </Tooltip>
+                              <Tooltip
+                                title={
+                                  courier.commissionLadderEnabled
+                                    ? `Прогрессивная комиссия (сегодня: ${courierCountToday(courier)} доставок)`
+                                    : 'Настроить прогрессивную комиссию'
+                                }
+                              >
+                                <IconButton
+                                  size="small"
+                                  color={courier.commissionLadderEnabled ? 'success' : 'default'}
+                                  onClick={() => openLadder(courier)}
+                                >
+                                  <Stairs fontSize="small" />
+                                </IconButton>
+                              </Tooltip>
+                              {courier.commissionLadderEnabled && (
+                                <Chip
+                                  label={`${courierCountToday(courier)} сегодня`}
+                                  size="small"
+                                  variant="outlined"
+                                  color="success"
+                                />
+                              )}
                             </Box>
                           )}
                         </TableCell>
@@ -930,6 +1060,125 @@ const Commission: React.FC<CommissionProps> = ({ adminId }) => {
           <Button onClick={() => setTopUpOpen(false)}>Отмена</Button>
           <Button variant="contained" onClick={handleTopUp} disabled={topUpLoading || !topUpAmount}>
             Пополнить
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Progressive commission ladder dialog */}
+      <Dialog open={ladderOpen} onClose={() => setLadderOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Прогрессивная комиссия: {ladderCourier?.name}</DialogTitle>
+        <DialogContent>
+          {ladderLoading ? (
+            <LinearProgress sx={{ my: 3 }} />
+          ) : (
+            <>
+              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 2, mt: 1 }} flexWrap="wrap" useFlexGap>
+                <Chip
+                  label={
+                    ladderCourier?.commissionPercent !== undefined && ladderCourier?.commissionPercent !== null
+                      ? `Текущая комиссия: ${ladderCourier.commissionPercent}%`
+                      : `Текущая комиссия: ${globalCommission}% (общая)`
+                  }
+                  color="primary"
+                  size="small"
+                />
+                {ladderCourier?.commissionLadderEnabled && (
+                  <Chip label={`Доставок сегодня: ${courierCountToday(ladderCourier)}`} color="success" size="small" variant="outlined" />
+                )}
+              </Stack>
+
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                Чем больше доставок курьер выполняет за день, тем ниже комиссия.
+                Каждый день счётчик обнуляется, и утром комиссия возвращается к стартовой.
+              </Typography>
+
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={ladderEnabled}
+                    onChange={(e) => setLadderEnabled(e.target.checked)}
+                  />
+                }
+                label="Лестница включена"
+                sx={{ mb: 1 }}
+              />
+
+              <TextField
+                fullWidth
+                label="Стартовая комиссия с начала дня (%)"
+                type="number"
+                value={ladderBase}
+                onChange={(e) => setLadderBase(e.target.value)}
+                margin="normal"
+                disabled={!ladderEnabled}
+                InputProps={{
+                  endAdornment: <InputAdornment position="end">%</InputAdornment>,
+                }}
+                helperText="Комиссия действует с первой доставки дня до первого порога"
+              />
+
+              <Divider sx={{ my: 2 }} />
+
+              <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                Шаги лестницы
+              </Typography>
+
+              {ladderTiers.map((tier, index) => (
+                <Stack key={index} direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+                  <TextField
+                    size="small"
+                    type="number"
+                    label="Доставок"
+                    value={tier.threshold}
+                    onChange={(e) => updateLadderTier(index, 'threshold', e.target.value)}
+                    disabled={!ladderEnabled}
+                    sx={{ width: 130 }}
+                  />
+                  <Typography variant="body2" color="text.secondary">→ комиссия</Typography>
+                  <TextField
+                    size="small"
+                    type="number"
+                    label="%"
+                    value={tier.percent}
+                    onChange={(e) => updateLadderTier(index, 'percent', e.target.value)}
+                    disabled={!ladderEnabled}
+                    sx={{ width: 110 }}
+                    InputProps={{
+                      endAdornment: <InputAdornment position="end">%</InputAdornment>,
+                    }}
+                  />
+                  <IconButton
+                    size="small"
+                    color="error"
+                    onClick={() => setLadderTiers(prev => prev.filter((_, i) => i !== index))}
+                    disabled={!ladderEnabled}
+                  >
+                    <Delete fontSize="small" />
+                  </IconButton>
+                </Stack>
+              ))}
+
+              <Button
+                size="small"
+                startIcon={<Add />}
+                onClick={() => setLadderTiers(prev => [...prev, { threshold: '', percent: '' }])}
+                disabled={!ladderEnabled}
+                sx={{ mt: 1 }}
+              >
+                Добавить шаг
+              </Button>
+
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 2 }}>
+                Внимание: ручное изменение комиссии в таблице выше ставит лестницу на паузу.
+                Сохранение здесь применяет новую лестницу к сегодняшнему счётчику сразу.
+              </Typography>
+            </>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setLadderOpen(false)}>Отмена</Button>
+          <Button variant="contained" onClick={handleSaveLadder} disabled={ladderLoading || ladderSaving}>
+            {ladderSaving ? 'Сохранение…' : 'Сохранить'}
           </Button>
         </DialogActions>
       </Dialog>

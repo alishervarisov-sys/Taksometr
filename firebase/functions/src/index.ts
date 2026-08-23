@@ -240,6 +240,8 @@ async function getDefaultTariffSnapshot(): Promise<DeliveryTariffSnapshot> {
   };
 }
 
+// Returns true when the push was actually delivered, false when it was
+// skipped (no token) or failed — used by the notification outbox.
 async function sendPushToCourier(courierData: any, payload: {
   title: string;
   body: string;
@@ -251,11 +253,11 @@ async function sendPushToCourier(courierData: any, payload: {
   // (e.g. winner of the month). Leave false for real-time/data-only signals
   // that rely on onMessageReceived() waking the app.
   withSystemNotification?: boolean;
-}): Promise<void> {
+}): Promise<boolean> {
   const fcmToken = courierData?.fcmToken;
   if (!fcmToken) {
     console.warn("sendPushToCourier: fcmToken is empty, skipping");
-    return;
+    return false;
   }
 
   try {
@@ -289,8 +291,171 @@ async function sendPushToCourier(courierData: any, payload: {
     }
 
     await admin.messaging().send(message);
+    return true;
   } catch (e) {
     console.error("FCM send error:", e);
+    return false;
+  }
+}
+
+// ============ PROGRESSIVE DAILY COMMISSION LADDER ============
+/**
+ * Per-courier "achievement ladder": the more deliveries completed in a day,
+ * the lower the company commission. The counter resets every day (Tajikistan
+ * time, UTC+5), so each morning the courier starts again from the base
+ * percent stored in `baseCommissionPercent`.
+ *
+ * Courier doc fields (users/{courierId}):
+ *   commissionLadderEnabled — ladder is active for this courier
+ *   baseCommissionPercent   — start-of-day percent before any tier
+ *   commissionPercent       — CURRENT effective percent (auto-updated)
+ *   ladderDate              — "YYYY-MM-DD" (TJ) the counter belongs to
+ *   ladderCount             — completed deliveries within that day
+ *   appliedTierThreshold    — highest threshold already applied today
+ *
+ * Ladder steps live in users/{courierId}/commissionTiers/{tierId}:
+ *   { threshold: number, percent: number, createdAt, reachedAt }
+ */
+
+interface CommissionLadderTier {
+  threshold: number;
+  percent: number;
+}
+
+interface CommissionLadderResult {
+  // Percent to charge for the current delivery
+  effectivePercent: number;
+  // Fields to persist on the courier doc (counter + applied tier)
+  courierUpdates: {[field: string]: unknown};
+  // Set when a new tier is reached on this evaluation
+  tierReached: CommissionLadderTier | null;
+  // Completed deliveries count after this evaluation
+  count: number;
+}
+
+// Current date in Tajikistan (UTC+5) as "YYYY-MM-DD"
+function getTjDateString(): string {
+  return new Date(Date.now() + 5 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+async function getGlobalCommissionPercent(): Promise<number> {
+  const settingsDoc = await db.collection("settings").doc("commission").get();
+  return settingsDoc.exists ? (settingsDoc.data()!.percent || 0) : 0;
+}
+
+/**
+ * Evaluate the daily commission ladder for a courier. Call this wherever a
+ * delivery transitions to COMPLETED, BEFORE computing the commission amount:
+ * the returned `effectivePercent` is what must be charged, and it may be a
+ * lowered tier percent right on the delivery that reaches the threshold.
+ *
+ * @param increment  true when a delivery is being completed (counter +1 and
+ *                   tier notifications allowed); false for a re-evaluation
+ *                   (e.g. after the admin edits the ladder).
+ */
+async function evaluateCommissionLadder(
+  courierRef: admin.firestore.DocumentReference,
+  courierData: any,
+  increment: boolean
+): Promise<CommissionLadderResult> {
+  const today = getTjDateString();
+  const isNewDay = courierData.ladderDate !== today;
+  const prevCount = isNewDay ? 0 : (courierData.ladderCount || 0);
+  const count = increment ? prevCount + 1 : prevCount;
+
+  const updates: {[field: string]: unknown} = {
+    ladderDate: today,
+    ladderCount: count,
+  };
+
+  const enabled = courierData.commissionLadderEnabled === true;
+
+  // Percent that applies when no new tier is reached on this evaluation
+  let effectivePercent: number;
+  if (!enabled) {
+    // Classic behaviour: individual percent, then global
+    if (courierData.commissionPercent !== undefined && courierData.commissionPercent !== null) {
+      effectivePercent = courierData.commissionPercent;
+    } else {
+      effectivePercent = await getGlobalCommissionPercent();
+    }
+  } else if (isNewDay) {
+    // Fresh day: back to the ladder base percent
+    if (courierData.baseCommissionPercent !== undefined && courierData.baseCommissionPercent !== null) {
+      effectivePercent = courierData.baseCommissionPercent;
+    } else if (courierData.commissionPercent !== undefined && courierData.commissionPercent !== null) {
+      effectivePercent = courierData.commissionPercent;
+    } else {
+      effectivePercent = await getGlobalCommissionPercent();
+    }
+    updates.appliedTierThreshold = 0;
+    updates.commissionPercent = effectivePercent;
+  } else {
+    // Same day: keep whatever is currently effective (base or applied tier)
+    if (courierData.commissionPercent !== undefined && courierData.commissionPercent !== null) {
+      effectivePercent = courierData.commissionPercent;
+    } else if (courierData.baseCommissionPercent !== undefined && courierData.baseCommissionPercent !== null) {
+      effectivePercent = courierData.baseCommissionPercent;
+    } else {
+      effectivePercent = await getGlobalCommissionPercent();
+    }
+  }
+
+  // Check the ladder tiers (one small read of 2-5 docs per completion)
+  let tierReached: CommissionLadderTier | null = null;
+  if (enabled) {
+    const tiersSnap = await courierRef.collection("commissionTiers").get();
+    const tiers = tiersSnap.docs
+      .map(d => d.data() as CommissionLadderTier)
+      .filter(t => t && typeof t.threshold === "number" && typeof t.percent === "number")
+      .sort((a, b) => a.threshold - b.threshold);
+
+    if (tiers.length > 0) {
+      const applied = isNewDay ? 0 : (courierData.appliedTierThreshold || 0);
+      // Highest reached-but-not-yet-applied tier (handles threshold jumps)
+      for (const t of tiers) {
+        if (t.threshold <= count && t.threshold > applied) {
+          tierReached = t;
+        }
+      }
+      if (tierReached) {
+        effectivePercent = tierReached.percent;
+        updates.commissionPercent = tierReached.percent;
+        updates.appliedTierThreshold = tierReached.threshold;
+      }
+    }
+  }
+
+  return {effectivePercent, courierUpdates: updates, tierReached, count};
+}
+
+/**
+ * Queue a "tier reached" congratulation for the courier. Written to the
+ * courierNotifications outbox; a Firestore trigger delivers it via FCM, so a
+ * push failure never blocks order completion.
+ */
+async function notifyTierReached(
+  courierId: string,
+  ladder: CommissionLadderResult
+): Promise<void> {
+  if (!ladder.tierReached) return;
+  try {
+    await db.collection("courierNotifications").add({
+      courierId: courierId,
+      type: "COMMISSION_TIER_REACHED",
+      title: "Комиссия снижена!",
+      body: `Поздравляем! Вы выполнили ${ladder.tierReached.threshold} доставок за сегодня. Ваша комиссия снижена до ${ladder.tierReached.percent}%!`,
+      payload: {
+        threshold: String(ladder.tierReached.threshold),
+        percent: String(ladder.tierReached.percent),
+        completedToday: String(ladder.count),
+      },
+      status: "PENDING",
+      attempts: 0,
+      createdAt: Date.now(),
+    });
+  } catch (e) {
+    console.error("notifyTierReached: failed to enqueue notification:", e);
   }
 }
 
@@ -658,29 +823,26 @@ export const completeDelivery = functions.https.onCall(async (data, context) => 
   const routePoints = route || [];
 
   // ---- Commission logic ----
-  // Per-courier commission takes priority over global setting
+  // Per-courier commission takes priority over global setting; the daily
+  // progressive ladder may lower it right on this delivery.
   const courierRef = db.collection("users").doc(courierId);
   const courierDoc2 = await courierRef.get();
   const courierData2 = courierDoc2.exists ? courierDoc2.data()! : {};
 
-  // Check courier-specific commission first, then fall back to global
-  let commissionPercent: number;
-  if (courierData2.commissionPercent !== undefined && courierData2.commissionPercent !== null) {
-    commissionPercent = courierData2.commissionPercent;
-  } else {
-    const settingsDoc = await db.collection("settings").doc("commission").get();
-    commissionPercent = settingsDoc.exists
-      ? (settingsDoc.data()!.percent || 0)
-      : 0;
-  }
+  const ladder = await evaluateCommissionLadder(courierRef, courierData2, true);
+  const commissionPercent = ladder.effectivePercent;
+
   // Exact commission — no rounding, preserve dirams for transparency
   const commissionAmount = Math.round((totalCost * commissionPercent / 100) * 100) / 100;
 
-  // Deduct commission from courier balance
+  // Deduct commission from courier balance (ladder counter saved together)
   const currentBalance = courierData2.balance || 0;
   const newBalance = currentBalance - commissionAmount;
 
-  await courierRef.update({balance: newBalance});
+  await courierRef.update({balance: newBalance, ...ladder.courierUpdates});
+
+  // Congratulate the courier when a ladder tier is reached today
+  await notifyTierReached(courierId, ladder);
 
   // Record commission transaction
   if (commissionAmount > 0) {
@@ -2197,10 +2359,199 @@ export const updateCourierCommission = functions.https.onCall(async (data, conte
 
   await courierRef.update({
     commissionPercent: percent,
+    // A manual override freezes the progressive ladder so it cannot
+    // overwrite the admin's value on the next delivery.
+    commissionLadderEnabled: false,
   });
 
   return {success: true, courierId, percent};
 });
+
+
+// ============ ADMIN: UPDATE COURIER COMMISSION LADDER ============
+// Creates/replaces the per-courier daily "achievement ladder": a set of
+// thresholds that progressively lower the commission as the courier
+// completes more deliveries during the day. The counter resets every day
+// (Tajikistan time), so each morning the courier starts again from
+// `basePercent`.
+export const updateCourierCommissionTiers = functions.https.onCall(async (data, context) => {
+  const {adminId, courierId, tiers, enabled, basePercent} = data;
+
+  await verifyAdmin(adminId);
+
+  if (!courierId) {
+    throw new functions.https.HttpsError("invalid-argument", "courierId required");
+  }
+
+  const courierRef = db.collection("users").doc(courierId);
+  const courierDoc = await courierRef.get();
+  if (!courierDoc.exists) {
+    throw new functions.https.HttpsError("not-found", "Courier not found");
+  }
+
+  const isEnabled = enabled === true;
+  const list: Array<{threshold?: unknown; percent?: unknown}> = Array.isArray(tiers) ? tiers : [];
+
+  if (list.length > 20) {
+    throw new functions.https.HttpsError("invalid-argument", "Не более 20 шагов лестницы");
+  }
+
+  const seenThresholds = new Set<number>();
+  for (const t of list) {
+    const threshold = Number(t && t.threshold);
+    const percent = Number(t && t.percent);
+    if (!Number.isInteger(threshold) || threshold <= 0) {
+      throw new functions.https.HttpsError("invalid-argument", "Порог должен быть целым числом больше 0");
+    }
+    if (seenThresholds.has(threshold)) {
+      throw new functions.https.HttpsError("invalid-argument", `Порог ${threshold} повторяется`);
+    }
+    seenThresholds.add(threshold);
+    if (!(percent >= 0 && percent <= 100)) {
+      throw new functions.https.HttpsError("invalid-argument", "Процент комиссии должен быть от 0 до 100");
+    }
+  }
+
+  if (isEnabled && list.length === 0) {
+    throw new functions.https.HttpsError("invalid-argument", "Добавьте хотя бы один шаг лестницы");
+  }
+
+  let base: number | null = null;
+  if (isEnabled) {
+    base = Number(basePercent);
+    if (!(base >= 0 && base <= 100)) {
+      throw new functions.https.HttpsError("invalid-argument", "Стартовая комиссия должна быть от 0 до 100");
+    }
+  }
+
+  // Replace the whole tiers subcollection
+  const tiersRef = courierRef.collection("commissionTiers");
+  const existing = await tiersRef.get();
+  const batch = db.batch();
+  existing.docs.forEach(d => batch.delete(d.ref));
+  list.forEach(t => {
+    batch.set(tiersRef.doc(), {
+      threshold: Number(t.threshold),
+      percent: Number(t.percent),
+      createdAt: Date.now(),
+    });
+  });
+  await batch.commit();
+
+  const updateData: {[field: string]: unknown} = {
+    commissionLadderEnabled: isEnabled && list.length > 0,
+  };
+  if (base !== null) {
+    updateData.baseCommissionPercent = base;
+    if (!isEnabled) {
+      // Restoring a fixed commission when the ladder is turned off
+      updateData.commissionPercent = base;
+    }
+  }
+  await courierRef.update(updateData);
+
+  // Re-evaluate against today's counter so the admin sees the effect
+  // immediately instead of waiting for the next delivery.
+  const fresh = await courierRef.get();
+  const ladder = await evaluateCommissionLadder(courierRef, fresh.data()!, false);
+  if (Object.keys(ladder.courierUpdates).length > 0) {
+    await courierRef.update(ladder.courierUpdates);
+  }
+
+  return {success: true, commissionPercent: ladder.effectivePercent};
+});
+
+
+// ============ COURIER NOTIFICATIONS OUTBOX ============
+// Notifications are queued in the `courierNotifications` collection right
+// where they originate (e.g. a ladder tier reached on delivery completion).
+// This trigger delivers each queued entry via FCM asynchronously, so a push
+// failure never blocks or breaks order completion.
+async function deliverOutboxNotification(
+  docSnap: admin.firestore.QueryDocumentSnapshot | admin.firestore.DocumentSnapshot
+): Promise<boolean> {
+  const data = docSnap.data()!;
+
+  const courierDoc = await db.collection("users").doc(data.courierId).get();
+  const courierData = courierDoc.exists ? courierDoc.data()! : {};
+
+  const payloadData: {[key: string]: string} = {type: data.type || ""};
+  if (data.payload && typeof data.payload === "object") {
+    Object.keys(data.payload).forEach(k => {
+      payloadData[k] = String(data.payload[k]);
+    });
+  }
+
+  return sendPushToCourier(
+    courierData,
+    {title: data.title, body: data.body, data: payloadData},
+    {withSystemNotification: true}
+  );
+}
+
+export const sendCourierNotification = functions.firestore
+  .document("courierNotifications/{id}")
+  .onCreate(async (snap) => {
+    const data = snap.data();
+    if (!data || data.status !== "PENDING") return;
+
+    try {
+      const ok = await deliverOutboxNotification(snap);
+      if (ok) {
+        await snap.ref.update({status: "SENT", sentAt: Date.now()});
+      } else {
+        await snap.ref.update({
+          status: "FAILED",
+          attempts: admin.firestore.FieldValue.increment(1),
+          lastError: "FCM send failed (no token or error)",
+        });
+      }
+    } catch (e: any) {
+      await snap.ref.update({
+        status: "FAILED",
+        attempts: admin.firestore.FieldValue.increment(1),
+        lastError: String(e),
+      }).catch(() => undefined);
+    }
+  });
+
+// Retry failed / stuck notifications every 15 minutes, up to 3 attempts.
+export const retryCourierNotifications = functions.pubsub
+  .schedule("every 15 minutes")
+  .onRun(async () => {
+    const failed = await db.collection("courierNotifications")
+      .where("status", "==", "FAILED")
+      .where("attempts", "<", 3)
+      .get();
+
+    // Entries stuck in PENDING for over 10 minutes (e.g. the trigger crashed)
+    const stuck = await db.collection("courierNotifications")
+      .where("status", "==", "PENDING")
+      .where("createdAt", "<", Date.now() - 10 * 60 * 1000)
+      .get();
+
+    const docs = [...failed.docs, ...stuck.docs];
+    for (const doc of docs) {
+      try {
+        const ok = await deliverOutboxNotification(doc);
+        if (ok) {
+          await doc.ref.update({status: "SENT", sentAt: Date.now()});
+        } else {
+          await doc.ref.update({
+            status: "FAILED",
+            attempts: admin.firestore.FieldValue.increment(1),
+          });
+        }
+      } catch (e: any) {
+        await doc.ref.update({
+          status: "FAILED",
+          attempts: admin.firestore.FieldValue.increment(1),
+          lastError: String(e),
+        }).catch(() => undefined);
+      }
+    }
+    return null;
+  });
 
 
 // ============ ADMIN: UPDATE COURIER CREDENTIALS ============
@@ -2517,25 +2868,24 @@ export const completeChainDelivery = functions.https.onCall(async (data, context
     totalCost = roundedCost + waitingCost;
   }
 
-  // Calculate commission
+  // Calculate commission (daily progressive ladder applies here too)
   const courierRef = db.collection("users").doc(chainData.courierId);
   const courierDoc = await courierRef.get();
   const courierData = courierDoc.exists ? courierDoc.data()! : {};
 
-  let commissionPercent: number;
-  if (courierData.commissionPercent !== undefined && courierData.commissionPercent !== null) {
-    commissionPercent = courierData.commissionPercent;
-  } else {
-    const settingsDoc = await db.collection("settings").doc("commission").get();
-    commissionPercent = settingsDoc.exists ? (settingsDoc.data()!.percent || 0) : 0;
-  }
+  const ladder = await evaluateCommissionLadder(courierRef, courierData, true);
+  const commissionPercent = ladder.effectivePercent;
+
   // Exact commission — no rounding, preserve dirams for transparency
   const commissionAmount = Math.round((totalCost * commissionPercent / 100) * 100) / 100;
 
-  // Deduct commission
+  // Deduct commission (ladder counter saved together)
   const currentBalance = courierData.balance || 0;
   const newBalance = currentBalance - commissionAmount;
-  await courierRef.update({balance: newBalance});
+  await courierRef.update({balance: newBalance, ...ladder.courierUpdates});
+
+  // Congratulate the courier when a ladder tier is reached today
+  await notifyTierReached(chainData.courierId, ladder);
 
   // Record transaction
   if (commissionAmount > 0) {
@@ -2927,25 +3277,24 @@ export const adminCompleteDelivery = functions.https.onCall(async (data, context
     totalCost = computeCost(distanceMeters, baseCost, baseDistanceKm, costPerKm);
   }
 
-  // Calculate commission
+  // Calculate commission (daily progressive ladder applies here too)
   const courierRef = db.collection("users").doc(deliveryData.courierId);
   const courierDoc = await courierRef.get();
   const courierData = courierDoc.exists ? courierDoc.data()! : {};
 
-  let commissionPercent: number;
-  if (courierData.commissionPercent !== undefined && courierData.commissionPercent !== null) {
-    commissionPercent = courierData.commissionPercent;
-  } else {
-    const settingsDoc = await db.collection("settings").doc("commission").get();
-    commissionPercent = settingsDoc.exists ? (settingsDoc.data()!.percent || 0) : 0;
-  }
+  const ladder = await evaluateCommissionLadder(courierRef, courierData, true);
+  const commissionPercent = ladder.effectivePercent;
+
   // Exact commission — no rounding, preserve dirams for transparency
   const commissionAmount = Math.round((totalCost * commissionPercent / 100) * 100) / 100;
 
-  // Deduct commission
+  // Deduct commission (ladder counter saved together)
   const currentBalance = courierData.balance || 0;
   const newBalance = currentBalance - commissionAmount;
-  await courierRef.update({balance: newBalance});
+  await courierRef.update({balance: newBalance, ...ladder.courierUpdates});
+
+  // Congratulate the courier when a ladder tier is reached today
+  await notifyTierReached(deliveryData.courierId, ladder);
 
   // Record transaction
   if (commissionAmount > 0) {
@@ -3095,24 +3444,20 @@ export const adminSetDeliveryStatus = functions.https.onCall(async (data, contex
       const courierDoc = await courierRef.get();
       const courierData = courierDoc.exists ? courierDoc.data()! : {};
 
+      // Daily progressive ladder. Count this completion only when the
+      // commission is not already charged, so admin status toggling never
+      // inflates the courier's daily counter.
+      const countIt = !commissionCurrentlyCharged;
+      const ladder = await evaluateCommissionLadder(courierRef, courierData, countIt);
+
       if (!(commissionAmount > 0)) {
-        let commissionPercent: number;
-        if (
-          courierData.commissionPercent !== undefined &&
-          courierData.commissionPercent !== null
-        ) {
-          commissionPercent = courierData.commissionPercent;
-        } else {
-          const settingsDoc = await db.collection("settings").doc("commission").get();
-          commissionPercent = settingsDoc.exists ? (settingsDoc.data()!.percent || 0) : 0;
-        }
-        commissionAmount = Math.round((totalCost * commissionPercent / 100) * 100) / 100;
+        commissionAmount = Math.round((totalCost * ladder.effectivePercent / 100) * 100) / 100;
       }
 
       if (!commissionCurrentlyCharged && commissionAmount > 0) {
         const currentBalance = courierData.balance || 0;
         const newBalance = currentBalance - commissionAmount;
-        await courierRef.update({balance: newBalance});
+        await courierRef.update({balance: newBalance, ...ladder.courierUpdates});
         await db.collection("transactions").add({
           courierId: courierId,
           courierName: deliveryData.courierName || "",
@@ -3123,6 +3468,14 @@ export const adminSetDeliveryStatus = functions.https.onCall(async (data, contex
           description: "Комиссия за доставку (завершена админом)",
           createdAt: Date.now(),
         });
+      } else if (Object.keys(ladder.courierUpdates).length > 0) {
+        // Nothing to charge, but still persist the daily counter
+        await courierRef.update(ladder.courierUpdates);
+      }
+
+      // Congratulate the courier when a ladder tier is reached today
+      if (countIt) {
+        await notifyTierReached(courierId, ladder);
       }
     }
 

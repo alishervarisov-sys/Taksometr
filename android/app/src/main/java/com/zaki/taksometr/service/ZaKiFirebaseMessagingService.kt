@@ -68,6 +68,15 @@ class ZaKiFirebaseMessagingService : FirebaseMessagingService() {
                     showNotification(title, body)
                 }
             }
+            "COMMISSION_TIER_REACHED" -> {
+                // Progressive commission ladder: the courier reached a daily
+                // delivery threshold and the commission was lowered.
+                val title = message.data["title"] ?: message.notification?.title ?: "Комиссия снижена"
+                val body  = message.data["body"]  ?: message.notification?.body  ?: ""
+                if (body.isNotEmpty()) {
+                    showNotification(title, body)
+                }
+            }
             else -> {
                 val title = message.data["title"] ?: message.notification?.title ?: "ZaKi Taksometr"
                 val body  = message.data["body"]  ?: message.notification?.body  ?: ""

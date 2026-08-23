@@ -8,6 +8,13 @@ service cloud.firestore {
       allow create: if false; // Only via Cloud Functions
       allow update: if true; // Validated in Cloud Functions
       allow delete: if true; // Admin can delete couriers
+
+      // Per-courier progressive commission ladder steps.
+      // The admin panel reads them; only Cloud Functions write them.
+      match /commissionTiers/{tierId} {
+        allow read: if true;
+        allow write: if false;
+      }
     }
 
     // Deliveries collection
