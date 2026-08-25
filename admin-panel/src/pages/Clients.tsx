@@ -3,10 +3,11 @@ import {
   Box, Typography, Card, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, Chip, TextField, InputAdornment, Dialog,
   DialogTitle, DialogContent, DialogActions, Button, Grid, Divider,
-  Stack, Tabs, Tab, CircularProgress, Avatar,
+  Stack, CircularProgress, Avatar, MenuItem, FormControl, InputLabel, Select,
+  SelectChangeEvent,
 } from '@mui/material';
-import { Search, Person as PersonIcon, LocalShipping as DeliveryIcon, LocalTaxi as TaxiIcon } from '@mui/icons-material';
-import { collection, getDocs, query, orderBy, limit, where } from 'firebase/firestore';
+import { Search, Person as PersonIcon, LocalShipping as DeliveryIcon, LocalTaxi as TaxiIcon, Refresh as RefreshIcon } from '@mui/icons-material';
+import { collection, getDocs, query, orderBy, limit, where, startAfter, QueryDocumentSnapshot, DocumentData } from 'firebase/firestore';
 import { GoogleMap, useJsApiLoader, PolylineF, MarkerF } from '@react-google-maps/api';
 import { db, GOOGLE_MAPS_API_KEY } from '../firebase';
 
@@ -25,6 +26,7 @@ interface DeliveryOrder {
   createdAt: number;
   route?: Array<{ latitude: number; longitude: number }>;
   orderKind?: string;
+  orderSource?: string;
   comment?: string;
   pickup?: { address?: string; latitude: number; longitude: number };
   destination?: { address?: string; latitude: number; longitude: number };
@@ -50,8 +52,11 @@ interface Client {
   totalOrders: number;
   deliveryOrders: number;
   taxiOrders: number;
+  courierOrders: number;
+  adminOrders: number;
   completedOrders: number;
   totalSpent: number;
+  firstOrderAt: number;
   lastOrderAt: number;
   orders: ClientOrder[];
 }
@@ -96,13 +101,40 @@ const statusChip = (status: string) => {
 
 const isCompleted = (o: ClientOrder) => o.status === 'COMPLETED' || o.status === 'completed';
 
+const isAdminOrder = (o: DeliveryOrder) =>
+  o.orderSource === 'ADMIN_PANEL' || o.orderKind === 'MARKETPLACE';
+
+type SourceFilter = 'all' | 'courier' | 'admin' | 'taxi';
+
+const FETCH_PAGE_SIZE = 2000;
+
+const fetchAllDocs = async (collName: string): Promise<QueryDocumentSnapshot<DocumentData>[]> => {
+  const result: QueryDocumentSnapshot<DocumentData>[] = [];
+  let cursor: QueryDocumentSnapshot<DocumentData> | null = null;
+  // Пагинация: загружаем ВСЕ документы коллекции, а не только последние N
+  for (;;) {
+    let q = query(collection(db, collName), orderBy('createdAt', 'desc'), limit(FETCH_PAGE_SIZE));
+    if (cursor) q = query(q, startAfter(cursor));
+    const snap = await getDocs(q);
+    result.push(...snap.docs);
+    if (snap.docs.length < FETCH_PAGE_SIZE) break;
+    cursor = snap.docs[snap.docs.length - 1];
+  }
+  return result;
+};
+
 // ─── Component ──────────────────────────────────────────────────────────────
 
 const Clients: React.FC<ClientsProps> = ({ adminId }) => {
   void adminId;
-  const [clients, setClients] = useState<Client[]>([]);
+  const [allDeliveryOrders, setAllDeliveryOrders] = useState<DeliveryOrder[]>([]);
+  const [allTaxiOrders, setAllTaxiOrders] = useState<TaxiHistoryOrder[]>([]);
+  const [nameByPhone, setNameByPhone] = useState<Map<string, string>>(new Map());
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all');
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const [selectedOrder, setSelectedOrder] = useState<DeliveryOrder | null>(null);
@@ -122,24 +154,26 @@ const Clients: React.FC<ClientsProps> = ({ adminId }) => {
     try {
       // Load user names by phone
       const usersSnap = await getDocs(query(collection(db, 'users'), where('phone', '!=', '')));
-      const nameByPhone = new Map<string, string>();
+      const names = new Map<string, string>();
       usersSnap.docs.forEach(d => {
         const data = d.data() as any;
-        if (data.phone) nameByPhone.set(String(data.phone), data.name || '');
+        if (data.phone) names.set(String(data.phone), data.name || '');
       });
+      setNameByPhone(names);
 
-      // Load deliveries
-      const delSnap = await getDocs(query(collection(db, 'deliveries'), orderBy('createdAt', 'desc'), limit(1000)));
-      const deliveryOrders: DeliveryOrder[] = delSnap.docs.map(d => {
+      // Load ALL deliveries (courier meter + admin orders) with pagination
+      const delDocs = await fetchAllDocs('deliveries');
+      const deliveryOrders: DeliveryOrder[] = delDocs.map(d => {
         const data = d.data() as any;
         return { id: d.id, kind: 'delivery', ...data } as DeliveryOrder;
       });
+      setAllDeliveryOrders(deliveryOrders);
 
-      // Load taxi orders
+      // Load ALL taxi orders with pagination
       let taxiOrders: TaxiHistoryOrder[] = [];
       try {
-        const taxiSnap = await getDocs(query(collection(db, 'taxi_orders'), orderBy('createdAt', 'desc'), limit(1000)));
-        taxiOrders = taxiSnap.docs.map(d => {
+        const taxiDocs = await fetchAllDocs('taxi_orders');
+        taxiOrders = taxiDocs.map(d => {
           const data = d.data() as any;
           return {
             id: d.id,
@@ -157,60 +191,85 @@ const Clients: React.FC<ClientsProps> = ({ adminId }) => {
         // taxi_orders may not exist / be inaccessible — ignore
         console.warn('Не удалось загрузить такси-заказы', e);
       }
-
-      // Aggregate by phone
-      const map = new Map<string, Client>();
-      const ensure = (phone: string): Client => {
-        let c = map.get(phone);
-        if (!c) {
-          c = {
-            phone,
-            name: nameByPhone.get(phone) || '',
-            totalOrders: 0,
-            deliveryOrders: 0,
-            taxiOrders: 0,
-            completedOrders: 0,
-            totalSpent: 0,
-            lastOrderAt: 0,
-            orders: [],
-          };
-          map.set(phone, c);
-        }
-        return c;
-      };
-
-      deliveryOrders.forEach(o => {
-        if (!o.clientPhone) return;
-        const c = ensure(o.clientPhone);
-        c.orders.push(o);
-        c.deliveryOrders += 1;
-        c.totalOrders += 1;
-        if (isCompleted(o)) { c.completedOrders += 1; c.totalSpent += o.cost || 0; }
-        if ((o.createdAt || 0) > c.lastOrderAt) c.lastOrderAt = o.createdAt || 0;
-      });
-
-      taxiOrders.forEach(o => {
-        if (!o.clientPhone) return;
-        const c = ensure(o.clientPhone);
-        c.orders.push(o);
-        c.taxiOrders += 1;
-        c.totalOrders += 1;
-        if (isCompleted(o)) c.completedOrders += 1;
-        if ((o.createdAt || 0) > c.lastOrderAt) c.lastOrderAt = o.createdAt || 0;
-      });
-
-      const list = Array.from(map.values());
-      // Sort each client's orders newest first
-      list.forEach(c => c.orders.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)));
-      // Sort clients by number of orders desc
-      list.sort((a, b) => b.totalOrders - a.totalOrders || b.lastOrderAt - a.lastOrderAt);
-      setClients(list);
+      setAllTaxiOrders(taxiOrders);
     } catch (e) {
       console.error('Ошибка загрузки клиентов', e);
     } finally {
       setLoading(false);
     }
   };
+
+  const clients = useMemo(() => {
+    const from = dateFrom ? new Date(dateFrom + 'T00:00:00').getTime() : null;
+    const to = dateTo ? new Date(dateTo + 'T23:59:59.999').getTime() : null;
+    const inRange = (ts: number) => {
+      if (from !== null && ts < from) return false;
+      if (to !== null && ts > to) return false;
+      return true;
+    };
+
+    const map = new Map<string, Client>();
+    const ensure = (phone: string): Client => {
+      let c = map.get(phone);
+      if (!c) {
+        c = {
+          phone,
+          name: nameByPhone.get(phone) || '',
+          totalOrders: 0,
+          deliveryOrders: 0,
+          taxiOrders: 0,
+          courierOrders: 0,
+          adminOrders: 0,
+          completedOrders: 0,
+          totalSpent: 0,
+          firstOrderAt: 0,
+          lastOrderAt: 0,
+          orders: [],
+        };
+        map.set(phone, c);
+      }
+      return c;
+    };
+
+    allDeliveryOrders.forEach(o => {
+      if (!o.clientPhone) return;
+      if (!inRange(o.createdAt || 0)) return;
+      const admin = isAdminOrder(o);
+      if (sourceFilter === 'courier' && admin) return;
+      if (sourceFilter === 'admin' && !admin) return;
+      if (sourceFilter === 'taxi') return;
+      const c = ensure(o.clientPhone);
+      c.orders.push(o);
+      c.deliveryOrders += 1;
+      if (admin) c.adminOrders += 1; else c.courierOrders += 1;
+      c.totalOrders += 1;
+      if (isCompleted(o)) { c.completedOrders += 1; c.totalSpent += o.cost || 0; }
+      const ts = o.createdAt || 0;
+      if (ts > c.lastOrderAt) c.lastOrderAt = ts;
+      if (c.firstOrderAt === 0 || ts < c.firstOrderAt) c.firstOrderAt = ts;
+    });
+
+    allTaxiOrders.forEach(o => {
+      if (!o.clientPhone) return;
+      if (!inRange(o.createdAt || 0)) return;
+      if (sourceFilter === 'courier' || sourceFilter === 'admin') return;
+      const c = ensure(o.clientPhone);
+      c.orders.push(o);
+      c.taxiOrders += 1;
+      c.totalOrders += 1;
+      if (isCompleted(o)) c.completedOrders += 1;
+      const ts = o.createdAt || 0;
+      if (ts > c.lastOrderAt) c.lastOrderAt = ts;
+      if (c.firstOrderAt === 0 || ts < c.firstOrderAt) c.firstOrderAt = ts;
+    });
+
+    const list = Array.from(map.values());
+    // Sort each client's orders newest first
+    list.forEach(c => c.orders.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)));
+    // Sort clients by number of orders desc
+    list.sort((a, b) => b.totalOrders - a.totalOrders || b.lastOrderAt - a.lastOrderAt);
+    return list;
+  }, [allDeliveryOrders, allTaxiOrders, nameByPhone, dateFrom, dateTo, sourceFilter]);
 
   const filteredClients = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -219,6 +278,14 @@ const Clients: React.FC<ClientsProps> = ({ adminId }) => {
       c.phone.toLowerCase().includes(q) || c.name.toLowerCase().includes(q)
     );
   }, [clients, searchQuery]);
+
+  const hasDateFilter = dateFrom !== '' || dateTo !== '';
+
+  const resetFilters = () => {
+    setDateFrom('');
+    setDateTo('');
+    setSourceFilter('all');
+  };
 
   const openClient = (client: Client) => {
     setSelectedClient(client);
@@ -234,29 +301,86 @@ const Clients: React.FC<ClientsProps> = ({ adminId }) => {
   const totals = useMemo(() => ({
     clients: clients.length,
     orders: clients.reduce((s, c) => s + c.totalOrders, 0),
+    courierOrders: clients.reduce((s, c) => s + c.courierOrders, 0),
+    adminOrders: clients.reduce((s, c) => s + c.adminOrders, 0),
+    taxiOrders: clients.reduce((s, c) => s + c.taxiOrders, 0),
   }), [clients]);
 
   return (
     <Box>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
         <Typography variant="h5" sx={{ fontWeight: 700 }}>Клиенты</Typography>
-        <Button variant="outlined" onClick={loadClients} disabled={loading}>Обновить</Button>
+        <Button variant="outlined" startIcon={<RefreshIcon />} onClick={loadClients} disabled={loading}>Обновить</Button>
       </Box>
 
       <Grid container spacing={2} sx={{ mb: 3 }}>
         <Grid item xs={6} md={3}>
           <Card sx={{ p: 2 }}>
-            <Typography variant="body2" color="text.secondary">Всего клиентов</Typography>
+            <Typography variant="body2" color="text.secondary">Всего клиентов{hasDateFilter ? ' (за период)' : ''}</Typography>
             <Typography variant="h5" fontWeight={700}>{totals.clients}</Typography>
           </Card>
         </Grid>
         <Grid item xs={6} md={3}>
           <Card sx={{ p: 2 }}>
-            <Typography variant="body2" color="text.secondary">Всего заказов</Typography>
+            <Typography variant="body2" color="text.secondary">Всего заказов{hasDateFilter ? ' (за период)' : ''}</Typography>
             <Typography variant="h5" fontWeight={700}>{totals.orders}</Typography>
           </Card>
         </Grid>
+        <Grid item xs={6} md={3}>
+          <Card sx={{ p: 2 }}>
+            <Typography variant="body2" color="text.secondary">Заказы курьеров (счётчик)</Typography>
+            <Typography variant="h5" fontWeight={700}>{totals.courierOrders}</Typography>
+          </Card>
+        </Grid>
+        <Grid item xs={6} md={3}>
+          <Card sx={{ p: 2 }}>
+            <Typography variant="body2" color="text.secondary">Заказы админа / Такси</Typography>
+            <Typography variant="h5" fontWeight={700}>{totals.adminOrders} / {totals.taxiOrders}</Typography>
+          </Card>
+        </Grid>
       </Grid>
+
+      {/* Filters: date range + source */}
+      <Card sx={{ p: 2, mb: 2 }}>
+        <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} alignItems={{ xs: 'stretch', md: 'center' }}>
+          <TextField
+            label="Дата с"
+            type="date"
+            value={dateFrom}
+            onChange={(e) => setDateFrom(e.target.value)}
+            InputLabelProps={{ shrink: true }}
+            sx={{ minWidth: 160 }}
+            size="small"
+          />
+          <TextField
+            label="Дата по"
+            type="date"
+            value={dateTo}
+            onChange={(e) => setDateTo(e.target.value)}
+            InputLabelProps={{ shrink: true }}
+            sx={{ minWidth: 160 }}
+            size="small"
+          />
+          <FormControl size="small" sx={{ minWidth: 240 }}>
+            <InputLabel>Источник клиентов</InputLabel>
+            <Select
+              value={sourceFilter}
+              label="Источник клиентов"
+              onChange={(e: SelectChangeEvent<SourceFilter>) => setSourceFilter(e.target.value as SourceFilter)}
+            >
+              <MenuItem value="all">Все источники</MenuItem>
+              <MenuItem value="courier">Курьер включил счётчик</MenuItem>
+              <MenuItem value="admin">Заказы, созданные админом</MenuItem>
+              <MenuItem value="taxi">Такси-заказы</MenuItem>
+            </Select>
+          </FormControl>
+          <Button variant="text" onClick={resetFilters} disabled={!hasDateFilter && sourceFilter === 'all'}>Сбросить</Button>
+          <Box sx={{ flex: 1 }} />
+          <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
+            Загружено заказов: {allDeliveryOrders.length + allTaxiOrders.length}
+          </Typography>
+        </Stack>
+      </Card>
 
       <TextField
         fullWidth
@@ -269,7 +393,10 @@ const Clients: React.FC<ClientsProps> = ({ adminId }) => {
 
       <Card>
         {loading ? (
-          <Box sx={{ display: 'flex', justifyContent: 'center', p: 5 }}><CircularProgress /></Box>
+          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, p: 5 }}>
+            <CircularProgress />
+            <Typography variant="body2" color="text.secondary">Загрузка всех заказов и клиентов...</Typography>
+          </Box>
         ) : (
           <TableContainer>
             <Table>
@@ -278,10 +405,12 @@ const Clients: React.FC<ClientsProps> = ({ adminId }) => {
                   <TableCell>Клиент</TableCell>
                   <TableCell>Телефон</TableCell>
                   <TableCell align="center">Всего заказов</TableCell>
-                  <TableCell align="center">Доставки</TableCell>
+                  <TableCell align="center">Курьер</TableCell>
+                  <TableCell align="center">Админ</TableCell>
                   <TableCell align="center">Такси</TableCell>
                   <TableCell align="center">Завершено</TableCell>
                   <TableCell align="right">Потрачено</TableCell>
+                  <TableCell>Первый заказ</TableCell>
                   <TableCell>Последний заказ</TableCell>
                 </TableRow>
               </TableHead>
@@ -296,16 +425,18 @@ const Clients: React.FC<ClientsProps> = ({ adminId }) => {
                     </TableCell>
                     <TableCell>{client.phone}</TableCell>
                     <TableCell align="center"><Chip label={client.totalOrders} color="primary" size="small" /></TableCell>
-                    <TableCell align="center">{client.deliveryOrders}</TableCell>
-                    <TableCell align="center">{client.taxiOrders}</TableCell>
+                    <TableCell align="center">{client.courierOrders > 0 ? client.courierOrders : '—'}</TableCell>
+                    <TableCell align="center">{client.adminOrders > 0 ? client.adminOrders : '—'}</TableCell>
+                    <TableCell align="center">{client.taxiOrders > 0 ? client.taxiOrders : '—'}</TableCell>
                     <TableCell align="center">{client.completedOrders}</TableCell>
                     <TableCell align="right" style={{ whiteSpace: 'nowrap' }}>{formatCost(client.totalSpent)}</TableCell>
-                    <TableCell>{formatDate(client.lastOrderAt)}</TableCell>
+                    <TableCell style={{ whiteSpace: 'nowrap' }}>{formatDate(client.firstOrderAt)}</TableCell>
+                    <TableCell style={{ whiteSpace: 'nowrap' }}>{formatDate(client.lastOrderAt)}</TableCell>
                   </TableRow>
                 ))}
                 {filteredClients.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={8} align="center" sx={{ py: 4, color: 'text.secondary' }}>Клиенты не найдены</TableCell>
+                    <TableCell colSpan={10} align="center" sx={{ py: 4, color: 'text.secondary' }}>Клиенты не найдены</TableCell>
                   </TableRow>
                 )}
               </TableBody>
@@ -331,8 +462,10 @@ const Clients: React.FC<ClientsProps> = ({ adminId }) => {
               <Grid container spacing={2} sx={{ mb: 2 }}>
                 <Grid item xs={6} md={3}><Typography variant="body2" color="text.secondary">Всего заказов</Typography><Typography fontWeight={700}>{selectedClient.totalOrders}</Typography></Grid>
                 <Grid item xs={6} md={3}><Typography variant="body2" color="text.secondary">Завершено</Typography><Typography fontWeight={700}>{selectedClient.completedOrders}</Typography></Grid>
-                <Grid item xs={6} md={3}><Typography variant="body2" color="text.secondary">Доставки / Такси</Typography><Typography fontWeight={700}>{selectedClient.deliveryOrders} / {selectedClient.taxiOrders}</Typography></Grid>
+                <Grid item xs={6} md={3}><Typography variant="body2" color="text.secondary">Курьер / Админ / Такси</Typography><Typography fontWeight={700}>{selectedClient.courierOrders} / {selectedClient.adminOrders} / {selectedClient.taxiOrders}</Typography></Grid>
                 <Grid item xs={6} md={3}><Typography variant="body2" color="text.secondary">Потрачено</Typography><Typography fontWeight={700} color="green">{formatCost(selectedClient.totalSpent)}</Typography></Grid>
+                <Grid item xs={6} md={3}><Typography variant="body2" color="text.secondary">Первый заказ (создан)</Typography><Typography fontWeight={700}>{formatDate(selectedClient.firstOrderAt)}</Typography></Grid>
+                <Grid item xs={6} md={3}><Typography variant="body2" color="text.secondary">Последний заказ</Typography><Typography fontWeight={700}>{formatDate(selectedClient.lastOrderAt)}</Typography></Grid>
               </Grid>
               <Divider sx={{ mb: 2 }} />
               <Typography variant="subtitle1" fontWeight={600} sx={{ mb: 1.5 }}>История заказов</Typography>
@@ -355,7 +488,7 @@ const Clients: React.FC<ClientsProps> = ({ adminId }) => {
                         <TableCell style={{ whiteSpace: 'nowrap' }}>{formatDate(o.createdAt)}</TableCell>
                         <TableCell>
                           {o.kind === 'delivery'
-                            ? <Chip icon={<DeliveryIcon />} label={o.orderKind === 'MARKETPLACE' ? 'Админ заказ' : 'Доставка'} size="small" />
+                            ? <Chip icon={<DeliveryIcon />} label={isAdminOrder(o) ? 'Админ заказ' : 'Счётчик курьера'} size="small" />
                             : <Chip icon={<TaxiIcon />} label="Такси" size="small" sx={{ bgcolor: '#FFF3C4' }} />}
                         </TableCell>
                         <TableCell sx={{ maxWidth: 240 }}>
