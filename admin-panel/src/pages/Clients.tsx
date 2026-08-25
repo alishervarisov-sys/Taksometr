@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box, Typography, Card, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, Chip, TextField, InputAdornment, Dialog,
@@ -106,21 +106,41 @@ const isAdminOrder = (o: DeliveryOrder) =>
 
 type SourceFilter = 'all' | 'courier' | 'admin' | 'taxi';
 
-const FETCH_PAGE_SIZE = 2000;
+// Ленивая загрузка: сначала последние INITIAL_PAGE заказов, далее подгрузка порциями при скролле
+const INITIAL_PAGE = 50;
+const LOAD_MORE_PAGE = 500;
 
-const fetchAllDocs = async (collName: string): Promise<QueryDocumentSnapshot<DocumentData>[]> => {
-  const result: QueryDocumentSnapshot<DocumentData>[] = [];
-  let cursor: QueryDocumentSnapshot<DocumentData> | null = null;
-  // Пагинация: загружаем ВСЕ документы коллекции, а не только последние N
-  for (;;) {
-    let q = query(collection(db, collName), orderBy('createdAt', 'desc'), limit(FETCH_PAGE_SIZE));
-    if (cursor) q = query(q, startAfter(cursor));
-    const snap = await getDocs(q);
-    result.push(...snap.docs);
-    if (snap.docs.length < FETCH_PAGE_SIZE) break;
-    cursor = snap.docs[snap.docs.length - 1];
-  }
-  return result;
+const fetchPage = async (
+  collName: string,
+  cursor: QueryDocumentSnapshot<DocumentData> | null,
+  pageSize: number,
+): Promise<{ docs: QueryDocumentSnapshot<DocumentData>[]; cursor: QueryDocumentSnapshot<DocumentData> | null; hasMore: boolean }> => {
+  let q = query(collection(db, collName), orderBy('createdAt', 'desc'), limit(pageSize));
+  if (cursor) q = query(q, startAfter(cursor));
+  const snap = await getDocs(q);
+  return {
+    docs: snap.docs,
+    cursor: snap.docs.length > 0 ? snap.docs[snap.docs.length - 1] : cursor,
+    hasMore: snap.docs.length === pageSize,
+  };
+};
+
+const mapDeliveryDoc = (d: QueryDocumentSnapshot<DocumentData>): DeliveryOrder =>
+  ({ id: d.id, kind: 'delivery', ...(d.data() as any) } as DeliveryOrder);
+
+const mapTaxiDoc = (d: QueryDocumentSnapshot<DocumentData>): TaxiHistoryOrder => {
+  const data = d.data() as any;
+  return {
+    id: d.id,
+    kind: 'taxi',
+    orderNumber: data.orderNumber,
+    clientPhone: data.customerPhone || '',
+    pickup: data.pickup,
+    destination: data.destination,
+    status: data.status || '',
+    driverName: data.driverName,
+    createdAt: data.createdAt || 0,
+  } as TaxiHistoryOrder;
 };
 
 // ─── Component ──────────────────────────────────────────────────────────────
@@ -131,6 +151,8 @@ const Clients: React.FC<ClientsProps> = ({ adminId }) => {
   const [allTaxiOrders, setAllTaxiOrders] = useState<TaxiHistoryOrder[]>([]);
   const [nameByPhone, setNameByPhone] = useState<Map<string, string>>(new Map());
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
@@ -140,6 +162,11 @@ const Clients: React.FC<ClientsProps> = ({ adminId }) => {
   const [selectedOrder, setSelectedOrder] = useState<DeliveryOrder | null>(null);
   const [routeOpen, setRouteOpen] = useState(false);
 
+  const deliveryCursorRef = useRef<QueryDocumentSnapshot<DocumentData> | null>(null);
+  const taxiCursorRef = useRef<QueryDocumentSnapshot<DocumentData> | null>(null);
+  const busyRef = useRef(false);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+
   const { isLoaded } = useJsApiLoader({
     id: 'google-map-script',
     googleMapsApiKey: GOOGLE_MAPS_API_KEY,
@@ -147,9 +174,13 @@ const Clients: React.FC<ClientsProps> = ({ adminId }) => {
 
   useEffect(() => {
     loadClients();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Первичная загрузка: последние 50 заказов каждой коллекции — быстро открываем страницу
   const loadClients = async () => {
+    if (busyRef.current) return;
+    busyRef.current = true;
     setLoading(true);
     try {
       // Load user names by phone
@@ -161,43 +192,80 @@ const Clients: React.FC<ClientsProps> = ({ adminId }) => {
       });
       setNameByPhone(names);
 
-      // Load ALL deliveries (courier meter + admin orders) with pagination
-      const delDocs = await fetchAllDocs('deliveries');
-      const deliveryOrders: DeliveryOrder[] = delDocs.map(d => {
-        const data = d.data() as any;
-        return { id: d.id, kind: 'delivery', ...data } as DeliveryOrder;
-      });
-      setAllDeliveryOrders(deliveryOrders);
+      const delPage = await fetchPage('deliveries', null, INITIAL_PAGE);
+      deliveryCursorRef.current = delPage.cursor;
+      setAllDeliveryOrders(delPage.docs.map(mapDeliveryDoc));
 
-      // Load ALL taxi orders with pagination
-      let taxiOrders: TaxiHistoryOrder[] = [];
+      let more = delPage.hasMore;
       try {
-        const taxiDocs = await fetchAllDocs('taxi_orders');
-        taxiOrders = taxiDocs.map(d => {
-          const data = d.data() as any;
-          return {
-            id: d.id,
-            kind: 'taxi',
-            orderNumber: data.orderNumber,
-            clientPhone: data.customerPhone || '',
-            pickup: data.pickup,
-            destination: data.destination,
-            status: data.status || '',
-            driverName: data.driverName,
-            createdAt: data.createdAt || 0,
-          } as TaxiHistoryOrder;
-        });
+        const taxiPage = await fetchPage('taxi_orders', null, INITIAL_PAGE);
+        taxiCursorRef.current = taxiPage.cursor;
+        setAllTaxiOrders(taxiPage.docs.map(mapTaxiDoc));
+        more = more || taxiPage.hasMore;
       } catch (e) {
         // taxi_orders may not exist / be inaccessible — ignore
         console.warn('Не удалось загрузить такси-заказы', e);
+        taxiCursorRef.current = null;
       }
-      setAllTaxiOrders(taxiOrders);
+      setHasMore(more);
     } catch (e) {
       console.error('Ошибка загрузки клиентов', e);
+      setHasMore(false);
     } finally {
       setLoading(false);
+      busyRef.current = false;
     }
   };
+
+  // Подгрузка следующей порции заказов при скролле
+  const loadMore = async () => {
+    if (busyRef.current || loading || !hasMore) return;
+    busyRef.current = true;
+    setLoadingMore(true);
+    try {
+      let more = false;
+      if (deliveryCursorRef.current) {
+        const page = await fetchPage('deliveries', deliveryCursorRef.current, LOAD_MORE_PAGE);
+        deliveryCursorRef.current = page.cursor;
+        if (page.docs.length > 0) {
+          setAllDeliveryOrders(prev => [...prev, ...page.docs.map(mapDeliveryDoc)]);
+        }
+        more = more || page.hasMore;
+      }
+      if (taxiCursorRef.current) {
+        try {
+          const page = await fetchPage('taxi_orders', taxiCursorRef.current, LOAD_MORE_PAGE);
+          taxiCursorRef.current = page.cursor;
+          if (page.docs.length > 0) {
+            setAllTaxiOrders(prev => [...prev, ...page.docs.map(mapTaxiDoc)]);
+          }
+          more = more || page.hasMore;
+        } catch (e) {
+          console.warn('Не удалось загрузить такси-заказы', e);
+          taxiCursorRef.current = null;
+        }
+      }
+      setHasMore(more);
+    } catch (e) {
+      console.error('Ошибка подгрузки заказов', e);
+      setHasMore(false);
+    } finally {
+      setLoadingMore(false);
+      busyRef.current = false;
+    }
+  };
+
+  // Автоподгрузка при появлении "сентинела" в зоне видимости
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el || loading || !hasMore) return;
+    const observer = new IntersectionObserver(entries => {
+      if (entries.some(e => e.isIntersecting)) loadMore();
+    }, { rootMargin: '400px' });
+    observer.observe(el);
+    return () => observer.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, loadingMore, hasMore]);
 
   const clients = useMemo(() => {
     const from = dateFrom ? new Date(dateFrom + 'T00:00:00').getTime() : null;
@@ -316,7 +384,9 @@ const Clients: React.FC<ClientsProps> = ({ adminId }) => {
       <Grid container spacing={2} sx={{ mb: 3 }}>
         <Grid item xs={6} md={3}>
           <Card sx={{ p: 2 }}>
-            <Typography variant="body2" color="text.secondary">Всего клиентов{hasDateFilter ? ' (за период)' : ''}</Typography>
+            <Typography variant="body2" color="text.secondary">
+              Всего клиентов{hasDateFilter ? ' (за период)' : hasMore ? ' (по загруженным заказам)' : ''}
+            </Typography>
             <Typography variant="h5" fontWeight={700}>{totals.clients}</Typography>
           </Card>
         </Grid>
@@ -377,7 +447,7 @@ const Clients: React.FC<ClientsProps> = ({ adminId }) => {
           <Button variant="text" onClick={resetFilters} disabled={!hasDateFilter && sourceFilter === 'all'}>Сбросить</Button>
           <Box sx={{ flex: 1 }} />
           <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
-            Загружено заказов: {allDeliveryOrders.length + allTaxiOrders.length}
+            Загружено заказов: {allDeliveryOrders.length + allTaxiOrders.length}{hasMore ? ' — прокрутите вниз, чтобы загрузить ещё' : ' (все)'}
           </Typography>
         </Stack>
       </Card>
@@ -395,7 +465,7 @@ const Clients: React.FC<ClientsProps> = ({ adminId }) => {
         {loading ? (
           <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, p: 5 }}>
             <CircularProgress />
-            <Typography variant="body2" color="text.secondary">Загрузка всех заказов и клиентов...</Typography>
+            <Typography variant="body2" color="text.secondary">Загрузка последних заказов...</Typography>
           </Box>
         ) : (
           <TableContainer>
@@ -444,6 +514,24 @@ const Clients: React.FC<ClientsProps> = ({ adminId }) => {
           </TableContainer>
         )}
       </Card>
+
+      {/* Infinite scroll: подгрузка истории заказов при скролле вниз */}
+      {!loading && (
+        <Box ref={sentinelRef} sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 2, py: 3 }}>
+          {loadingMore ? (
+            <>
+              <CircularProgress size={24} />
+              <Typography variant="body2" color="text.secondary">Загрузка ещё заказов...</Typography>
+            </>
+          ) : hasMore ? (
+            <Button variant="outlined" onClick={loadMore}>Загрузить ещё</Button>
+          ) : (
+            <Typography variant="body2" color="text.secondary">
+              Загружена вся история: {allDeliveryOrders.length + allTaxiOrders.length} заказов
+            </Typography>
+          )}
+        </Box>
+      )}
 
       {/* Client detail dialog with order history */}
       <Dialog open={detailOpen} onClose={() => setDetailOpen(false)} maxWidth="md" fullWidth>
