@@ -141,18 +141,6 @@ function formatCostForSms(cost: number): string {
 }
 
 // ============ CLIENT RATING (отзывы) ============
-/**
- * Base URL of the public rateDelivery HTTP endpoint. Configurable via the
- * RATING_BASE_URL env var; falls back to the default Cloud Functions URL built
- * from the current project id.
- */
-function getRatingBaseUrl(): string {
-  if (process.env.RATING_BASE_URL) return process.env.RATING_BASE_URL;
-  const project =
-    process.env.GCLOUD_PROJECT || process.env.GCP_PROJECT || "";
-  return `https://us-central1-${project}.cloudfunctions.net/rateDelivery`;
-}
-
 /** Generates a short opaque token used to authorize a single rating link. */
 function generateRatingToken(): string {
   return crypto.randomBytes(8).toString("hex");
@@ -711,10 +699,6 @@ export const createDelivery = functions.https.onCall(async (data, context) => {
     startSmsText += ` Навъи хидмат: ${deliveryTypeName}. Пардохт аз рӯи ҳисобгар.`;
   }
 
-  // Append real-time tracking link so the client can follow the courier on Google Maps
-  const trackingUrl = `https://zakitaksometr.web.app/track?d=${deliveryRef.id}`;
-  startSmsText += ` Расонандаро дар харита пайгирӣ кунед: ${trackingUrl}`;
-
   await sendSms(clientPhone, startSmsText);
 
   return {
@@ -947,13 +931,9 @@ export const completeDelivery = functions.https.onCall(async (data, context) => 
     }
   }
 
-  const ratingUrl =
-    `${getRatingBaseUrl()}?d=${encodeURIComponent(deliveryId)}&t=${ratingToken}`;
-
   completeSmsText +=
     `Маблағи умумӣ: ${formatCostForSms(totalCost)} сомонӣ. ` +
-    `Ба хизматрасонӣ баҳо диҳед: ${ratingUrl} ` +
-    `Барои хариди хӯрок, дору ва дигар молҳо барномаи ZaKi-ро боргирӣ кунед: https://clck.ru/3TuGb6 ` +
+    `Барномаи ZaKi-ро боргирӣ кунед: https://clck.ru/3TuGb6 ` +
     `Ташаккур!`;
 
   await sendSms(deliveryData.clientPhone, completeSmsText);
