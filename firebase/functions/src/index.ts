@@ -2155,7 +2155,7 @@ export const updateCommission = functions.https.onCall(async (data, context) => 
 
 // ============ ADMIN: TOP UP COURIER BALANCE ============
 export const topUpBalance = functions.https.onCall(async (data, context) => {
-  const {adminId, courierId, amount, note} = data;
+  const {adminId, courierId, amount, note, paymentStatus} = data;
 
   // Verify admin
   await verifyAdmin(adminId);
@@ -2163,6 +2163,13 @@ export const topUpBalance = functions.https.onCall(async (data, context) => {
   if (!courierId || !amount || amount <= 0) {
     throw new functions.https.HttpsError("invalid-argument", "courierId and positive amount required");
   }
+
+  if (paymentStatus !== undefined && paymentStatus !== "PAID" && paymentStatus !== "DEBT") {
+    throw new functions.https.HttpsError("invalid-argument", "paymentStatus must be PAID or DEBT");
+  }
+
+  const initialPaymentStatus = paymentStatus === "DEBT" ? "DEBT" : "PAID";
+  const createdAt = Date.now();
 
   // Get courier
   const courierRef = db.collection("users").doc(courierId);
@@ -2187,7 +2194,17 @@ export const topUpBalance = functions.https.onCall(async (data, context) => {
     balanceAfter: newBalance,
     description: note || "Пополнение баланса",
     adminId: adminId,
-    createdAt: Date.now(),
+    paymentStatus: initialPaymentStatus,
+    paymentStatusUpdatedAt: createdAt,
+    paymentStatusUpdatedBy: adminId,
+    paymentStatusHistory: [{
+      from: null,
+      to: initialPaymentStatus,
+      changedAt: createdAt,
+      adminId: adminId,
+    }],
+    ...(initialPaymentStatus === "PAID" ? {paidAt: createdAt} : {}),
+    createdAt: createdAt,
   });
 
   await sendPushToCourier(courierData, {
@@ -2205,6 +2222,58 @@ export const topUpBalance = functions.https.onCall(async (data, context) => {
     newBalance: newBalance,
     transactionId: txRef.id,
   };
+});
+
+// ============ ADMIN: UPDATE TOP-UP PAYMENT STATUS ============
+// Changes only the payment marker. The courier balance is intentionally not
+// touched because it was already credited when the top-up was created.
+export const updateTopUpPaymentStatus = functions.https.onCall(async (data, context) => {
+  const {adminId, transactionId, paymentStatus} = data;
+
+  await verifyAdmin(adminId);
+
+  if (!transactionId) {
+    throw new functions.https.HttpsError("invalid-argument", "transactionId required");
+  }
+  if (paymentStatus !== "PAID" && paymentStatus !== "DEBT") {
+    throw new functions.https.HttpsError("invalid-argument", "paymentStatus must be PAID or DEBT");
+  }
+
+  const transactionRef = db.collection("transactions").doc(transactionId);
+  const changedAt = Date.now();
+
+  await db.runTransaction(async (firestoreTransaction) => {
+    const transactionDoc = await firestoreTransaction.get(transactionRef);
+    if (!transactionDoc.exists) {
+      throw new functions.https.HttpsError("not-found", "Transaction not found");
+    }
+
+    const transactionData = transactionDoc.data()!;
+    if (transactionData.type !== "TOP_UP") {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "Payment status is available only for top-ups"
+      );
+    }
+
+    const previousStatus = transactionData.paymentStatus || null;
+    if (previousStatus === paymentStatus) return;
+
+    firestoreTransaction.update(transactionRef, {
+      paymentStatus: paymentStatus,
+      paymentStatusUpdatedAt: changedAt,
+      paymentStatusUpdatedBy: adminId,
+      paymentStatusHistory: admin.firestore.FieldValue.arrayUnion({
+        from: previousStatus,
+        to: paymentStatus,
+        changedAt: changedAt,
+        adminId: adminId,
+      }),
+      paidAt: paymentStatus === "PAID" ? changedAt : admin.firestore.FieldValue.delete(),
+    });
+  });
+
+  return {success: true, transactionId, paymentStatus};
 });
 
 // ============ GET COURIER TRANSACTIONS ============

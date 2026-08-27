@@ -46,7 +46,11 @@ interface Transaction {
   balanceAfter: number;
   description: string;
   createdAt: number;
+  paymentStatus?: PaymentStatus;
+  paymentStatusUpdatedAt?: number;
 }
+
+type PaymentStatus = 'PAID' | 'DEBT';
 
 type PeriodKey = 'all' | 'today' | 'yesterday' | 'last7' | 'last30' | 'thisMonth' | 'lastMonth' | 'thisYear' | 'custom';
 
@@ -91,12 +95,16 @@ const TYPE_OPTIONS: Array<{ key: string; label: string }> = [
   { key: '', label: 'Все операции' },
   { key: 'COMMISSION', label: 'Комиссия' },
   { key: 'TOP_UP', label: 'Пополнение' },
+  { key: 'DEBT', label: 'Долги' },
+  { key: 'PAID', label: 'Оплаченные' },
   { key: 'COMMISSION_REFUND', label: 'Возврат комиссии' },
 ];
 
 const TYPE_META: Record<string, { label: string; color: 'default' | 'primary' | 'secondary' | 'error' | 'info' | 'success' | 'warning' }> = {
   COMMISSION: { label: 'Комиссия', color: 'warning' },
   TOP_UP: { label: 'Пополнение', color: 'success' },
+  DEBT: { label: 'Долги', color: 'error' },
+  PAID: { label: 'Оплаченные', color: 'success' },
   COMMISSION_REFUND: { label: 'Возврат комиссии', color: 'info' },
 };
 
@@ -144,7 +152,9 @@ const Commission: React.FC<CommissionProps> = ({ adminId }) => {
   const [selectedCourier, setSelectedCourier] = useState<Courier | null>(null);
   const [topUpAmount, setTopUpAmount] = useState('');
   const [topUpNote, setTopUpNote] = useState('');
+  const [topUpPaymentStatus, setTopUpPaymentStatus] = useState<PaymentStatus>('PAID');
   const [topUpLoading, setTopUpLoading] = useState(false);
+  const [paymentStatusLoading, setPaymentStatusLoading] = useState<string | null>(null);
 
   // Progressive commission ladder dialog
   const [ladderOpen, setLadderOpen] = useState(false);
@@ -350,7 +360,9 @@ const Commission: React.FC<CommissionProps> = ({ adminId }) => {
   const buildConstraints = (f: Filters): QueryConstraint[] => {
     const cs: QueryConstraint[] = [];
     if (f.courierId) cs.push(where('courierId', '==', f.courierId));
-    if (f.type) cs.push(where('type', '==', f.type));
+    if (f.type && f.type !== 'DEBT' && f.type !== 'PAID') {
+      cs.push(where('type', '==', f.type));
+    }
     const range = getDateRange(f);
     if (range.start != null) cs.push(where('createdAt', '>=', range.start));
     if (range.end != null) cs.push(where('createdAt', '<=', range.end));
@@ -358,11 +370,87 @@ const Commission: React.FC<CommissionProps> = ({ adminId }) => {
     return cs;
   };
 
+  const matchesFiltersLocally = (tx: Transaction, f: Filters) => {
+    if (f.courierId && tx.courierId !== f.courierId) return false;
+    if (f.type === 'DEBT' && tx.paymentStatus !== 'DEBT') return false;
+    if (f.type === 'PAID' && tx.paymentStatus !== 'PAID') return false;
+    if (f.type && f.type !== 'DEBT' && f.type !== 'PAID' && tx.type !== f.type) return false;
+    const range = getDateRange(f);
+    if (range.start != null && tx.createdAt < range.start) return false;
+    if (range.end != null && tx.createdAt > range.end) return false;
+    return true;
+  };
+
+  const calculateStats = (items: Transaction[]): TransactionStats => {
+    let income = 0;
+    let expense = 0;
+    let commission = 0;
+    let topUp = 0;
+    let refund = 0;
+    items.forEach(item => {
+      const amount = Number(item.amount) || 0;
+      if (amount > 0) income += amount;
+      else expense += Math.abs(amount);
+      if (item.type === 'COMMISSION') commission += Math.abs(amount);
+      if (item.type === 'TOP_UP') topUp += amount;
+      if (item.type === 'COMMISSION_REFUND') refund += amount;
+    });
+    return {
+      count: items.length,
+      income,
+      expense,
+      commission,
+      topUp,
+      refund,
+      balance: income - expense,
+    };
+  };
+
+  const loadPaymentStatusTransactions = async (f: Filters, seq: number) => {
+    const paymentStatus = f.type as PaymentStatus;
+    setStatsLoading(true);
+    try {
+      // Deliberately query only by payment status and apply courier/date filters
+      // locally. This keeps these filters independent from composite indexes.
+      const snapshot = await getDocs(query(
+        collection(db, 'transactions'),
+        where('paymentStatus', '==', paymentStatus),
+      ));
+      if (seq !== requestSeq.current) return;
+      const data = snapshot.docs
+        .map(d => ({ id: d.id, ...d.data() }) as Transaction)
+        .filter(tx => matchesFiltersLocally(tx, f))
+        .sort((a, b) => b.createdAt - a.createdAt);
+      setTransactions(data);
+      setStats(calculateStats(data));
+      setLastDoc(null);
+      setHasMore(false);
+    } catch (err: any) {
+      console.error('Error loading payment status transactions:', err);
+      if (seq !== requestSeq.current) return;
+      setTransactions([]);
+      setStats(null);
+      setError('Не удалось загрузить операции по статусу оплаты. Попробуйте ещё раз.');
+    } finally {
+      if (seq === requestSeq.current) {
+        setTxLoading(false);
+        setStatsLoading(false);
+      }
+    }
+  };
+
   const loadFirstPage = async (f: Filters) => {
     const seq = ++requestSeq.current;
     setTxLoading(true);
     setLastDoc(null);
     setHasMore(false);
+    setError('');
+
+    if (f.type === 'DEBT' || f.type === 'PAID') {
+      await loadPaymentStatusTransactions(f, seq);
+      return;
+    }
+
     try {
       const q = query(
         collection(db, 'transactions'),
@@ -378,8 +466,34 @@ const Commission: React.FC<CommissionProps> = ({ adminId }) => {
       setTransactions(data);
       setLastDoc(snapshot.docs.length > 0 ? snapshot.docs[snapshot.docs.length - 1] : null);
       setHasMore(snapshot.docs.length === PAGE_SIZE);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error loading transactions:', err);
+      // If a composite index is still being prepared, fall back to a local
+      // filter so every option remains usable instead of showing stale rows.
+      try {
+        setStatsLoading(true);
+        const fallbackSnapshot = await getDocs(collection(db, 'transactions'));
+        if (seq !== requestSeq.current) return;
+        const fallbackData = fallbackSnapshot.docs
+          .map(d => ({ id: d.id, ...d.data() }) as Transaction)
+          .filter(tx => matchesFiltersLocally(tx, f))
+          .sort((a, b) => b.createdAt - a.createdAt);
+        setTransactions(fallbackData);
+        setStats(calculateStats(fallbackData));
+        setLastDoc(null);
+        setHasMore(false);
+        setError('');
+        return;
+      } catch (fallbackErr) {
+        console.error('Fallback transaction filter failed:', fallbackErr);
+        if (seq === requestSeq.current) {
+          setTransactions([]);
+          setStats(null);
+          setError('Не удалось применить фильтр. Попробуйте ещё раз.');
+        }
+      } finally {
+        if (seq === requestSeq.current) setStatsLoading(false);
+      }
     } finally {
       if (seq === requestSeq.current) setTxLoading(false);
     }
@@ -419,26 +533,11 @@ const Commission: React.FC<CommissionProps> = ({ adminId }) => {
       const q = query(collection(db, 'transactions'), ...buildConstraints(f));
       const snapshot = await getDocs(q);
       if (seq !== requestSeq.current) return;
-      let count = 0;
-      let income = 0;
-      let expense = 0;
-      let commission = 0;
-      let topUp = 0;
-      let refund = 0;
-      snapshot.forEach(doc => {
-        const data = doc.data();
-        const amount = Number(data.amount) || 0;
-        const type = data.type || '';
-        count += 1;
-        if (amount > 0) income += amount;
-        else expense += Math.abs(amount);
-        if (type === 'COMMISSION') commission += Math.abs(amount);
-        if (type === 'TOP_UP') topUp += amount;
-        if (type === 'COMMISSION_REFUND') refund += amount;
-      });
-      setStats({ count, income, expense, commission, topUp, refund, balance: income - expense });
-    } catch (err) {
+      const data = snapshot.docs.map(d => ({ id: d.id, ...d.data() })) as Transaction[];
+      setStats(calculateStats(data));
+    } catch (err: any) {
       console.error('Error loading statistics:', err);
+      if (seq === requestSeq.current) setStats(null);
     } finally {
       if (seq === requestSeq.current) setStatsLoading(false);
     }
@@ -567,18 +666,48 @@ const Commission: React.FC<CommissionProps> = ({ adminId }) => {
         courierId: selectedCourier.id,
         amount: Number(topUpAmount),
         note: topUpNote || 'Пополнение баланса',
+        paymentStatus: topUpPaymentStatus,
       });
       const data = result.data as any;
-      setSuccess(`Баланс пополнен. Новый баланс: ${data.newBalance} сомони`);
+      setSuccess(
+        topUpPaymentStatus === 'PAID'
+          ? `Баланс пополнен и оплата отмечена. Новый баланс: ${data.newBalance} сомони`
+          : `Баланс пополнен в долг. Новый баланс: ${data.newBalance} сомони`,
+      );
       setTopUpOpen(false);
       setTopUpAmount('');
       setTopUpNote('');
+      setTopUpPaymentStatus('PAID');
       loadCouriers();
       loadFirstPage(applied);
     } catch (err: any) {
       setError(err.message || 'Ошибка пополнения');
     } finally {
       setTopUpLoading(false);
+    }
+  };
+
+  const handlePaymentStatusChange = async (tx: Transaction, paymentStatus: PaymentStatus) => {
+    if (tx.type !== 'TOP_UP' || tx.paymentStatus === paymentStatus) return;
+    setPaymentStatusLoading(tx.id);
+    setError('');
+    try {
+      const fn = httpsCallable(functions, 'updateTopUpPaymentStatus');
+      await fn({ adminId, transactionId: tx.id, paymentStatus });
+      setTransactions(prev => prev.map(item => (
+        item.id === tx.id
+          ? { ...item, paymentStatus, paymentStatusUpdatedAt: Date.now() }
+          : item
+      )));
+      setSuccess(
+        paymentStatus === 'PAID'
+          ? `Пополнение курьера «${tx.courierName}» отмечено как оплаченное`
+          : `Пополнение курьера «${tx.courierName}» отмечено как долг`,
+      );
+    } catch (err: any) {
+      setError(err.message || 'Ошибка изменения статуса оплаты');
+    } finally {
+      setPaymentStatusLoading(null);
     }
   };
 
@@ -595,42 +724,6 @@ const Commission: React.FC<CommissionProps> = ({ adminId }) => {
 
   const courierOptions = useMemo<Array<Courier | null>>(() => [null, ...couriers], [couriers]);
 
-  const renderStatCard = (
-    title: string,
-    value: string | number | null,
-    color: string,
-    loading: boolean,
-  ) => (
-    <Grid item xs={6} md={3}>
-      <Card sx={{ height: '100%' }}>
-        <CardContent sx={{ textAlign: 'center', p: 2.5 }}>
-          <Typography variant="body2" color="text.secondary" noWrap>{title}</Typography>
-          <Typography variant="h5" sx={{ fontWeight: 700, color, mt: 0.5 }}>
-            {loading ? '…' : value}
-          </Typography>
-        </CardContent>
-      </Card>
-    </Grid>
-  );
-
-  const renderMiniStatCard = (
-    title: string,
-    value: string | number | null,
-    color: string,
-    loading: boolean,
-  ) => (
-    <Grid item xs={4} md={4}>
-      <Card sx={{ height: '100%' }}>
-        <CardContent sx={{ textAlign: 'center', p: 2 }}>
-          <Typography variant="body2" color="text.secondary" noWrap>{title}</Typography>
-          <Typography variant="h6" sx={{ fontWeight: 700, color, mt: 0.5 }}>
-            {loading ? '…' : value}
-          </Typography>
-        </CardContent>
-      </Card>
-    </Grid>
-  );
-
   return (
     <Box>
       <Typography variant="h5" sx={{ fontWeight: 700, mb: 3 }}>Комиссия и баланс</Typography>
@@ -640,34 +733,35 @@ const Commission: React.FC<CommissionProps> = ({ adminId }) => {
 
       <Grid container spacing={3}>
         {/* Global commission settings */}
-        <Grid item xs={12} md={4}>
+        <Grid item xs={12}>
           <Card>
             <CardContent sx={{ p: 3 }}>
               <Typography variant="h6" sx={{ mb: 2 }}>Глобальная комиссия</Typography>
-              <TextField
-                fullWidth
-                label="Комиссия по умолчанию (%)"
-                type="number"
-                value={globalCommission}
-                onChange={(e) => setGlobalCommission(e.target.value)}
-                margin="normal"
-                helperText="Применяется к курьерам, у которых не задана индивидуальная комиссия"
-              />
-              <Button
-                variant="contained"
-                fullWidth
-                onClick={handleSaveGlobalCommission}
-                disabled={loading}
-                sx={{ mt: 2 }}
-              >
-                Сохранить
-              </Button>
+              <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} alignItems={{ md: 'flex-start' }}>
+                <TextField
+                  label="Комиссия по умолчанию (%)"
+                  type="number"
+                  value={globalCommission}
+                  onChange={(e) => setGlobalCommission(e.target.value)}
+                  size="small"
+                  helperText="Применяется к курьерам без индивидуальной комиссии"
+                  sx={{ width: { xs: '100%', md: 420 } }}
+                />
+                <Button
+                  variant="contained"
+                  onClick={handleSaveGlobalCommission}
+                  disabled={loading}
+                  sx={{ minWidth: 160, height: 40 }}
+                >
+                  Сохранить
+                </Button>
+              </Stack>
             </CardContent>
           </Card>
         </Grid>
 
         {/* Courier balances + individual commission */}
-        <Grid item xs={12} md={8}>
+        <Grid item xs={12}>
           <Card>
             <CardContent>
               <Typography variant="h6" sx={{ mb: 2 }}>Курьеры — комиссия и баланс</Typography>
@@ -782,6 +876,7 @@ const Commission: React.FC<CommissionProps> = ({ adminId }) => {
                             startIcon={<Add />}
                             onClick={() => {
                               setSelectedCourier(courier);
+                              setTopUpPaymentStatus('PAID');
                               setTopUpOpen(true);
                             }}
                           >
@@ -795,29 +890,6 @@ const Commission: React.FC<CommissionProps> = ({ adminId }) => {
               </TableContainer>
             </CardContent>
           </Card>
-        </Grid>
-
-        {/* Filtered statistics */}
-        <Grid item xs={12}>
-          <Grid container spacing={2.5}>
-            {statsLoading && (
-              <Grid item xs={12}>
-                <LinearProgress sx={{ borderRadius: 1 }} />
-              </Grid>
-            )}
-            {renderStatCard('Операций', stats ? stats.count : null, 'primary.main', statsLoading)}
-            {renderStatCard('Доход', stats ? formatCost(stats.income) : null, '#00C853', statsLoading)}
-            {renderStatCard('Расход', stats ? formatCost(stats.expense) : null, '#D32F2F', statsLoading)}
-            {renderStatCard(
-              'Баланс',
-              stats ? formatCost(stats.balance) : null,
-              (stats?.balance ?? 0) >= 0 ? '#00C853' : '#D32F2F',
-              statsLoading,
-            )}
-            {renderMiniStatCard('Комиссия', stats ? formatCost(stats.commission) : null, '#FF6D00', statsLoading)}
-            {renderMiniStatCard('Пополнения', stats ? formatCost(stats.topUp) : null, '#2196F3', statsLoading)}
-            {renderMiniStatCard('Возвраты', stats ? formatCost(stats.refund) : null, '#7B1FA2', statsLoading)}
-          </Grid>
         </Grid>
 
         {/* Transaction history with filters */}
@@ -911,6 +983,12 @@ const Commission: React.FC<CommissionProps> = ({ adminId }) => {
                 >
                   Сбросить
                 </Button>
+                <Chip
+                  label={statsLoading ? 'Найдено: …' : `Найдено: ${stats?.count ?? 0}`}
+                  color="primary"
+                  variant="outlined"
+                  sx={{ fontWeight: 700, width: { xs: '100%', sm: 'auto' } }}
+                />
               </Stack>
 
               {/* Custom period date fields */}
@@ -994,6 +1072,7 @@ const Commission: React.FC<CommissionProps> = ({ adminId }) => {
                           <TableCell>Тип</TableCell>
                           <TableCell>Сумма</TableCell>
                           <TableCell>Баланс после</TableCell>
+                          <TableCell>Статус оплаты</TableCell>
                           <TableCell>Описание</TableCell>
                         </TableRow>
                       </TableHead>
@@ -1013,6 +1092,29 @@ const Commission: React.FC<CommissionProps> = ({ adminId }) => {
                               {tx.amount >= 0 ? '+' : ''}{formatCost(tx.amount)}
                             </TableCell>
                             <TableCell>{formatCost(tx.balanceAfter)}</TableCell>
+                            <TableCell>
+                              {tx.type === 'TOP_UP' ? (
+                                <FormControl size="small" sx={{ minWidth: 135 }}>
+                                  <Select
+                                    value={tx.paymentStatus || ''}
+                                    displayEmpty
+                                    disabled={paymentStatusLoading === tx.id}
+                                    onChange={(e) => handlePaymentStatusChange(tx, e.target.value as PaymentStatus)}
+                                    sx={{
+                                      height: 32,
+                                      color: tx.paymentStatus === 'PAID' ? 'success.main' : tx.paymentStatus === 'DEBT' ? 'error.main' : 'text.secondary',
+                                      fontWeight: 600,
+                                    }}
+                                  >
+                                    <MenuItem value="" disabled>Не указан</MenuItem>
+                                    <MenuItem value="PAID">Оплачено</MenuItem>
+                                    <MenuItem value="DEBT">Долг</MenuItem>
+                                  </Select>
+                                </FormControl>
+                              ) : (
+                                <Typography color="text.secondary">—</Typography>
+                              )}
+                            </TableCell>
                             <TableCell>{tx.description}</TableCell>
                           </TableRow>
                         ))}
@@ -1048,6 +1150,23 @@ const Commission: React.FC<CommissionProps> = ({ adminId }) => {
             onChange={(e) => setTopUpAmount(e.target.value)}
             margin="normal"
           />
+          <FormControl fullWidth margin="normal">
+            <InputLabel id="top-up-payment-status-label">Статус оплаты</InputLabel>
+            <Select
+              labelId="top-up-payment-status-label"
+              label="Статус оплаты"
+              value={topUpPaymentStatus}
+              onChange={(e) => setTopUpPaymentStatus(e.target.value as PaymentStatus)}
+            >
+              <MenuItem value="PAID">Оплачено</MenuItem>
+              <MenuItem value="DEBT">Долг — курьер оплатит позже</MenuItem>
+            </Select>
+          </FormControl>
+          {topUpPaymentStatus === 'DEBT' && (
+            <Alert severity="warning" sx={{ mt: 1 }}>
+              Баланс будет пополнен сейчас, а в истории операция останется со статусом «Долг», пока админ не отметит оплату.
+            </Alert>
+          )}
           <TextField
             fullWidth
             label="Примечание (необязательно)"
