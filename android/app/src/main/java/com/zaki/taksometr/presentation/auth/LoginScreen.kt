@@ -72,12 +72,6 @@ fun LoginScreen(
                 ),
                 color = MaterialTheme.colorScheme.onPrimary
             )
-            Text(
-                text = "Taksometr",
-                style = MaterialTheme.typography.headlineMedium,
-                color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.8f)
-            )
-
             Spacer(modifier = Modifier.height(48.dp))
 
             // Login Card

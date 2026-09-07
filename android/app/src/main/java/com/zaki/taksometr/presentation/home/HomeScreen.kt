@@ -15,6 +15,10 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.Language
+import androidx.compose.material.ExperimentalMaterialApi
+import androidx.compose.material.pullrefresh.PullRefreshIndicator
+import androidx.compose.material.pullrefresh.pullRefresh
+import androidx.compose.material.pullrefresh.rememberPullRefreshState
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -22,6 +26,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.rememberScrollState
@@ -46,10 +52,15 @@ import com.zaki.taksometr.util.LocationUtils
 import com.zaki.taksometr.util.str
 import com.zaki.taksometr.util.Strings
 
-@OptIn(ExperimentalPermissionsApi::class, ExperimentalMaterial3Api::class)
+@OptIn(
+    ExperimentalPermissionsApi::class,
+    ExperimentalMaterial3Api::class,
+    ExperimentalMaterialApi::class
+)
 @Composable
 fun HomeScreen(
     onStartDelivery: () -> Unit,
+    onOrdersMapClick: () -> Unit,
     onHistoryClick: () -> Unit,
     onProfileClick: () -> Unit,
     onLogout: () -> Unit,
@@ -124,7 +135,7 @@ fun HomeScreen(
         Scaffold(
             topBar = {
                 TopAppBar(
-                    title = { Text("ZaKi Taksometr") },
+                    title = { Text("ZaKi") },
                     colors = TopAppBarDefaults.topAppBarColors(
                         containerColor = MaterialTheme.colorScheme.primary,
                         titleContentColor = MaterialTheme.colorScheme.onPrimary
@@ -237,13 +248,26 @@ fun HomeScreen(
         state.error?.let { snackbarHostState.showSnackbar(it) }
     }
 
+    val noInternetMessage = str(Strings.noInternetConnection)
+    val refreshFailedMessage = str(Strings.refreshFailed)
+    LaunchedEffect(state.refreshError, noInternetMessage, refreshFailedMessage) {
+        state.refreshError?.let { refreshError ->
+            val message = when (refreshError) {
+                HomeRefreshError.NO_INTERNET -> noInternetMessage
+                HomeRefreshError.FAILED -> refreshFailedMessage
+            }
+            snackbarHostState.showSnackbar(message)
+            viewModel.consumeRefreshError()
+        }
+    }
+
     Scaffold(
         snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = {
                     Text(
-                        "ZaKi Taksometr",
+                        "ZaKi",
                         style = MaterialTheme.typography.titleLarge
                     )
                 },
@@ -255,6 +279,28 @@ fun HomeScreen(
                             Icons.Default.PlayArrow,
                             contentDescription = str(Strings.startTrip)
                         )
+                    }
+                    IconButton(onClick = onOrdersMapClick) {
+                        BadgedBox(
+                            badge = {
+                                if (state.pendingMarketplaceOrders.isNotEmpty()) {
+                                    Badge(
+                                        containerColor = MaterialTheme.colorScheme.error,
+                                        contentColor = MaterialTheme.colorScheme.onError
+                                    ) {
+                                        Text(
+                                            if (state.pendingMarketplaceOrders.size > 99) "99+"
+                                            else state.pendingMarketplaceOrders.size.toString()
+                                        )
+                                    }
+                                }
+                            }
+                        ) {
+                            Icon(
+                                Icons.Default.Map,
+                                contentDescription = "Карта ожидающих заказов"
+                            )
+                        }
                     }
                     IconButton(onClick = { showLanguageDialog = true }) {
                         Icon(Icons.Outlined.Language, contentDescription = str(Strings.language))
@@ -274,13 +320,32 @@ fun HomeScreen(
             )
         }
     ) { paddingValues ->
-        Column(
+        val pullRefreshState = rememberPullRefreshState(
+            refreshing = state.isRefreshing,
+            onRefresh = viewModel::refreshHome
+        )
+
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .padding(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+                .pullRefresh(pullRefreshState)
         ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        // A small elastic pull makes the refresh gesture visible
+                        // immediately, even before the indicator reaches its trigger.
+                        val pull = pullRefreshState.progress.coerceIn(0f, 1.5f)
+                        translationY = pull * 48.dp.toPx()
+                        scaleY = 1f + pull * 0.012f
+                        transformOrigin = TransformOrigin(0.5f, 0f)
+                    }
+                    .verticalScroll(rememberScrollState())
+                    .padding(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
             // Combined courier info + stats card
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -512,9 +577,7 @@ fun HomeScreen(
             if (state.pendingMarketplaceOrders.isNotEmpty()) {
                 Column(
                     modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .verticalScroll(rememberScrollState()),
+                        .fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Spacer(modifier = Modifier.height(4.dp))
@@ -528,11 +591,21 @@ fun HomeScreen(
                     Spacer(modifier = Modifier.height(4.dp))
                 }
             } else {
-                Spacer(modifier = Modifier.weight(1f))
+                Spacer(modifier = Modifier.height(24.dp))
             }
 
             // "Начать поездку" moved to the top app bar (PlayArrow icon),
             // freeing the bottom space for pending orders.
+            }
+
+            PullRefreshIndicator(
+                refreshing = state.isRefreshing,
+                state = pullRefreshState,
+                modifier = Modifier.align(Alignment.TopCenter),
+                backgroundColor = MaterialTheme.colorScheme.surface,
+                contentColor = MaterialTheme.colorScheme.primary,
+                scale = true
+            )
         }
     }
 

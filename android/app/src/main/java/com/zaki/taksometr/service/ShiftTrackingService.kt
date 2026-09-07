@@ -215,7 +215,7 @@ class ShiftTrackingService : Service() {
         )
 
         return NotificationCompat.Builder(this, ZaKiApp.SHIFT_CHANNEL_ID)
-            .setContentTitle("ZaKi Taksometr")
+            .setContentTitle("ZaKi")
             .setContentText("Вы на смене — отслеживание активно")
             .setSmallIcon(R.drawable.ic_delivery)
             .setColor(android.graphics.Color.parseColor("#1B5E20"))

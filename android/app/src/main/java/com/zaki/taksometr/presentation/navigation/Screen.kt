@@ -3,6 +3,7 @@ package com.zaki.taksometr.presentation.navigation
 sealed class Screen(val route: String) {
     data object Auth : Screen("auth")
     data object Home : Screen("home")
+    data object PendingOrdersMap : Screen("pending_orders_map")
     data object ActiveDelivery : Screen("active_delivery")
     data object DeliveryComplete : Screen("delivery_complete/{deliveryId}") {
         fun createRoute(deliveryId: String) = "delivery_complete/$deliveryId"

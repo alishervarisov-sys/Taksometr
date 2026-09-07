@@ -25,7 +25,7 @@
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:layout_marginStart="8dp"
-            android:text="ZaKi Taksometr"
+            android:text="ZaKi"
             android:textColor="@android:color/white"
             android:textStyle="bold"
             android:textSize="14sp" />

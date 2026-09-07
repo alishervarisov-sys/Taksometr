@@ -85,7 +85,7 @@ class ZaKiFirebaseMessagingService : FirebaseMessagingService() {
                 }
             }
             else -> {
-                val title = message.data["title"] ?: message.notification?.title ?: "ZaKi Taksometr"
+                val title = message.data["title"] ?: message.notification?.title ?: "ZaKi"
                 val body  = message.data["body"]  ?: message.notification?.body  ?: ""
                 if (body.isNotEmpty()) {
                     showNotification(title, body)

@@ -3,9 +3,9 @@ package com.zaki.taksometr.util
 object Strings {
     // App name
     val appName = mapOf(
-        "tg" to "ZaKi Таксометр",
-        "ru" to "ZaKi Таксометр",
-        "en" to "ZaKi Taximeter"
+        "tg" to "ZaKi",
+        "ru" to "ZaKi",
+        "en" to "ZaKi"
     )
     
     // Language selection
@@ -99,6 +99,18 @@ object Strings {
         "tg" to "Расонданҳо",
         "ru" to "Доставки",
         "en" to "Deliveries"
+    )
+
+    val noInternetConnection = mapOf(
+        "tg" to "Пайвастшавӣ ба интернет нест",
+        "ru" to "Нет подключения к интернету",
+        "en" to "No internet connection"
+    )
+
+    val refreshFailed = mapOf(
+        "tg" to "Экранро навсозӣ карда натавонистем. Боз кӯшиш кунед",
+        "ru" to "Не удалось обновить экран. Попробуйте ещё раз",
+        "en" to "Couldn't refresh the screen. Please try again"
     )
     
     val startTrip = mapOf(

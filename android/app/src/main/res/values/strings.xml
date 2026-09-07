@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">ZaKi Taksometr</string>
+    <string name="app_name">ZaKi</string>
     <string name="widget_description">Текущая доставка: путь, время, стоимость</string>
 </resources>

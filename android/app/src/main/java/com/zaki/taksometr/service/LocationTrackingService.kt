@@ -444,7 +444,7 @@ class LocationTrackingService : Service() {
         val largeIcon = android.graphics.BitmapFactory.decodeResource(resources, R.mipmap.ic_launcher)
 
         return NotificationCompat.Builder(this, ZaKiApp.TRACKING_CHANNEL_ID)
-            .setContentTitle("ZaKi Taksometr")
+            .setContentTitle("ZaKi")
             .setContentText(contentText)
             .setSmallIcon(R.drawable.ic_delivery)
             .apply { largeIcon?.let { setLargeIcon(it) } }

@@ -1,13 +1,19 @@
 package com.zaki.taksometr.presentation.home
 
+import android.content.Context
 import android.content.SharedPreferences
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.Query
+import com.google.firebase.firestore.QuerySnapshot
+import com.google.firebase.firestore.Source
 import com.google.firebase.messaging.FirebaseMessaging
 import com.zaki.taksometr.domain.model.Delivery
+import com.zaki.taksometr.domain.model.GeoPoint
 import com.zaki.taksometr.domain.model.User
 import com.zaki.taksometr.domain.repository.AuthRepository
 import com.zaki.taksometr.domain.repository.DeliveryRepository
@@ -16,10 +22,13 @@ import com.zaki.taksometr.domain.repository.TodayStats
 import com.zaki.taksometr.util.Constants
 import com.zaki.taksometr.util.Resource
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
 import javax.inject.Inject
 
 data class PendingMarketplaceOrder(
@@ -48,13 +57,20 @@ data class WinnerAnnouncement(
     val isWinner: Boolean = false
 )
 
+enum class HomeRefreshError {
+    NO_INTERNET,
+    FAILED
+}
+
 data class HomeState(
     val user: User? = null,
     val todayStats: TodayStats = TodayStats(),
     val activeDelivery: Delivery? = null,
     val activeCount: Int = 0,
+    val currentCourierLocation: GeoPoint? = null,
     val pendingMarketplaceOrders: List<PendingMarketplaceOrder> = emptyList(),
     val isAcceptingMarketplaceOrder: Boolean = false,
+    val recentlyAcceptedMarketplaceOrderId: String? = null,
     val clientPhone: String = "",
     val isStartingDelivery: Boolean = false,
     val showStartDialog: Boolean = false,
@@ -66,11 +82,14 @@ data class HomeState(
     val isUpdatingShift: Boolean = false,
     val winnerAnnouncement: WinnerAnnouncement? = null,
     val showWinnerDialog: Boolean = false,
+    val isRefreshing: Boolean = false,
+    val refreshError: HomeRefreshError? = null,
     val error: String? = null
 )
 
 @HiltViewModel
 class HomeViewModel @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val authRepository: AuthRepository,
     private val deliveryRepository: DeliveryRepository,
     private val locationRepository: LocationRepository,
@@ -86,6 +105,7 @@ class HomeViewModel @Inject constructor(
     private var userLoaded = false
     private var pendingOrderListener: ListenerRegistration? = null
     private var winnerListener: ListenerRegistration? = null
+    private var mapLocationJob: Job? = null
 
     init {
         loadUserData()
@@ -138,23 +158,32 @@ class HomeViewModel @Inject constructor(
 
     private fun observePendingMarketplaceOrders(courierId: String) {
         pendingOrderListener?.remove()
-        pendingOrderListener = FirebaseFirestore.getInstance()
-            .collection("deliveries")
-            .whereEqualTo("status", "PENDING")
-            .whereEqualTo("orderKind", "MARKETPLACE")
-            .whereArrayContains("availableCourierIds", courierId)
+        pendingOrderListener = pendingMarketplaceOrdersQuery(courierId)
             .addSnapshotListener { snapshot, error ->
                 if (error != null) {
                     android.util.Log.e("HomeViewModel", "Pending orders listener error", error)
                     return@addSnapshotListener
                 }
-                if (_state.value.activeCount >= Constants.MAX_CONCURRENT_DELIVERIES) {
-                    _state.value = _state.value.copy(pendingMarketplaceOrders = emptyList())
-                    return@addSnapshotListener
-                }
-                val orders = snapshot?.documents
-                    ?.filter { it.id != deliveryRepository.getCurrentActiveDeliveryId() }
-                    ?.mapNotNull { doc ->
+                snapshot?.let(::applyPendingMarketplaceOrders)
+            }
+    }
+
+    private fun pendingMarketplaceOrdersQuery(courierId: String): Query =
+        FirebaseFirestore.getInstance()
+            .collection("deliveries")
+            .whereEqualTo("status", "PENDING")
+            .whereEqualTo("orderKind", "MARKETPLACE")
+            .whereArrayContains("availableCourierIds", courierId)
+
+    private fun applyPendingMarketplaceOrders(snapshot: QuerySnapshot) {
+        if (_state.value.activeCount >= Constants.MAX_CONCURRENT_DELIVERIES) {
+            _state.value = _state.value.copy(pendingMarketplaceOrders = emptyList())
+            return
+        }
+
+        val orders = snapshot.documents
+            .filter { it.id != deliveryRepository.getCurrentActiveDeliveryId() }
+            .map { doc ->
                     val pickup = doc.get("pickup") as? Map<*, *>
                     val destination = doc.get("destination") as? Map<*, *>
                     PendingMarketplaceOrder(
@@ -169,14 +198,15 @@ class HomeViewModel @Inject constructor(
                         destinationLng = (destination?.get("longitude") as? Number)?.toDouble(),
                         createdAt = doc.getLong("createdAt") ?: 0L
                     )
-                } ?: emptyList()
-                if (orders.isNotEmpty()) {
-                    prefs.edit().putString(Constants.PREF_PENDING_MARKETPLACE_DELIVERY_ID, orders.first().id).apply()
-                } else {
-                    prefs.edit().remove(Constants.PREF_PENDING_MARKETPLACE_DELIVERY_ID).apply()
                 }
-                _state.value = _state.value.copy(pendingMarketplaceOrders = orders)
-            }
+            .sortedByDescending { it.createdAt }
+
+        if (orders.isNotEmpty()) {
+            prefs.edit().putString(Constants.PREF_PENDING_MARKETPLACE_DELIVERY_ID, orders.first().id).apply()
+        } else {
+            prefs.edit().remove(Constants.PREF_PENDING_MARKETPLACE_DELIVERY_ID).apply()
+        }
+        _state.value = _state.value.copy(pendingMarketplaceOrders = orders)
     }
 
     private fun loadPendingMarketplaceOrderFromPrefsFallback(courierId: String) {
@@ -251,8 +281,100 @@ class HomeViewModel @Inject constructor(
             if (courierId.isBlank()) return@launch
 
             val point = locationRepository.getCurrentLocation() ?: return@launch
+            _state.value = _state.value.copy(currentCourierLocation = point)
             locationRepository.updateCourierLocation(courierId, point)
         }
+    }
+
+    /** Keep the order map and its travel estimates in sync with the courier. */
+    fun startMapLocationUpdates() {
+        if (mapLocationJob?.isActive == true) return
+        mapLocationJob = viewModelScope.launch {
+            locationRepository.getLocationUpdates().collect { point ->
+                _state.value = _state.value.copy(currentCourierLocation = point)
+            }
+        }
+    }
+
+    fun stopMapLocationUpdates() {
+        mapLocationJob?.cancel()
+        mapLocationJob = null
+    }
+
+    /**
+     * Force-refresh both free marketplace orders and an order assigned directly
+     * by an admin. The pending-order query explicitly uses the server so a stale
+     * Firestore listener/cache cannot make a newly-created order stay hidden.
+     */
+    fun refreshHome() {
+        if (_state.value.isRefreshing) return
+
+        viewModelScope.launch {
+            _state.value = _state.value.copy(isRefreshing = true, refreshError = null)
+
+            if (!hasInternetConnection()) {
+                _state.value = _state.value.copy(
+                    isRefreshing = false,
+                    refreshError = HomeRefreshError.NO_INTERNET
+                )
+                return@launch
+            }
+
+            val courierId = _state.value.user?.id ?: userId
+            if (courierId.isBlank()) {
+                _state.value = _state.value.copy(
+                    isRefreshing = false,
+                    refreshError = HomeRefreshError.FAILED
+                )
+                return@launch
+            }
+
+            try {
+                val pendingSnapshot = pendingMarketplaceOrdersQuery(courierId)
+                    .get(Source.SERVER)
+                    .await()
+                applyPendingMarketplaceOrders(pendingSnapshot)
+
+                // Recreate the listener after a manual refresh so it recovers
+                // from a previous listener failure as well.
+                observePendingMarketplaceOrders(courierId)
+
+                when (val result = deliveryRepository.syncRemoteActiveDelivery()) {
+                    is Resource.Success -> {
+                        _state.value = _state.value.copy(
+                            activeDelivery = result.data,
+                            isRefreshing = false
+                        )
+                    }
+                    is Resource.Error -> throw IllegalStateException(result.message)
+                    is Resource.Loading -> Unit
+                }
+            } catch (error: Exception) {
+                android.util.Log.e("HomeViewModel", "Manual home refresh failed", error)
+                _state.value = _state.value.copy(
+                    isRefreshing = false,
+                    refreshError = if (hasInternetConnection()) {
+                        HomeRefreshError.FAILED
+                    } else {
+                        HomeRefreshError.NO_INTERNET
+                    }
+                )
+            }
+        }
+    }
+
+    fun consumeRefreshError() {
+        _state.value = _state.value.copy(refreshError = null)
+    }
+
+    private fun hasInternetConnection(): Boolean {
+        val connectivityManager =
+            context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+                ?: return false
+        val network = connectivityManager.activeNetwork ?: return false
+        val capabilities = connectivityManager.getNetworkCapabilities(network) ?: return false
+        return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
     }
 
     private fun observeActiveDelivery() {
@@ -278,7 +400,8 @@ class HomeViewModel @Inject constructor(
                     _state.value = _state.value.copy(
                         isAcceptingMarketplaceOrder = false,
                         pendingMarketplaceOrders = emptyList(),
-                        activeDelivery = result.data
+                        activeDelivery = result.data,
+                        recentlyAcceptedMarketplaceOrderId = pending.id
                     )
                 }
                 is Resource.Error -> {
@@ -293,6 +416,10 @@ class HomeViewModel @Inject constructor(
                 is Resource.Loading -> Unit
             }
         }
+    }
+
+    fun consumeAcceptedMarketplaceOrder() {
+        _state.value = _state.value.copy(recentlyAcceptedMarketplaceOrderId = null)
     }
 
     /**
@@ -493,6 +620,7 @@ class HomeViewModel @Inject constructor(
     }
 
     override fun onCleared() {
+        stopMapLocationUpdates()
         pendingOrderListener?.remove()
         pendingOrderListener = null
         winnerListener?.remove()
