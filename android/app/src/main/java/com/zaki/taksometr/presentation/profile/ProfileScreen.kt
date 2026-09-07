@@ -11,6 +11,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -21,6 +22,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.zaki.taksometr.domain.model.Delivery
@@ -44,6 +46,10 @@ fun ProfileScreen(
 ) {
     val state by viewModel.state.collectAsState()
     var showLogoutDialog by remember { mutableStateOf(false) }
+    var showTransferDialog by remember { mutableStateOf(false) }
+    var transferMenuExpanded by remember { mutableStateOf(false) }
+    var selectedTransferRecipient by remember { mutableStateOf<TransferRecipient?>(null) }
+    var transferAmount by remember { mutableStateOf("") }
     val snackbarHostState = remember { SnackbarHostState() }
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
@@ -56,6 +62,26 @@ fun ProfileScreen(
         state.photoError?.let {
             snackbarHostState.showSnackbar(it)
             viewModel.clearPhotoError()
+        }
+    }
+
+    LaunchedEffect(state.transferSuccess) {
+        state.transferSuccess?.let {
+            showTransferDialog = false
+            selectedTransferRecipient = null
+            transferAmount = ""
+            snackbarHostState.showSnackbar(it)
+            viewModel.clearTransferMessage()
+        }
+    }
+
+    LaunchedEffect(state.user?.balanceTransferEnabled) {
+        if (state.user?.balanceTransferEnabled == false) {
+            showTransferDialog = false
+            transferMenuExpanded = false
+            selectedTransferRecipient = null
+            transferAmount = ""
+            viewModel.clearTransferMessage()
         }
     }
 
@@ -237,6 +263,32 @@ fun ProfileScreen(
                         value = LocationUtils.formatCost(state.user?.balance ?: 0.0),
                         valueColor = if ((state.user?.balance ?: 0.0) >= 5.0) AccentGreen else AccentRed
                     )
+                    if (state.user?.balanceTransferEnabled == true) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Button(
+                            onClick = {
+                                selectedTransferRecipient = null
+                                transferAmount = ""
+                                showTransferDialog = true
+                                viewModel.clearTransferMessage()
+                                viewModel.loadTransferRecipients()
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            enabled = (state.user?.balance ?: 0.0) >= 10.0
+                        ) {
+                            Icon(Icons.Default.SwapHoriz, contentDescription = null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Перевести баланс")
+                        }
+                        if ((state.user?.balance ?: 0.0) < 10.0) {
+                            Text(
+                                text = "Для перевода на балансе должно быть не менее 10 сомони",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(top = 6.dp)
+                            )
+                        }
+                    }
                 }
             }
 
@@ -363,6 +415,159 @@ fun ProfileScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showLogoutDialog = false }) {
+                    Text(str(Strings.cancel))
+                }
+            }
+        )
+    }
+
+
+    if (showTransferDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                if (!state.isTransferring) {
+                    showTransferDialog = false
+                    viewModel.clearTransferMessage()
+                }
+            },
+            icon = { Icon(Icons.Default.SwapHoriz, contentDescription = null) },
+            title = { Text("Перевод баланса") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        text = if (state.transferCity.isNotBlank()) {
+                            "Доступны курьеры: ${state.transferCity}"
+                        } else {
+                            "Выберите курьера своего города"
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    when {
+                        state.isLoadingTransferRecipients -> {
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        }
+                        state.transferRecipients.isEmpty() && state.transferError == null -> {
+                            Text(
+                                text = "В вашем городе нет других доступных курьеров",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        else -> {
+                            ExposedDropdownMenuBox(
+                                expanded = transferMenuExpanded,
+                                onExpandedChange = {
+                                    if (!state.isTransferring) transferMenuExpanded = !transferMenuExpanded
+                                }
+                            ) {
+                                OutlinedTextField(
+                                    value = selectedTransferRecipient?.let {
+                                        if (it.phone.isBlank()) it.name else "${it.name} • ${it.phone}"
+                                    } ?: "",
+                                    onValueChange = {},
+                                    readOnly = true,
+                                    label = { Text("Курьер") },
+                                    trailingIcon = {
+                                        ExposedDropdownMenuDefaults.TrailingIcon(expanded = transferMenuExpanded)
+                                    },
+                                    modifier = Modifier
+                                        .menuAnchor()
+                                        .fillMaxWidth(),
+                                    enabled = !state.isTransferring
+                                )
+                                ExposedDropdownMenu(
+                                    expanded = transferMenuExpanded,
+                                    onDismissRequest = { transferMenuExpanded = false }
+                                ) {
+                                    state.transferRecipients.forEach { recipient ->
+                                        DropdownMenuItem(
+                                            text = {
+                                                Column {
+                                                    Text(recipient.name)
+                                                    if (recipient.phone.isNotBlank()) {
+                                                        Text(
+                                                            recipient.phone,
+                                                            style = MaterialTheme.typography.bodySmall,
+                                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                        )
+                                                    }
+                                                }
+                                            },
+                                            onClick = {
+                                                selectedTransferRecipient = recipient
+                                                transferMenuExpanded = false
+                                                viewModel.clearTransferMessage()
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    OutlinedTextField(
+                        value = transferAmount,
+                        onValueChange = {
+                            transferAmount = it.filter { char -> char.isDigit() || char == '.' || char == ',' }
+                            viewModel.clearTransferMessage()
+                        },
+                        label = { Text("Сумма") },
+                        suffix = { Text("сомони") },
+                        supportingText = { Text("Минимум 10 сомони") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !state.isTransferring
+                    )
+
+                    Text(
+                        text = "Доступно: ${LocationUtils.formatCost(state.user?.balance ?: 0.0)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    state.transferError?.let { error ->
+                        Text(
+                            text = error,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.transferBalance(
+                            selectedTransferRecipient?.id.orEmpty(),
+                            transferAmount
+                        )
+                    },
+                    enabled = !state.isTransferring &&
+                        !state.isLoadingTransferRecipients &&
+                        selectedTransferRecipient != null &&
+                        transferAmount.isNotBlank()
+                ) {
+                    if (state.isTransferring) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.onPrimary
+                        )
+                    } else {
+                        Text("Отправить")
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        showTransferDialog = false
+                        viewModel.clearTransferMessage()
+                    },
+                    enabled = !state.isTransferring
+                ) {
                     Text(str(Strings.cancel))
                 }
             }

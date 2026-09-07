@@ -5,6 +5,7 @@ data class User(
     val login: String = "",
     val name: String = "",
     val phone: String = "",
+    val city: String = "",
     val role: UserRole = UserRole.COURIER,
     /** Derived busy/online flag (true while the courier has an active delivery). */
     val isOnline: Boolean = false,
@@ -16,6 +17,8 @@ data class User(
      */
     val isOnShift: Boolean = true,
     val isBlocked: Boolean = false,
+    /** Admin-controlled permission to send balance transfers. */
+    val balanceTransferEnabled: Boolean = true,
     val balance: Double = 0.0,
     val createdAt: Long = System.currentTimeMillis(),
     val fcmToken: String = "",

@@ -2017,6 +2017,7 @@ export const createCourier = functions.https.onCall(async (data, context) => {
     role: "COURIER",
     isOnline: false,
     isBlocked: false,
+    balanceTransferEnabled: true,
     balance: 0,
     createdAt: Date.now(),
     fcmToken: "",
@@ -2153,75 +2154,338 @@ export const updateCommission = functions.https.onCall(async (data, context) => 
   return {success: true};
 });
 
-// ============ ADMIN: TOP UP COURIER BALANCE ============
+// ============ ADMIN: ADJUST COURIER BALANCE ============
 export const topUpBalance = functions.https.onCall(async (data, context) => {
-  const {adminId, courierId, amount, note, paymentStatus} = data;
+  const {adminId, courierId, amount: rawAmount, note, paymentStatus} = data;
+  const operation = data?.operation === "DEDUCTION" ? "DEDUCTION" : "TOP_UP";
+  const amount = Number(rawAmount);
 
   // Verify admin
   await verifyAdmin(adminId);
 
-  if (!courierId || !amount || amount <= 0) {
+  if (!courierId || !Number.isFinite(amount) || amount <= 0) {
     throw new functions.https.HttpsError("invalid-argument", "courierId and positive amount required");
+  }
+  if (Math.abs(amount * 100 - Math.round(amount * 100)) > 0.000001) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "Сумма может содержать не более двух знаков после запятой"
+    );
   }
 
   if (paymentStatus !== undefined && paymentStatus !== "PAID" && paymentStatus !== "DEBT") {
     throw new functions.https.HttpsError("invalid-argument", "paymentStatus must be PAID or DEBT");
   }
 
+  const normalizedAmount = Math.round(amount * 100) / 100;
   const initialPaymentStatus = paymentStatus === "DEBT" ? "DEBT" : "PAID";
   const createdAt = Date.now();
 
   // Get courier
   const courierRef = db.collection("users").doc(courierId);
-  const courierDoc = await courierRef.get();
-  if (!courierDoc.exists) {
-    throw new functions.https.HttpsError("not-found", "Courier not found");
-  }
+  const txRef = db.collection("transactions").doc();
+  const adjustment = await db.runTransaction(async transaction => {
+    const courierDoc = await transaction.get(courierRef);
+    if (!courierDoc.exists || courierDoc.data()?.role !== "COURIER") {
+      throw new functions.https.HttpsError("not-found", "Courier not found");
+    }
 
-  const courierData = courierDoc.data()!;
-  const currentBalance = courierData.balance || 0;
-  const newBalance = currentBalance + amount;
+    const courierData = courierDoc.data()!;
+    const currentBalance = Math.round(Number(courierData.balance || 0) * 100) / 100;
+    const signedAmount = operation === "DEDUCTION" ? -normalizedAmount : normalizedAmount;
+    const newBalance = Math.round((currentBalance + signedAmount) * 100) / 100;
+    const paymentFields = operation === "TOP_UP" ? {
+      paymentStatus: initialPaymentStatus,
+      paymentStatusUpdatedAt: createdAt,
+      paymentStatusUpdatedBy: adminId,
+      paymentStatusHistory: [{
+        from: null,
+        to: initialPaymentStatus,
+        changedAt: createdAt,
+        adminId: adminId,
+      }],
+      ...(initialPaymentStatus === "PAID" ? {paidAt: createdAt} : {}),
+    } : {};
 
-  // Update balance
-  await courierRef.update({balance: newBalance});
+    transaction.update(courierRef, {balance: newBalance});
+    transaction.set(txRef, {
+      courierId,
+      courierName: courierData.name || "",
+      type: operation === "DEDUCTION" ? "BALANCE_DEDUCTION" : "TOP_UP",
+      amount: signedAmount,
+      balanceAfter: newBalance,
+      description: note || (
+        operation === "DEDUCTION"
+          ? "Списание баланса администратором"
+          : "Пополнение баланса"
+      ),
+      adminId,
+      ...paymentFields,
+      createdAt,
+    });
 
-  // Record transaction
-  const txRef = await db.collection("transactions").add({
-    courierId: courierId,
-    courierName: courierData.name || "",
-    type: "TOP_UP",
-    amount: amount,
-    balanceAfter: newBalance,
-    description: note || "Пополнение баланса",
-    adminId: adminId,
-    paymentStatus: initialPaymentStatus,
-    paymentStatusUpdatedAt: createdAt,
-    paymentStatusUpdatedBy: adminId,
-    paymentStatusHistory: [{
-      from: null,
-      to: initialPaymentStatus,
-      changedAt: createdAt,
-      adminId: adminId,
-    }],
-    ...(initialPaymentStatus === "PAID" ? {paidAt: createdAt} : {}),
-    createdAt: createdAt,
+    return {newBalance, courierData};
   });
 
-  await sendPushToCourier(courierData, {
-    title: "Баланс пополнен",
-    body: `+${amount} сомони. Новый баланс: ${newBalance} сомони`,
+  const isDeduction = operation === "DEDUCTION";
+  await sendPushToCourier(adjustment.courierData, {
+    title: isDeduction ? "Средства списаны" : "Баланс пополнен",
+    body: `${isDeduction ? "-" : "+"}${formatCostForSms(normalizedAmount)} сомони. Новый баланс: ${formatCostForSms(adjustment.newBalance)} сомони`,
     data: {
-      type: "BALANCE_TOP_UP",
-      amount: String(amount),
-      newBalance: String(newBalance),
+      type: isDeduction ? "BALANCE_DEDUCTION" : "BALANCE_TOP_UP",
+      amount: String(normalizedAmount),
+      newBalance: String(adjustment.newBalance),
     },
-  });
+  }, {withSystemNotification: true});
 
   return {
     success: true,
-    newBalance: newBalance,
+    operation,
+    newBalance: adjustment.newBalance,
     transactionId: txRef.id,
   };
+});
+
+// ============ COURIER-TO-COURIER BALANCE TRANSFER ============
+// A transfer produces two ledger rows (outgoing + incoming) so filtering the
+// admin history by either courier still shows the operation. The actual debit,
+// credit, audit rows and push-outbox entry are committed atomically.
+export const updateCourierBalanceTransferEnabled = functions.https.onCall(async (data, context) => {
+  const adminId = typeof data?.adminId === "string" ? data.adminId : "";
+  const courierId = typeof data?.courierId === "string" ? data.courierId.trim() : "";
+  const enabled = data?.enabled;
+
+  await verifyAdmin(adminId);
+  if (!courierId || typeof enabled !== "boolean") {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "courierId and boolean enabled are required"
+    );
+  }
+
+  const courierRef = db.collection("users").doc(courierId);
+  const courierDoc = await courierRef.get();
+  if (!courierDoc.exists || courierDoc.data()?.role !== "COURIER") {
+    throw new functions.https.HttpsError("not-found", "Курьер не найден");
+  }
+
+  await courierRef.update({
+    balanceTransferEnabled: enabled,
+    balanceTransferUpdatedAt: Date.now(),
+    balanceTransferUpdatedBy: adminId,
+  });
+
+  return {success: true, courierId, enabled};
+});
+
+export const getBalanceTransferRecipients = functions.https.onCall(async (data, context) => {
+  const senderId = typeof data?.senderId === "string" ? data.senderId.trim() : "";
+  if (!senderId) {
+    throw new functions.https.HttpsError("invalid-argument", "senderId required");
+  }
+
+  const senderDoc = await db.collection("users").doc(senderId).get();
+  if (!senderDoc.exists || senderDoc.data()?.role !== "COURIER") {
+    throw new functions.https.HttpsError("not-found", "Курьер не найден");
+  }
+  if (senderDoc.data()?.balanceTransferEnabled === false) {
+    throw new functions.https.HttpsError(
+      "permission-denied",
+      "Переводы баланса отключены администратором"
+    );
+  }
+
+  const city = String(senderDoc.data()?.city || "").trim();
+  if (!city) {
+    throw new functions.https.HttpsError(
+      "failed-precondition",
+      "У вашего профиля не указан город. Обратитесь к администратору."
+    );
+  }
+
+  const snapshot = await db.collection("users").where("city", "==", city).get();
+  const recipients = snapshot.docs
+    .filter(doc => {
+      const courier = doc.data();
+      return doc.id !== senderId &&
+        courier.role === "COURIER" &&
+        courier.isBlocked !== true;
+    })
+    .map(doc => ({
+      id: doc.id,
+      name: String(doc.data().name || "Курьер"),
+      phone: String(doc.data().phone || ""),
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name, "ru"));
+
+  return {city, recipients};
+});
+
+export const transferCourierBalance = functions.https.onCall(async (data, context) => {
+  const senderId = typeof data?.senderId === "string" ? data.senderId.trim() : "";
+  const recipientId = typeof data?.recipientId === "string" ? data.recipientId.trim() : "";
+  const requestId = typeof data?.requestId === "string" ? data.requestId.trim() : "";
+  const rawAmount = Number(data?.amount);
+
+  if (!senderId || !recipientId || senderId === recipientId) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "Выберите другого курьера"
+    );
+  }
+  if (!/^[A-Za-z0-9_-]{8,100}$/.test(requestId)) {
+    throw new functions.https.HttpsError("invalid-argument", "Некорректный requestId");
+  }
+  if (!Number.isFinite(rawAmount) || rawAmount < 10) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "Минимальная сумма перевода — 10 сомони"
+    );
+  }
+  if (Math.abs(rawAmount * 100 - Math.round(rawAmount * 100)) > 0.000001) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "Сумма может содержать не более двух знаков после запятой"
+    );
+  }
+
+  const amount = Math.round(rawAmount * 100) / 100;
+  const senderRef = db.collection("users").doc(senderId);
+  const recipientRef = db.collection("users").doc(recipientId);
+  const transferRef = db.collection("balanceTransfers").doc(requestId);
+  const outgoingTxRef = db.collection("transactions").doc(`${requestId}_out`);
+  const incomingTxRef = db.collection("transactions").doc(`${requestId}_in`);
+  const notificationRef = db.collection("courierNotifications").doc(`${requestId}_recipient`);
+
+  const result = await db.runTransaction(async transaction => {
+    const existingTransfer = await transaction.get(transferRef);
+    if (existingTransfer.exists) {
+      const existing = existingTransfer.data()!;
+      if (existing.senderId !== senderId ||
+          existing.recipientId !== recipientId ||
+          Number(existing.amount) !== amount) {
+        throw new functions.https.HttpsError("already-exists", "requestId уже использован");
+      }
+      return {
+        transferId: existingTransfer.id,
+        senderBalance: Number(existing.senderBalanceAfter || 0),
+        recipientBalance: Number(existing.recipientBalanceAfter || 0),
+        duplicate: true,
+      };
+    }
+
+    const [senderDoc, recipientDoc] = await Promise.all([
+      transaction.get(senderRef),
+      transaction.get(recipientRef),
+    ]);
+    if (!senderDoc.exists || senderDoc.data()?.role !== "COURIER") {
+      throw new functions.https.HttpsError("not-found", "Курьер-отправитель не найден");
+    }
+    if (!recipientDoc.exists || recipientDoc.data()?.role !== "COURIER") {
+      throw new functions.https.HttpsError("not-found", "Курьер-получатель не найден");
+    }
+
+    const sender = senderDoc.data()!;
+    const recipient = recipientDoc.data()!;
+    if (sender.isBlocked === true || recipient.isBlocked === true) {
+      throw new functions.https.HttpsError("failed-precondition", "Перевод заблокирован");
+    }
+    if (sender.balanceTransferEnabled === false) {
+      throw new functions.https.HttpsError(
+        "permission-denied",
+        "Переводы баланса отключены администратором"
+      );
+    }
+
+    const senderCity = String(sender.city || "").trim();
+    const recipientCity = String(recipient.city || "").trim();
+    if (!senderCity || senderCity !== recipientCity) {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "Переводы доступны только между курьерами одного города"
+      );
+    }
+
+    const senderBalance = Math.round(Number(sender.balance || 0) * 100) / 100;
+    const recipientBalance = Math.round(Number(recipient.balance || 0) * 100) / 100;
+    if (senderBalance < amount) {
+      throw new functions.https.HttpsError("failed-precondition", "Недостаточно средств на балансе");
+    }
+
+    const senderBalanceAfter = Math.round((senderBalance - amount) * 100) / 100;
+    const recipientBalanceAfter = Math.round((recipientBalance + amount) * 100) / 100;
+    const createdAt = Date.now();
+    const senderName = String(sender.name || "Курьер");
+    const recipientName = String(recipient.name || "Курьер");
+    const commonAuditFields = {
+      transferId: requestId,
+      senderId,
+      senderName,
+      recipientId,
+      recipientName,
+      city: senderCity,
+      createdAt,
+    };
+
+    transaction.update(senderRef, {balance: senderBalanceAfter});
+    transaction.update(recipientRef, {balance: recipientBalanceAfter});
+    transaction.set(transferRef, {
+      ...commonAuditFields,
+      amount,
+      senderBalanceAfter,
+      recipientBalanceAfter,
+      status: "COMPLETED",
+    });
+    transaction.set(outgoingTxRef, {
+      ...commonAuditFields,
+      courierId: senderId,
+      courierName: senderName,
+      counterpartyId: recipientId,
+      counterpartyName: recipientName,
+      type: "COURIER_TRANSFER",
+      direction: "OUTGOING",
+      amount: -amount,
+      balanceAfter: senderBalanceAfter,
+      description: `Перевод: ${senderName} → ${recipientName}`,
+    });
+    transaction.set(incomingTxRef, {
+      ...commonAuditFields,
+      courierId: recipientId,
+      courierName: recipientName,
+      counterpartyId: senderId,
+      counterpartyName: senderName,
+      type: "COURIER_TRANSFER",
+      direction: "INCOMING",
+      amount,
+      balanceAfter: recipientBalanceAfter,
+      description: `Получено: ${senderName} → ${recipientName}`,
+    });
+    transaction.set(notificationRef, {
+      courierId: recipientId,
+      type: "BALANCE_TRANSFER_RECEIVED",
+      title: "Баланс пополнен переводом",
+      body: `${senderName} перевёл вам ${formatCostForSms(amount)} сомони. Новый баланс: ${formatCostForSms(recipientBalanceAfter)} сомони`,
+      payload: {
+        transferId: requestId,
+        senderId,
+        senderName,
+        amount: String(amount),
+        newBalance: String(recipientBalanceAfter),
+      },
+      status: "PENDING",
+      attempts: 0,
+      createdAt,
+    });
+
+    return {
+      transferId: requestId,
+      senderBalance: senderBalanceAfter,
+      recipientBalance: recipientBalanceAfter,
+      duplicate: false,
+    };
+  });
+
+  return {success: true, ...result};
 });
 
 // ============ ADMIN: UPDATE TOP-UP PAYMENT STATUS ============

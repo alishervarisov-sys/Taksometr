@@ -77,6 +77,13 @@ class ZaKiFirebaseMessagingService : FirebaseMessagingService() {
                     showNotification(title, body)
                 }
             }
+            "BALANCE_TRANSFER_RECEIVED" -> {
+                val title = message.data["title"] ?: message.notification?.title ?: "Баланс пополнен переводом"
+                val body = message.data["body"] ?: message.notification?.body ?: ""
+                if (body.isNotEmpty()) {
+                    showNotification(title, body)
+                }
+            }
             else -> {
                 val title = message.data["title"] ?: message.notification?.title ?: "ZaKi Taksometr"
                 val body  = message.data["body"]  ?: message.notification?.body  ?: ""

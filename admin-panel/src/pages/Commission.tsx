@@ -30,6 +30,7 @@ interface Courier {
   commissionLadderEnabled?: boolean;
   ladderCount?: number;
   ladderDate?: string;
+  balanceTransferEnabled: boolean;
 }
 
 interface LadderTierDraft {
@@ -48,9 +49,16 @@ interface Transaction {
   createdAt: number;
   paymentStatus?: PaymentStatus;
   paymentStatusUpdatedAt?: number;
+  transferId?: string;
+  direction?: 'OUTGOING' | 'INCOMING';
+  senderId?: string;
+  senderName?: string;
+  recipientId?: string;
+  recipientName?: string;
 }
 
 type PaymentStatus = 'PAID' | 'DEBT';
+type BalanceOperation = 'TOP_UP' | 'DEDUCTION';
 
 type PeriodKey = 'all' | 'today' | 'yesterday' | 'last7' | 'last30' | 'thisMonth' | 'lastMonth' | 'thisYear' | 'custom';
 
@@ -95,6 +103,8 @@ const TYPE_OPTIONS: Array<{ key: string; label: string }> = [
   { key: '', label: 'Все операции' },
   { key: 'COMMISSION', label: 'Комиссия' },
   { key: 'TOP_UP', label: 'Пополнение' },
+  { key: 'BALANCE_DEDUCTION', label: 'Списание баланса' },
+  { key: 'COURIER_TRANSFER', label: 'Перевод между курьерами' },
   { key: 'DEBT', label: 'Долги' },
   { key: 'PAID', label: 'Оплаченные' },
   { key: 'COMMISSION_REFUND', label: 'Возврат комиссии' },
@@ -103,6 +113,8 @@ const TYPE_OPTIONS: Array<{ key: string; label: string }> = [
 const TYPE_META: Record<string, { label: string; color: 'default' | 'primary' | 'secondary' | 'error' | 'info' | 'success' | 'warning' }> = {
   COMMISSION: { label: 'Комиссия', color: 'warning' },
   TOP_UP: { label: 'Пополнение', color: 'success' },
+  BALANCE_DEDUCTION: { label: 'Списание', color: 'error' },
+  COURIER_TRANSFER: { label: 'Перевод', color: 'primary' },
   DEBT: { label: 'Долги', color: 'error' },
   PAID: { label: 'Оплаченные', color: 'success' },
   COMMISSION_REFUND: { label: 'Возврат комиссии', color: 'info' },
@@ -146,12 +158,14 @@ const Commission: React.FC<CommissionProps> = ({ adminId }) => {
   const [editingCourierId, setEditingCourierId] = useState<string | null>(null);
   const [editCommissionValue, setEditCommissionValue] = useState('');
   const [savingCommission, setSavingCommission] = useState<string | null>(null);
+  const [transferToggleLoading, setTransferToggleLoading] = useState<Set<string>>(new Set());
 
   // Top-up dialog
   const [topUpOpen, setTopUpOpen] = useState(false);
   const [selectedCourier, setSelectedCourier] = useState<Courier | null>(null);
   const [topUpAmount, setTopUpAmount] = useState('');
   const [topUpNote, setTopUpNote] = useState('');
+  const [balanceOperation, setBalanceOperation] = useState<BalanceOperation>('TOP_UP');
   const [topUpPaymentStatus, setTopUpPaymentStatus] = useState<PaymentStatus>('PAID');
   const [topUpLoading, setTopUpLoading] = useState(false);
   const [paymentStatusLoading, setPaymentStatusLoading] = useState<string | null>(null);
@@ -229,6 +243,7 @@ const Commission: React.FC<CommissionProps> = ({ adminId }) => {
       commissionLadderEnabled: d.data().commissionLadderEnabled === true,
       ladderCount: d.data().ladderCount || 0,
       ladderDate: d.data().ladderDate || '',
+      balanceTransferEnabled: d.data().balanceTransferEnabled !== false,
     }));
     setCouriers(data);
   };
@@ -655,6 +670,38 @@ const Commission: React.FC<CommissionProps> = ({ adminId }) => {
     }
   };
 
+  const handleBalanceTransferToggle = async (courier: Courier, enabled: boolean) => {
+    const previous = courier.balanceTransferEnabled;
+    setTransferToggleLoading(current => new Set(current).add(courier.id));
+    setError('');
+    setSuccess('');
+    // Optimistic update: the switch responds immediately while Firestore is
+    // updated asynchronously. Revert only if the server rejects the change.
+    setCouriers(current => current.map(item =>
+      item.id === courier.id ? { ...item, balanceTransferEnabled: enabled } : item
+    ));
+    try {
+      const fn = httpsCallable(functions, 'updateCourierBalanceTransferEnabled');
+      await fn({ adminId, courierId: courier.id, enabled });
+      setSuccess(
+        enabled
+          ? `Переводы включены для «${courier.name}»`
+          : `Переводы выключены для «${courier.name}»`
+      );
+    } catch (err: any) {
+      setCouriers(current => current.map(item =>
+        item.id === courier.id ? { ...item, balanceTransferEnabled: previous } : item
+      ));
+      setError(err.message || 'Не удалось изменить доступ к переводам');
+    } finally {
+      setTransferToggleLoading(current => {
+        const next = new Set(current);
+        next.delete(courier.id);
+        return next;
+      });
+    }
+  };
+
   const handleTopUp = async () => {
     if (!selectedCourier || !topUpAmount) return;
     setTopUpLoading(true);
@@ -665,23 +712,33 @@ const Commission: React.FC<CommissionProps> = ({ adminId }) => {
         adminId,
         courierId: selectedCourier.id,
         amount: Number(topUpAmount),
-        note: topUpNote || 'Пополнение баланса',
-        paymentStatus: topUpPaymentStatus,
+        operation: balanceOperation,
+        note: topUpNote || (
+          balanceOperation === 'DEDUCTION'
+            ? 'Списание баланса администратором'
+            : 'Пополнение баланса'
+        ),
+        ...(balanceOperation === 'TOP_UP' ? { paymentStatus: topUpPaymentStatus } : {}),
       });
       const data = result.data as any;
-      setSuccess(
-        topUpPaymentStatus === 'PAID'
-          ? `Баланс пополнен и оплата отмечена. Новый баланс: ${data.newBalance} сомони`
-          : `Баланс пополнен в долг. Новый баланс: ${data.newBalance} сомони`,
-      );
+      if (balanceOperation === 'DEDUCTION') {
+        setSuccess(`Средства списаны. Новый баланс: ${data.newBalance} сомони`);
+      } else {
+        setSuccess(
+          topUpPaymentStatus === 'PAID'
+            ? `Баланс пополнен и оплата отмечена. Новый баланс: ${data.newBalance} сомони`
+            : `Баланс пополнен в долг. Новый баланс: ${data.newBalance} сомони`,
+        );
+      }
       setTopUpOpen(false);
       setTopUpAmount('');
       setTopUpNote('');
+      setBalanceOperation('TOP_UP');
       setTopUpPaymentStatus('PAID');
       loadCouriers();
       loadFirstPage(applied);
     } catch (err: any) {
-      setError(err.message || 'Ошибка пополнения');
+      setError(err.message || 'Ошибка изменения баланса');
     } finally {
       setTopUpLoading(false);
     }
@@ -773,6 +830,7 @@ const Commission: React.FC<CommissionProps> = ({ adminId }) => {
                       <TableCell>Телефон</TableCell>
                       <TableCell>Комиссия (%)</TableCell>
                       <TableCell>Баланс</TableCell>
+                      <TableCell>Переводы</TableCell>
                       <TableCell>Действие</TableCell>
                     </TableRow>
                   </TableHead>
@@ -870,12 +928,24 @@ const Commission: React.FC<CommissionProps> = ({ adminId }) => {
                           />
                         </TableCell>
                         <TableCell>
+                          <Tooltip title={courier.balanceTransferEnabled ? 'Переводы включены' : 'Переводы выключены'}>
+                            <Switch
+                              checked={courier.balanceTransferEnabled}
+                              disabled={transferToggleLoading.has(courier.id)}
+                              onChange={(event) => handleBalanceTransferToggle(courier, event.target.checked)}
+                              color="success"
+                              inputProps={{ 'aria-label': `Переводы для ${courier.name}` }}
+                            />
+                          </Tooltip>
+                        </TableCell>
+                        <TableCell>
                           <Button
                             size="small"
                             variant="outlined"
                             startIcon={<Add />}
                             onClick={() => {
                               setSelectedCourier(courier);
+                              setBalanceOperation('TOP_UP');
                               setTopUpPaymentStatus('PAID');
                               setTopUpOpen(true);
                             }}
@@ -1070,6 +1140,7 @@ const Commission: React.FC<CommissionProps> = ({ adminId }) => {
                           <TableCell>Дата</TableCell>
                           <TableCell>Курьер</TableCell>
                           <TableCell>Тип</TableCell>
+                          <TableCell>Кто → кому</TableCell>
                           <TableCell>Сумма</TableCell>
                           <TableCell>Баланс после</TableCell>
                           <TableCell>Статус оплаты</TableCell>
@@ -1087,6 +1158,20 @@ const Commission: React.FC<CommissionProps> = ({ adminId }) => {
                                 color={TYPE_META[tx.type]?.color || 'default'}
                                 size="small"
                               />
+                            </TableCell>
+                            <TableCell>
+                              {tx.type === 'COURIER_TRANSFER' ? (
+                                <Box>
+                                  <Typography variant="body2" fontWeight={600}>
+                                    {tx.senderName || '—'} → {tx.recipientName || '—'}
+                                  </Typography>
+                                  <Typography variant="caption" color="text.secondary">
+                                    {tx.direction === 'OUTGOING' ? 'Списание у отправителя' : 'Зачисление получателю'}
+                                  </Typography>
+                                </Box>
+                              ) : (
+                                <Typography color="text.secondary">—</Typography>
+                              )}
                             </TableCell>
                             <TableCell sx={{ color: tx.amount >= 0 ? 'green' : 'red', fontWeight: 600 }}>
                               {tx.amount >= 0 ? '+' : ''}{formatCost(tx.amount)}
@@ -1137,32 +1222,51 @@ const Commission: React.FC<CommissionProps> = ({ adminId }) => {
 
       {/* Top-up dialog */}
       <Dialog open={topUpOpen} onClose={() => setTopUpOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>Пополнить баланс: {selectedCourier?.name}</DialogTitle>
+        <DialogTitle>
+          {balanceOperation === 'DEDUCTION' ? 'Списать баланс' : 'Пополнить баланс'}: {selectedCourier?.name}
+        </DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
             Текущий баланс: {formatCost(selectedCourier?.balance || 0)}
           </Typography>
+          <FormControl fullWidth margin="normal">
+            <InputLabel id="balance-operation-label">Операция</InputLabel>
+            <Select
+              labelId="balance-operation-label"
+              label="Операция"
+              value={balanceOperation}
+              onChange={(e) => {
+                setBalanceOperation(e.target.value as BalanceOperation);
+                setTopUpPaymentStatus('PAID');
+              }}
+            >
+              <MenuItem value="TOP_UP">Пополнить баланс</MenuItem>
+              <MenuItem value="DEDUCTION">Списать баланс</MenuItem>
+            </Select>
+          </FormControl>
           <TextField
             fullWidth
-            label="Сумма пополнения (сомони)"
+            label={balanceOperation === 'DEDUCTION' ? 'Сумма списания (сомони)' : 'Сумма пополнения (сомони)'}
             type="number"
             value={topUpAmount}
             onChange={(e) => setTopUpAmount(e.target.value)}
             margin="normal"
           />
-          <FormControl fullWidth margin="normal">
-            <InputLabel id="top-up-payment-status-label">Статус оплаты</InputLabel>
-            <Select
-              labelId="top-up-payment-status-label"
-              label="Статус оплаты"
-              value={topUpPaymentStatus}
-              onChange={(e) => setTopUpPaymentStatus(e.target.value as PaymentStatus)}
-            >
-              <MenuItem value="PAID">Оплачено</MenuItem>
-              <MenuItem value="DEBT">Долг — курьер оплатит позже</MenuItem>
-            </Select>
-          </FormControl>
-          {topUpPaymentStatus === 'DEBT' && (
+          {balanceOperation === 'TOP_UP' && (
+            <FormControl fullWidth margin="normal">
+              <InputLabel id="top-up-payment-status-label">Статус оплаты</InputLabel>
+              <Select
+                labelId="top-up-payment-status-label"
+                label="Статус оплаты"
+                value={topUpPaymentStatus}
+                onChange={(e) => setTopUpPaymentStatus(e.target.value as PaymentStatus)}
+              >
+                <MenuItem value="PAID">Оплачено</MenuItem>
+                <MenuItem value="DEBT">Долг — курьер оплатит позже</MenuItem>
+              </Select>
+            </FormControl>
+          )}
+          {balanceOperation === 'TOP_UP' && topUpPaymentStatus === 'DEBT' && (
             <Alert severity="warning" sx={{ mt: 1 }}>
               Баланс будет пополнен сейчас, а в истории операция останется со статусом «Долг», пока админ не отметит оплату.
             </Alert>
@@ -1177,8 +1281,13 @@ const Commission: React.FC<CommissionProps> = ({ adminId }) => {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setTopUpOpen(false)}>Отмена</Button>
-          <Button variant="contained" onClick={handleTopUp} disabled={topUpLoading || !topUpAmount}>
-            Пополнить
+          <Button
+            variant="contained"
+            color={balanceOperation === 'DEDUCTION' ? 'error' : 'primary'}
+            onClick={handleTopUp}
+            disabled={topUpLoading || !topUpAmount}
+          >
+            {balanceOperation === 'DEDUCTION' ? 'Списать' : 'Пополнить'}
           </Button>
         </DialogActions>
       </Dialog>
