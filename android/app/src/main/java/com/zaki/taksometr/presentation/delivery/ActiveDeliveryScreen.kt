@@ -1,11 +1,14 @@
-﻿package com.zaki.taksometr.presentation.delivery
+package com.zaki.taksometr.presentation.delivery
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -14,6 +17,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -27,10 +31,17 @@ import com.google.android.gms.maps.model.LatLngBounds
 import com.google.maps.android.compose.*
 import com.zaki.taksometr.presentation.components.SwipeToAcceptButton
 import com.zaki.taksometr.presentation.theme.*
+import com.zaki.taksometr.domain.model.Delivery
 import com.zaki.taksometr.service.LocationTrackingService
+import com.zaki.taksometr.util.Constants
 import com.zaki.taksometr.util.LocationUtils
 import com.zaki.taksometr.util.str
 import com.zaki.taksometr.util.Strings
+import kotlinx.coroutines.delay
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import coil.compose.AsyncImage
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -41,6 +52,7 @@ fun ActiveDeliveryScreen(
 ) {
     val state by viewModel.state.collectAsState()
     val context = LocalContext.current
+    BackHandler(onBack = onBack)
     var showCompleteDialog by remember { mutableStateOf(false) }
     // Whether the delivery info panel is expanded. Collapsing it gives the
     // courier a much larger map view while keeping the call button reachable.
@@ -111,6 +123,8 @@ fun ActiveDeliveryScreen(
     }
 
     Scaffold(
+        containerColor = CourierCanvas,
+
         topBar = {
             TopAppBar(
                 title = { Text(str(Strings.delivery)) },
@@ -120,18 +134,20 @@ fun ActiveDeliveryScreen(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    titleContentColor = MaterialTheme.colorScheme.onPrimary,
-                    navigationIconContentColor = MaterialTheme.colorScheme.onPrimary
+                    containerColor = CourierSky,
+                    titleContentColor = CourierInk,
+                    navigationIconContentColor = CourierBlueDark
                 )
             )
         }
     ) { paddingValues ->
-        Column(
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
+            val maxCardsHeight = maxHeight * 0.7f
+            Column(modifier = Modifier.fillMaxSize()) {
             // Map
             Box(
                 modifier = Modifier
@@ -148,7 +164,7 @@ fun ActiveDeliveryScreen(
                     if (state.routePoints.size >= 2) {
                         Polyline(
                             points = state.routePoints.map { LatLng(it.latitude, it.longitude) },
-                            color = Primary,
+                            color = CourierBlueDark,
                             width = 8f
                         )
                     }
@@ -159,7 +175,7 @@ fun ActiveDeliveryScreen(
                             state = MarkerState(position = it),
                             title = "Откуда",
                             snippet = state.delivery?.pickupAddress?.ifBlank { null },
-                            icon = BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_GREEN)
+                            icon = BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_AZURE)
                         )
                     }
 
@@ -239,6 +255,14 @@ fun ActiveDeliveryScreen(
                 }
             }
 
+            // Keep the map visible and let the order cards scroll when a new
+            // offer or a long delivery panel exceeds the available height.
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = maxCardsHeight)
+                    .verticalScroll(rememberScrollState())
+            ) {
             // Paused order (the other active order) — tap to resume its meter.
             state.pausedDelivery?.let { paused ->
                 Card(
@@ -300,9 +324,9 @@ fun ActiveDeliveryScreen(
                             .fillMaxWidth()
                             .padding(horizontal = 12.dp)
                             .padding(top = 12.dp),
-                        shape = RoundedCornerShape(12.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF8E1)),
-                        border = BorderStroke(1.5.dp, Color(0xFFFFB300))
+                        shape = RoundedCornerShape(18.dp),
+                        colors = CardDefaults.cardColors(containerColor = CourierSky),
+                        border = BorderStroke(1.5.dp, CourierLine)
                     ) {
                         Column(
                             modifier = Modifier
@@ -313,7 +337,7 @@ fun ActiveDeliveryScreen(
                                 Icon(
                                     Icons.Default.LocalShipping,
                                     contentDescription = null,
-                                    tint = Color(0xFFE65100),
+                                    tint = CourierBlue,
                                     modifier = Modifier.size(22.dp)
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
@@ -321,7 +345,7 @@ fun ActiveDeliveryScreen(
                                     text = str(Strings.newOrderAvailable),
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.Bold,
-                                    color = Color(0xFFE65100)
+                                    color = CourierInk
                                 )
                             }
                             if (pending.pickupAddress.isNotBlank()) {
@@ -331,6 +355,7 @@ fun ActiveDeliveryScreen(
                             if (pending.destinationAddress.isNotBlank()) {
                                 Text(text = "Куда: ${pending.destinationAddress}", style = MaterialTheme.typography.bodySmall)
                             }
+                            PendingOrderAcceptanceTimer(pending)
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
                                 text = str(Strings.secondOrderHint),
@@ -341,7 +366,7 @@ fun ActiveDeliveryScreen(
                             SwipeToAcceptButton(
                                 isAccepting = state.isAcceptingOrder,
                                 onAccept = { viewModel.acceptPendingOrder(pending.id) },
-                                accentColor = Color(0xFFE65100),
+                                accentColor = CourierBlue,
                                 onAccentColor = Color.White
                             )
                         }
@@ -354,8 +379,10 @@ fun ActiveDeliveryScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(12.dp),
-                shape = RoundedCornerShape(16.dp),
-                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(containerColor = CourierSky),
+                border = BorderStroke(1.dp, CourierLine),
+                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
             ) {
                 Column(
                     modifier = Modifier
@@ -473,8 +500,13 @@ fun ActiveDeliveryScreen(
                             Text(text = "Куда: ${state.delivery?.destinationAddress}")
                         }
 
-                        // Highlighted comment
-                        if (state.delivery?.comment?.isNotBlank() == true) {
+                        // Motorol food orders have structured items, prices and
+                        // photo URLs. Show them as an order card; keep the text
+                        // comment as a fallback for legacy/admin orders.
+                        if (state.delivery?.orderItems?.isNotEmpty() == true) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            MotorolOrderSummary(delivery = state.delivery!!)
+                        } else if (state.delivery?.comment?.isNotBlank() == true) {
                             Spacer(modifier = Modifier.height(8.dp))
                             Card(
                                 modifier = Modifier.fillMaxWidth(),
@@ -535,18 +567,21 @@ fun ActiveDeliveryScreen(
 
                         // Single next-stage button
                         val nextStageInfo: Pair<String, String>? = when (currentStage) {
-                            null, "ACCEPTED"      -> Pair("ARRIVED_PICKUP",      "Прибыл к забору")
+                            null, "ACCEPTED"      -> if (pickupLatLng != null) {
+                                Pair("ON_THE_WAY", "Еду к клиенту")
+                            } else {
+                                Pair("ARRIVED_PICKUP", "Прибыл к забору")
+                            }
                             "ARRIVED_PICKUP"      -> Pair("PICKED_UP",           "Забрал товар")
                             "PICKED_UP"           -> Pair("ON_THE_WAY",          "Еду к клиенту")
                             "ON_THE_WAY"          -> Pair("ARRIVED_DESTINATION", "Прибыл к клиенту")
                             else                  -> null
                         }
                         if (nextStageInfo != null) {
-                            // The first transition (→ ARRIVED_PICKUP) is gated: the
-                            // courier must be within 150m of the admin-defined pickup
-                            // point. Other transitions are never proximity-gated.
+                            // The trip to the client starts at the pickup geofence.
+                            // Keep the button as a manual fallback once inside it.
                             val requiresPickupProximity =
-                                nextStageInfo.first == "ARRIVED_PICKUP" && pickupLatLng != null
+                                currentStage in listOf(null, "ACCEPTED") && pickupLatLng != null
                             val proximityBlocked =
                                 requiresPickupProximity && !state.isWithinPickupRadius
 
@@ -596,7 +631,7 @@ fun ActiveDeliveryScreen(
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Text(
-                                        text = "Подъедьте к точке забора в радиусе 150 м, чтобы изменить статус$distanceHint",
+                                        text = "Подъедьте к точке забора в радиусе ${Constants.PICKUP_ARRIVAL_RADIUS_METERS.toInt()} м — статус изменится автоматически$distanceHint",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = AccentOrange
                                     )
@@ -659,10 +694,10 @@ fun ActiveDeliveryScreen(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(12.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = if (state.isWaiting)
-                                AccentRed
-                            else
-                                MaterialTheme.colorScheme.secondary
+                            containerColor = if (state.isWaiting) AccentRed else CourierBlue,
+                            contentColor = Color.White,
+                            disabledContainerColor = CourierBlueSoft,
+                            disabledContentColor = CourierBlueDark
                         )
                     ) {
                         Icon(
@@ -686,7 +721,7 @@ fun ActiveDeliveryScreen(
                             enabled = !state.isSwitching,
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = AccentGreen)
+                            colors = ButtonDefaults.buttonColors(containerColor = CourierBlue)
                         ) {
                             Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
                             Spacer(modifier = Modifier.width(8.dp))
@@ -717,7 +752,7 @@ fun ActiveDeliveryScreen(
                             enabled = !state.isSwitching,
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = AccentOrange)
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = CourierBlueDark)
                         ) {
                             Icon(Icons.Default.PauseCircle, contentDescription = null, modifier = Modifier.size(20.dp))
                             Spacer(modifier = Modifier.width(8.dp))
@@ -765,7 +800,7 @@ fun ActiveDeliveryScreen(
                             shape = RoundedCornerShape(12.dp),
                             enabled = !state.isCompleting && state.delivery?.status?.name == "IN_PROGRESS",
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = AccentGreen
+                                containerColor = CourierBlue
                             )
                         ) {
                             if (state.isCompleting) {
@@ -810,6 +845,8 @@ fun ActiveDeliveryScreen(
                   } // end infoPanelExpanded
                 }
             }
+            } // end scrollable order cards
+            }
         }
     }
 
@@ -845,6 +882,159 @@ fun ActiveDeliveryScreen(
         )
     }
 }
+
+@Composable
+private fun PendingOrderAcceptanceTimer(pending: PendingOrderInfo) {
+    var now by remember(pending.id) { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(pending.id, pending.createdAt) {
+        while (true) {
+            now = System.currentTimeMillis()
+            delay(1_000)
+        }
+    }
+    val elapsed = (now - pending.createdAt).coerceAtLeast(0L)
+    val limit = pending.acceptanceLimitMinutes.coerceAtLeast(1)
+    val overdue = elapsed >= limit * 60_000L
+    val created = if (pending.createdAt > 0L) {
+        SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()).format(Date(pending.createdAt))
+    } else "—"
+    Spacer(modifier = Modifier.height(8.dp))
+    Text("Создан: $created · лимит: $limit мин", style = MaterialTheme.typography.labelSmall)
+    Text(
+        text = "${LocationUtils.formatDuration(elapsed)}${if (overdue) " · просрочен" else ""}",
+        style = MaterialTheme.typography.bodyMedium,
+        fontWeight = FontWeight.Bold,
+        color = if (overdue) AccentRed else CourierBlueDark
+    )
+}
+
+@Composable
+private fun MotorolOrderSummary(delivery: Delivery) {
+    val deliveryFee = delivery.fixedPrice
+        ?: (delivery.totalPrice - delivery.productsPrice).coerceAtLeast(0.0)
+    val totalPrice = if (delivery.totalPrice > 0.0) {
+        delivery.totalPrice
+    } else {
+        delivery.productsPrice + deliveryFee
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f)
+        ),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Default.Restaurant,
+                    contentDescription = null,
+                    tint = AccentOrange,
+                    modifier = Modifier.size(22.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Заказ из ресторана",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = delivery.restaurantName.ifBlank { "Ресторан" },
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
+            delivery.orderItems.forEach { item ->
+                Spacer(modifier = Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (item.imageUrl.isNotBlank()) {
+                        AsyncImage(
+                            model = item.imageUrl,
+                            contentDescription = item.name,
+                            modifier = Modifier
+                                .size(56.dp)
+                                .clip(RoundedCornerShape(10.dp)),
+                            contentScale = ContentScale.Crop
+                        )
+                    } else {
+                        Surface(
+                            modifier = Modifier.size(56.dp),
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                        ) {
+                            Icon(
+                                Icons.Default.RestaurantMenu,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(14.dp)
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = item.name,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = "${formatOrderQuantity(item.quantity)} × ${LocationUtils.formatCost(item.price)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Text(
+                        text = LocationUtils.formatCost(item.quantity * item.price),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+            Divider(color = MaterialTheme.colorScheme.outlineVariant)
+            Spacer(modifier = Modifier.height(8.dp))
+            OrderTotalRow("Товары", delivery.productsPrice)
+            OrderTotalRow("Доставка", deliveryFee)
+            Spacer(modifier = Modifier.height(4.dp))
+            OrderTotalRow("Итого", totalPrice, emphasized = true)
+        }
+    }
+}
+
+@Composable
+private fun OrderTotalRow(label: String, amount: Double, emphasized: Boolean = false) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            style = if (emphasized) MaterialTheme.typography.titleSmall else MaterialTheme.typography.bodyMedium,
+            fontWeight = if (emphasized) FontWeight.Bold else FontWeight.Normal
+        )
+        Text(
+            text = LocationUtils.formatCost(amount),
+            style = if (emphasized) MaterialTheme.typography.titleSmall else MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Bold,
+            color = if (emphasized) MaterialTheme.colorScheme.primary else Color.Unspecified
+        )
+    }
+}
+
+private fun formatOrderQuantity(quantity: Double): String =
+    if (quantity % 1.0 == 0.0) quantity.toInt().toString() else quantity.toString()
 
 @Composable
 fun RoutePointRow(

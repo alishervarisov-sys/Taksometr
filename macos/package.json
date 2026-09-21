@@ -1,0 +1,65 @@
+{
+  "name": "zaki-admin-macos",
+  "version": "1.0.0",
+  "description": "ZaKi Admin for macOS",
+  "author": "ZaKi",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "check": "node --check main.js",
+    "dist:mac": "electron-builder --mac dmg --universal"
+  },
+  "devDependencies": {
+    "electron": "latest",
+    "electron-builder": "26.15.7"
+  },
+  "build": {
+    "appId": "tj.zaki.admin",
+    "productName": "ZaKi Admin",
+    "asar": true,
+    "files": [
+      "main.js"
+    ],
+    "extraResources": [
+      {
+        "from": "../firebase/hosting",
+        "to": "web"
+      }
+    ],
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "universal"
+          ]
+        }
+      ],
+      "icon": "build/icon.png",
+      "category": "public.app-category.business",
+      "minimumSystemVersion": "12.0",
+      "artifactName": "ZaKi-Admin-macOS-${arch}.${ext}"
+    },
+    "dmg": {
+      "title": "ZaKi Admin",
+      "artifactName": "ZaKi-Admin-macOS-${arch}.${ext}",
+      "contents": [
+        {
+          "x": 140,
+          "y": 180
+        },
+        {
+          "x": 400,
+          "y": 180,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
+    }
+  }
+}

@@ -12,7 +12,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -20,8 +19,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.zaki.taksometr.BuildConfig
 import com.zaki.taksometr.domain.model.AppVersionConfig
-import com.zaki.taksometr.presentation.theme.Primary
-import com.zaki.taksometr.presentation.theme.PrimaryDark
+import com.zaki.taksometr.presentation.theme.CourierCanvas
+import com.zaki.taksometr.presentation.theme.CourierSky
+import com.zaki.taksometr.presentation.theme.CourierInk
+import com.zaki.taksometr.presentation.theme.CourierMuted
+import com.zaki.taksometr.presentation.theme.CourierBlue
 
 /**
  * Full-screen blocker shown when the installed app is older than the minimum
@@ -35,11 +37,7 @@ fun UpdateRequiredScreen(config: AppVersionConfig?) {
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    colors = listOf(Primary, PrimaryDark)
-                )
-            )
+            .background(CourierCanvas)
     ) {
         Column(
             modifier = Modifier
@@ -48,12 +46,14 @@ fun UpdateRequiredScreen(config: AppVersionConfig?) {
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
+            Surface(shape = RoundedCornerShape(28.dp), color = CourierSky) {
             Icon(
                 Icons.Default.SystemUpdate,
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.onPrimary,
-                modifier = Modifier.size(96.dp)
+                tint = CourierBlue,
+                modifier = Modifier.padding(24.dp).size(64.dp)
             )
+            }
 
             Spacer(modifier = Modifier.height(24.dp))
 
@@ -61,7 +61,7 @@ fun UpdateRequiredScreen(config: AppVersionConfig?) {
                 text = "Доступна новая версия",
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onPrimary,
+                color = CourierInk,
                 textAlign = TextAlign.Center
             )
 
@@ -71,7 +71,7 @@ fun UpdateRequiredScreen(config: AppVersionConfig?) {
                 text = config?.message?.takeIf { it.isNotBlank() }
                     ?: "Пожалуйста, обновите приложение, чтобы продолжить работу.",
                 style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.85f),
+                color = CourierMuted,
                 textAlign = TextAlign.Center
             )
 
@@ -80,14 +80,14 @@ fun UpdateRequiredScreen(config: AppVersionConfig?) {
             Text(
                 text = "Текущая версия: ${BuildConfig.VERSION_NAME}",
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.6f)
+                color = CourierMuted
             )
 
             if (config?.minVersionName?.isNotBlank() == true) {
                 Text(
                     text = "Требуется версия: ${config.minVersionName}",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.6f)
+                    color = CourierMuted
                 )
             }
 

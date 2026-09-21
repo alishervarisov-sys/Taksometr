@@ -1,4 +1,4 @@
-﻿package com.zaki.taksometr.presentation.history
+package com.zaki.taksometr.presentation.history
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -45,6 +45,8 @@ fun HistoryScreen(
     var selectedFilter by remember { mutableStateOf(DateFilter.ALL) }
 
     Scaffold(
+        containerColor = CourierCanvas,
+
         topBar = {
             TopAppBar(
                 title = { Text(str(Strings.deliveryHistory)) },
@@ -54,9 +56,9 @@ fun HistoryScreen(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    titleContentColor = MaterialTheme.colorScheme.onPrimary,
-                    navigationIconContentColor = MaterialTheme.colorScheme.onPrimary
+                    containerColor = CourierSky,
+                    titleContentColor = CourierInk,
+                    navigationIconContentColor = CourierBlueDark
                 )
             )
         }

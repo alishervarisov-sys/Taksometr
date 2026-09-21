@@ -286,6 +286,31 @@ async function sendPushToCourier(courierData: any, payload: {
   }
 }
 
+// Direct pushes keep their existing FCM behavior, while also appearing in the
+// courier's persistent inbox. ARCHIVED entries are not resent by the outbox.
+async function sendArchivedPushToCourier(
+  courierId: string,
+  courierData: any,
+  payload: {title: string; body: string; data: {[key: string]: string}},
+  options?: {withSystemNotification?: boolean}
+): Promise<boolean> {
+  try {
+    await db.collection("courierNotifications").add({
+      courierId,
+      type: payload.data.type || "GENERAL",
+      title: payload.title,
+      body: payload.body,
+      payload: payload.data,
+      status: "ARCHIVED",
+      attempts: 0,
+      createdAt: Date.now(),
+    });
+  } catch (error) {
+    console.error("Failed to archive courier notification:", error);
+  }
+  return sendPushToCourier(courierData, payload, options);
+}
+
 // ============ PROGRESSIVE DAILY COMMISSION LADDER ============
 /**
  * Per-courier "achievement ladder": the more deliveries completed in a day,
@@ -568,6 +593,14 @@ export const createDelivery = functions.https.onCall(async (data, context) => {
   let fixedPrice: number | null = null;
   let deliveryTypeName = "";
   let actualDeliveryType = deliveryType || "default";
+  const typeNames: {[key: string]: string} = {
+    coal: "Ангишт",
+    gas15: "Газ то 15 литр",
+    gas30: "Газ то 30 литр",
+    gas30plus: "Газ зиёда аз 30 литр",
+    errands: "Гуногун супоришҳо",
+    heavyCargo: "Бори вазнин",
+  };
   
   console.log("=== CREATE DELIVERY DEBUG ===");
   console.log("Received deliveryType:", deliveryType);
@@ -592,14 +625,6 @@ export const createDelivery = functions.https.onCall(async (data, context) => {
         fixedPrice = fixedTypes[deliveryType];
         
         // Map type to display name (Tajik)
-        const typeNames: {[key: string]: string} = {
-          coal: "Ангишт",
-          gas15: "Газ то 15 литр",
-          gas30: "Газ то 30 литр",
-          gas30plus: "Газ зиёда аз 30 литр",
-          errands: "Гуногун супоришҳо",
-          heavyCargo: "Бори вазнин",
-        };
         deliveryTypeName = typeNames[deliveryType] || deliveryType;
         console.log("Set fixedPrice:", fixedPrice, "deliveryTypeName:", deliveryTypeName);
       } else {
@@ -753,7 +778,7 @@ export const completeDelivery = functions.https.onCall(async (data, context) => 
   let waitingCost = 0;
   let roundedCost = 0;
   
-  if (deliveryType !== "default" && deliveryType !== "heavyCargoMeter" && fixedPrice !== null && fixedPrice !== undefined) {
+  if (fixedPrice !== null && fixedPrice !== undefined) {
     // Fixed price delivery - no calculation needed
     totalCost = fixedPrice;
     distanceMeters = 0;
@@ -906,7 +931,7 @@ export const completeDelivery = functions.https.onCall(async (data, context) => 
   // ---- Notify client by SMS about the final delivery total (Tajik) ----
   let completeSmsText = `Фармоиши ZaKi анҷом ёфт. `;
   
-  if (deliveryType !== "default" && fixedPrice !== null && fixedPrice !== undefined) {
+  if (fixedPrice !== null && fixedPrice !== undefined) {
     // Fixed price delivery - simple message
     const typeNames: {[key: string]: string} = {
       coal: "Ангишт",
@@ -915,6 +940,7 @@ export const completeDelivery = functions.https.onCall(async (data, context) => 
       gas30plus: "Газ зиёда аз 30 литр",
       errands: "Гуногун супоришҳо",
       heavyCargo: "Бори вазнин",
+      adminFixedPrice: "Нархи таъинкардаи диспетчер",
     };
     const typeName = typeNames[deliveryType] || deliveryType;
     completeSmsText += `Навъи хидмат: ${typeName}. `;
@@ -1166,19 +1192,22 @@ export const adminCreateMarketplaceDelivery = functions.https.onCall(async (data
     destination,
     courierId,
     deliveryType,
+    acceptanceLimitMinutes,
   } = data as {
     adminId: string;
     clientPhone: string;
     comment?: string;
     pickup: {address?: string; latitude: number; longitude: number};
     destination?: {address?: string; latitude: number; longitude: number} | null;
-    // Optional: when provided, the order is created already assigned to this
-    // courier (IN_PROGRESS) instead of being offered to the whole marketplace.
+    // Optional: when provided, the order is offered only to this courier. The
+    // courier still has to accept it before client contact is revealed.
     courierId?: string | null;
     // Optional: the same delivery type a courier picks when starting the meter
     // ("default", "heavyCargoMeter", "coal", "gas15", "gas30", "gas30plus",
     // "errands", "heavyCargo"). Empty/omitted => "default" (metered).
     deliveryType?: string | null;
+    // Minutes a courier has to accept this marketplace order. Defaults to 10.
+    acceptanceLimitMinutes?: number | null;
   };
 
   await verifyAdmin(adminId);
@@ -1205,6 +1234,10 @@ export const adminCreateMarketplaceDelivery = functions.https.onCall(async (data
     destination &&
     typeof destination.latitude === "number" &&
     typeof destination.longitude === "number";
+  const resolvedAcceptanceLimitMinutes = Number.isFinite(Number(acceptanceLimitMinutes)) &&
+    Number(acceptanceLimitMinutes) >= 1 && Number(acceptanceLimitMinutes) <= 1440
+    ? Math.round(Number(acceptanceLimitMinutes))
+    : 10;
 
   // ---- Resolve delivery type + fixed price the SAME way createDelivery does,
   // so an admin-created order behaves exactly like a courier-started one.
@@ -1213,26 +1246,15 @@ export const adminCreateMarketplaceDelivery = functions.https.onCall(async (data
   // fixed types      -> fixedPrice pulled from tariffs/default.fixedTypes
   let resolvedDeliveryType = deliveryType || "default";
   let fixedPrice: number | null = null;
-  let deliveryTypeName = "";
   if (deliveryType && deliveryType !== "default") {
     if (deliveryType === "heavyCargoMeter") {
       resolvedDeliveryType = "heavyCargoMeter";
-      deliveryTypeName = "Бори вазнин (аз рӯи ҳисобгар)";
     } else {
       const tariffDoc = await db.collection("tariffs").doc("default").get();
       const fixedTypes = tariffDoc.exists ? (tariffDoc.data()!.fixedTypes || {}) : {};
       if (fixedTypes[deliveryType] !== undefined && fixedTypes[deliveryType] > 0) {
         fixedPrice = fixedTypes[deliveryType];
         resolvedDeliveryType = deliveryType;
-        const typeNames: {[key: string]: string} = {
-          coal: "Ангишт",
-          gas15: "Газ то 15 литр",
-          gas30: "Газ то 30 литр",
-          gas30plus: "Газ зиёда аз 30 литр",
-          errands: "Гуногун супоришҳо",
-          heavyCargo: "Бори вазнин",
-        };
-        deliveryTypeName = typeNames[deliveryType] || deliveryType;
       } else {
         // Unknown type or price not configured -> fall back to metered default.
         resolvedDeliveryType = "default";
@@ -1240,7 +1262,9 @@ export const adminCreateMarketplaceDelivery = functions.https.onCall(async (data
     }
   }
 
-  // ---- Direct assignment path: create the order already tied to one courier.
+  // ---- Selected-courier path: create a PENDING offer visible only to the
+  // selected courier. This deliberately does not start a delivery or notify
+  // the client until the courier accepts it themselves.
   if (courierId) {
     const courierDoc = await db.collection("users").doc(courierId).get();
     if (!courierDoc.exists) {
@@ -1273,16 +1297,18 @@ export const adminCreateMarketplaceDelivery = functions.https.onCall(async (data
     const now = Date.now();
 
     await deliveryRef.set({
-      courierId,
-      courierName: courierData.name || "",
-      courierPhone: courierData.phone || "",
+      courierId: "",
+      courierName: "",
+      courierPhone: "",
       clientPhone: clientPhone,
-      status: "IN_PROGRESS",
-      adminOrderStage: "ACCEPTED",
+      status: "PENDING",
+      adminOrderStage: "NEW",
       orderSource: "ADMIN_PANEL",
       orderKind: "MARKETPLACE",
-      startTime: now,
-      acceptedAt: now,
+      startTime: null,
+      acceptedAt: null,
+      acceptanceLimitMinutes: resolvedAcceptanceLimitMinutes,
+      acceptanceDurationMs: null,
       endTime: null,
       distanceMeters: 0,
       cost: 0,
@@ -1304,36 +1330,19 @@ export const adminCreateMarketplaceDelivery = functions.https.onCall(async (data
       tariffSnapshot: tariff,
     });
 
-    await syncCourierStatus(
-      courierId,
-      "adminCreateMarketplaceDelivery: order created and assigned by dispatcher"
-    );
-
-    await sendPushToCourier(courierData, {
-      title: "Вам назначен заказ",
+    await sendArchivedPushToCourier(courierId, courierData, {
+      title: "Новый заказ",
       body: pickup.address
         ? `Заказ: ${pickup.address}`
         : "Диспетчер назначил вам заказ",
-      data: {type: "ADMIN_ASSIGNED_ORDER", deliveryId: deliveryRef.id},
-    }, {withSystemNotification: true});
-
-    const courierName = courierData.name || "";
-    const courierPhone = courierData.phone || "";
-    let smsText = `Салом! Курьери ZaKi фармоиши шуморо қабул кард. ${courierName}`;
-    if (courierPhone) smsText += `, тел: ${courierPhone}`;
-    smsText += `.`;
-    if (fixedPrice !== null && fixedPrice > 0) {
-      smsText += ` Навъи хидмат: ${deliveryTypeName}. Нархи қатъӣ: ${formatCostForSms(fixedPrice)} сомонӣ.`;
-    } else if (resolvedDeliveryType === "heavyCargoMeter") {
-      smsText += ` Навъи хидмат: ${deliveryTypeName}. Пардохт аз рӯи ҳисобгар.`;
-    }
-    await sendSms(clientPhone, smsText);
+      data: {type: "ADMIN_MARKETPLACE_ORDER", deliveryId: deliveryRef.id},
+    });
 
     return {
       success: true,
       deliveryId: deliveryRef.id,
       assignedCourierId: courierId,
-      assignedCourierName: courierName,
+      assignedCourierName: courierData.name || "",
       deliveryType: resolvedDeliveryType,
       fixedPrice: fixedPrice,
       availableCouriers: 1,
@@ -1378,6 +1387,8 @@ export const adminCreateMarketplaceDelivery = functions.https.onCall(async (data
     orderKind: "MARKETPLACE",
     startTime: null,
     acceptedAt: null,
+    acceptanceLimitMinutes: resolvedAcceptanceLimitMinutes,
+    acceptanceDurationMs: null,
     endTime: null,
     distanceMeters: 0,
     cost: 0,
@@ -1403,7 +1414,7 @@ export const adminCreateMarketplaceDelivery = functions.https.onCall(async (data
     if (!courierDoc.exists) continue;
     const courierData = courierDoc.data()!;
 
-    await sendPushToCourier(courierData, {
+    await sendArchivedPushToCourier(courierId, courierData, {
       title: "Новый заказ",
       body: hasDestination
         ? `Заказ: ${pickup.address || "точка А"} → ${destination.address || "точка Б"}`
@@ -1423,6 +1434,279 @@ export const adminCreateMarketplaceDelivery = functions.https.onCall(async (data
     availableCouriers: availableCourierIds.length,
     availableCourierIds,
     availableCouriersDebug,
+  };
+});
+
+// ============ ADMIN: EDIT ACTIVE MARKETPLACE DELIVERY ============
+// The dispatcher can correct every customer-facing field while an order is
+// PENDING or IN_PROGRESS. Meter-derived values remain server/courier owned.
+export const adminUpdateMarketplaceDelivery = functions.https.onCall(async (data, context) => {
+  const {
+    adminId, deliveryId, clientPhone, comment, pickup, destination,
+    courierId, deliveryType, fixedPrice, acceptanceLimitMinutes,
+  } = data as {
+    adminId: string;
+    deliveryId: string;
+    clientPhone: string;
+    comment?: string;
+    pickup: {address?: string; latitude: number; longitude: number};
+    destination?: {address?: string; latitude: number; longitude: number} | null;
+    courierId?: string | null;
+    deliveryType?: string | null;
+    fixedPrice?: number | null;
+    acceptanceLimitMinutes?: number | null;
+  };
+
+  await verifyAdmin(adminId);
+
+  const validPoint = (point: any): boolean =>
+    !!point &&
+    typeof point.latitude === "number" && Number.isFinite(point.latitude) &&
+    typeof point.longitude === "number" && Number.isFinite(point.longitude) &&
+    point.latitude >= -90 && point.latitude <= 90 &&
+    point.longitude >= -180 && point.longitude <= 180;
+
+  if (!deliveryId || !String(clientPhone || "").trim() || !validPoint(pickup)) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "deliveryId, clientPhone and valid pickup coordinates are required"
+    );
+  }
+  if (destination != null && !validPoint(destination)) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "destination must contain valid coordinates"
+    );
+  }
+  if (acceptanceLimitMinutes != null &&
+      (!Number.isFinite(Number(acceptanceLimitMinutes)) ||
+       Number(acceptanceLimitMinutes) < 1 || Number(acceptanceLimitMinutes) > 1440)) {
+    throw new functions.https.HttpsError("invalid-argument", "acceptanceLimitMinutes must be between 1 and 1440");
+  }
+
+  const requestedType = String(deliveryType || "default");
+  const allowedTypes = new Set([
+    "default", "heavyCargoMeter", "adminFixedPrice",
+    "coal", "gas15", "gas30", "gas30plus", "errands", "heavyCargo",
+  ]);
+  if (!allowedTypes.has(requestedType)) {
+    throw new functions.https.HttpsError("invalid-argument", "Unknown delivery type");
+  }
+
+  let resolvedType = requestedType;
+  let resolvedFixedPrice: number | null = null;
+  if (fixedPrice !== null && fixedPrice !== undefined && fixedPrice !== 0) {
+    if (typeof fixedPrice !== "number" || !Number.isFinite(fixedPrice) || fixedPrice < 0 || fixedPrice > 1000000) {
+      throw new functions.https.HttpsError("invalid-argument", "fixedPrice must be a positive number");
+    }
+    resolvedFixedPrice = Math.round(fixedPrice * 100) / 100;
+    if (resolvedType === "default" || resolvedType === "heavyCargoMeter") {
+      resolvedType = "adminFixedPrice";
+    }
+  } else if (resolvedType === "adminFixedPrice") {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "A custom fixed-price order requires fixedPrice"
+    );
+  } else if (resolvedType !== "default" && resolvedType !== "heavyCargoMeter") {
+    const tariffDoc = await db.collection("tariffs").doc("default").get();
+    const configuredPrice = tariffDoc.exists
+      ? tariffDoc.data()?.fixedTypes?.[resolvedType]
+      : null;
+    if (typeof configuredPrice !== "number" || configuredPrice <= 0) {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "Для выбранного типа не настроена фиксированная цена"
+      );
+    }
+    resolvedFixedPrice = configuredPrice;
+  }
+
+  const deliveryRef = db.collection("deliveries").doc(deliveryId);
+  const deliveryDoc = await deliveryRef.get();
+  if (!deliveryDoc.exists) {
+    throw new functions.https.HttpsError("not-found", "Delivery not found");
+  }
+  const previous = deliveryDoc.data()!;
+  if (previous.orderKind !== "MARKETPLACE") {
+    throw new functions.https.HttpsError("failed-precondition", "Редактировать можно только админ-заказ");
+  }
+  if (previous.status !== "PENDING" && previous.status !== "IN_PROGRESS") {
+    throw new functions.https.HttpsError("failed-precondition", "Редактировать можно только активный заказ");
+  }
+
+  const desiredCourierId = String(courierId || "");
+  const previousCourierId = String(previous.courierId || "");
+  const courierChanged = desiredCourierId !== previousCourierId;
+  let desiredCourierData: any = null;
+  if (desiredCourierId) {
+    const desiredCourierDoc = await db.collection("users").doc(desiredCourierId).get();
+    if (!desiredCourierDoc.exists || desiredCourierDoc.data()?.role !== "COURIER") {
+      throw new functions.https.HttpsError("not-found", "Courier not found");
+    }
+    desiredCourierData = desiredCourierDoc.data()!;
+    if (desiredCourierData.isBlocked) {
+      throw new functions.https.HttpsError("permission-denied", "Courier is blocked");
+    }
+    if (courierChanged) {
+      const active = await db.collection("deliveries")
+        .where("courierId", "==", desiredCourierId)
+        .where("status", "==", "IN_PROGRESS")
+        .get();
+      const activeCount = active.docs.filter(d => d.id !== deliveryId).length;
+      if (activeCount >= MAX_CONCURRENT_DELIVERIES) {
+        throw new functions.https.HttpsError("already-exists", "У курьера уже максимум активных заказов");
+      }
+    }
+  }
+
+  const normalizePoint = (point: any) => point == null ? null : ({
+    address: String(point.address || "").trim(),
+    latitude: Number(point.latitude),
+    longitude: Number(point.longitude),
+  });
+  const nextPickup = normalizePoint(pickup)!;
+  const nextDestination = normalizePoint(destination);
+  const oldPickup = normalizePoint(previous.pickup);
+  const oldDestination = normalizePoint(previous.destination);
+  const pickupChanged = JSON.stringify(oldPickup) !== JSON.stringify(nextPickup);
+  const destinationChanged = JSON.stringify(oldDestination) !== JSON.stringify(nextDestination);
+  const now = Date.now();
+
+  const updates: {[key: string]: any} = {
+    clientPhone: String(clientPhone).trim(),
+    comment: String(comment || "").trim(),
+    pickup: nextPickup,
+    destination: nextDestination,
+    deliveryType: resolvedType,
+    fixedPrice: resolvedFixedPrice,
+    adminEditedAt: now,
+    adminEditedById: adminId,
+    adminEditRevision: (previous.adminEditRevision || 0) + 1,
+    acceptanceLimitMinutes: acceptanceLimitMinutes == null
+      ? (previous.acceptanceLimitMinutes || 10)
+      : Math.round(Number(acceptanceLimitMinutes)),
+  };
+
+  // Moving pickup stops the old wait but keeps all accrued waiting. Returning
+  // to ACCEPTED makes the courier geofence advance the stage at the new point.
+  if (pickupChanged && previous.status === "IN_PROGRESS") {
+    const waitingStartedAt = previous.waitingStartedAt || 0;
+    const accruedMinutes = waitingStartedAt > 0 ? (now - waitingStartedAt) / 60000 : 0;
+    updates.waitingMinutes = (previous.waitingMinutes || 0) + Math.max(0, accruedMinutes);
+    updates.waitingStartedAt = null;
+    updates.adminOrderStage = "ACCEPTED";
+    updates.onTheWayStartedAt = null;
+    updates.pickupChangedAt = now;
+  }
+
+  let availableCourierIds: string[] | null = null;
+  if (courierChanged) {
+    if (desiredCourierId) {
+      updates.courierId = desiredCourierId;
+      updates.courierName = desiredCourierData.name || "";
+      updates.courierPhone = desiredCourierData.phone || "";
+      updates.status = "IN_PROGRESS";
+      updates.adminOrderStage = "ACCEPTED";
+      updates.acceptedAt = now;
+      updates.acceptanceDurationMs = previous.acceptanceDurationMs ?? Math.max(0, now - Number(previous.createdAt || now));
+      updates.startTime = previous.startTime || now;
+      updates.availableCourierIds = [desiredCourierId];
+      updates.assignedByAdmin = true;
+      updates.assignedByAdminId = adminId;
+    } else {
+      const courierDocs = await db.collection("users")
+        .where("role", "==", "COURIER")
+        .where("isBlocked", "==", false)
+        .get();
+      availableCourierIds = courierDocs.docs
+        .filter(d => d.data()?.isOnShift !== false)
+        .map(d => d.id);
+      updates.courierId = "";
+      updates.courierName = "";
+      updates.courierPhone = "";
+      updates.status = "PENDING";
+      updates.adminOrderStage = "NEW";
+      updates.acceptedAt = null;
+      updates.startTime = null;
+      updates.waitingStartedAt = null;
+      updates.onTheWayStartedAt = null;
+      updates.availableCourierIds = availableCourierIds;
+    }
+  }
+
+  await deliveryRef.update(updates);
+
+  const changedFields: string[] = [];
+  if (previous.clientPhone !== updates.clientPhone) changedFields.push("clientPhone");
+  if ((previous.comment || "") !== updates.comment) changedFields.push("comment");
+  if (pickupChanged) changedFields.push("pickup");
+  if (destinationChanged) changedFields.push("destination");
+  if ((previous.deliveryType || "default") !== resolvedType) changedFields.push("deliveryType");
+  if ((previous.fixedPrice ?? null) !== resolvedFixedPrice) changedFields.push("fixedPrice");
+  if (courierChanged) changedFields.push("courier");
+  await db.collection("deliveryEditHistory").add({
+    deliveryId,
+    adminId,
+    changedFields,
+    before: {
+      clientPhone: previous.clientPhone || "",
+      comment: previous.comment || "",
+      pickup: oldPickup,
+      destination: oldDestination,
+      deliveryType: previous.deliveryType || "default",
+      fixedPrice: previous.fixedPrice ?? null,
+      courierId: previousCourierId,
+    },
+    after: {
+      clientPhone: updates.clientPhone,
+      comment: updates.comment,
+      pickup: nextPickup,
+      destination: nextDestination,
+      deliveryType: resolvedType,
+      fixedPrice: resolvedFixedPrice,
+      courierId: desiredCourierId,
+    },
+    createdAt: now,
+  });
+
+  if (previousCourierId && courierChanged) {
+    const previousCourierDoc = await db.collection("users").doc(previousCourierId).get();
+    if (previousCourierDoc.exists) {
+      await sendArchivedPushToCourier(previousCourierId, previousCourierDoc.data()!, {
+        title: "Заказ изменён",
+        body: desiredCourierId ? "Диспетчер переназначил заказ другому курьеру" : "Диспетчер вернул заказ в свободные",
+        data: {type: "ADMIN_ORDER_UPDATED", deliveryId},
+      });
+    }
+    await syncCourierStatus(previousCourierId, "adminUpdateMarketplaceDelivery: courier changed");
+  }
+
+  if (desiredCourierId) {
+    const changedLabel = pickupChanged
+      ? "Адрес забора изменён. Маршрут обновлён"
+      : destinationChanged
+        ? "Адрес назначения изменён. Маршрут обновлён"
+        : "Диспетчер изменил данные заказа";
+    await sendArchivedPushToCourier(desiredCourierId, desiredCourierData, {
+      title: "Заказ изменён",
+      body: changedLabel,
+      data: {type: "ADMIN_ORDER_UPDATED", deliveryId},
+    });
+    if (courierChanged) {
+      await syncCourierStatus(desiredCourierId, "adminUpdateMarketplaceDelivery: courier assigned");
+    }
+  }
+
+  return {
+    success: true,
+    deliveryId,
+    pickupChanged,
+    destinationChanged,
+    courierChanged,
+    status: updates.status || previous.status,
+    adminOrderStage: updates.adminOrderStage || previous.adminOrderStage,
+    availableCouriers: availableCourierIds?.length,
   };
 });
 
@@ -1500,6 +1784,7 @@ export const acceptMarketplaceDelivery = functions.https.onCall(async (data, con
     }
 
     const acceptedAt = Date.now();
+    const createdAt = Number(deliveryData.createdAt || acceptedAt);
     transaction.update(deliveryRef, {
       courierId,
       courierName: courierData.name || "",
@@ -1507,6 +1792,7 @@ export const acceptMarketplaceDelivery = functions.https.onCall(async (data, con
       status: "IN_PROGRESS",
       adminOrderStage: "ACCEPTED",
       acceptedAt,
+      acceptanceDurationMs: Math.max(0, acceptedAt - createdAt),
       startTime: acceptedAt,
       availableCourierIds: [courierId],
     });
@@ -1593,6 +1879,7 @@ export const adminAssignOrderToCourier = functions.https.onCall(async (data, con
     }
 
     const acceptedAt = Date.now();
+    const createdAt = Number(deliveryData.createdAt || acceptedAt);
     transaction.update(deliveryRef, {
       courierId,
       courierName: courierData.name || "",
@@ -1601,6 +1888,7 @@ export const adminAssignOrderToCourier = functions.https.onCall(async (data, con
       orderKind: deliveryData.orderKind || "MARKETPLACE",
       adminOrderStage: "ACCEPTED",
       acceptedAt,
+      acceptanceDurationMs: Math.max(0, acceptedAt - createdAt),
       startTime: acceptedAt,
       availableCourierIds: [courierId],
       assignedByAdmin: true,
@@ -1612,7 +1900,7 @@ export const adminAssignOrderToCourier = functions.https.onCall(async (data, con
 
   await syncCourierStatus(courierId, "adminAssignOrderToCourier: order assigned by dispatcher");
 
-  await sendPushToCourier(result.courierData, {
+  await sendArchivedPushToCourier(courierId, result.courierData, {
     title: "Вам назначен заказ",
     body: result.deliveryData.pickup?.address
       ? `Заказ: ${result.deliveryData.pickup.address}`
@@ -1694,6 +1982,7 @@ export const adminReassignOrder = functions.https.onCall(async (data, context) =
       status: "IN_PROGRESS",
       adminOrderStage: "ACCEPTED",
       acceptedAt: now,
+      acceptanceDurationMs: deliveryData.acceptanceDurationMs ?? Math.max(0, now - Number(deliveryData.createdAt || now)),
       startTime: deliveryData.startTime || now,
       availableCourierIds: [newCourierId],
       reassignedByAdmin: true,
@@ -1709,7 +1998,7 @@ export const adminReassignOrder = functions.https.onCall(async (data, context) =
     await syncCourierStatus(result.previousCourierId, "adminReassignOrder: order removed from previous courier");
     const prevDoc = await db.collection("users").doc(result.previousCourierId).get();
     if (prevDoc.exists) {
-      await sendPushToCourier(prevDoc.data()!, {
+      await sendArchivedPushToCourier(result.previousCourierId, prevDoc.data()!, {
         title: "Заказ снят",
         body: "Диспетчер переназначил ваш заказ другому курьеру",
         data: {type: "ORDER_REASSIGNED_AWAY", deliveryId},
@@ -1717,7 +2006,7 @@ export const adminReassignOrder = functions.https.onCall(async (data, context) =
     }
   }
   await syncCourierStatus(newCourierId, "adminReassignOrder: order assigned to new courier");
-  await sendPushToCourier(result.courierData, {
+  await sendArchivedPushToCourier(newCourierId, result.courierData, {
     title: "Вам назначен заказ",
     body: result.deliveryData.pickup?.address
       ? `Заказ: ${result.deliveryData.pickup.address}`
@@ -1788,7 +2077,7 @@ export const adminReleaseOrderToMarketplace = functions.https.onCall(async (data
     await syncCourierStatus(previousCourierId, "adminReleaseOrderToMarketplace: order released back to marketplace");
     const prevDoc = await db.collection("users").doc(previousCourierId).get();
     if (prevDoc.exists) {
-      await sendPushToCourier(prevDoc.data()!, {
+      await sendArchivedPushToCourier(previousCourierId, prevDoc.data()!, {
         title: "Заказ снят",
         body: "Диспетчер вернул заказ в свободные",
         data: {type: "ORDER_RELEASED", deliveryId},
@@ -1801,7 +2090,7 @@ export const adminReleaseOrderToMarketplace = functions.https.onCall(async (data
     if (courierId === previousCourierId) continue;
     const courierDoc = await db.collection("users").doc(courierId).get();
     if (!courierDoc.exists) continue;
-    await sendPushToCourier(courierDoc.data()!, {
+    await sendArchivedPushToCourier(courierId, courierDoc.data()!, {
       title: "Новый заказ",
       body: deliveryData.pickup?.address
         ? `Заказ: ${deliveryData.pickup.address}`
@@ -2228,7 +2517,7 @@ export const topUpBalance = functions.https.onCall(async (data, context) => {
   });
 
   const isDeduction = operation === "DEDUCTION";
-  await sendPushToCourier(adjustment.courierData, {
+  await sendArchivedPushToCourier(courierId, adjustment.courierData, {
     title: isDeduction ? "Средства списаны" : "Баланс пополнен",
     body: `${isDeduction ? "-" : "+"}${formatCostForSms(normalizedAmount)} сомони. Новый баланс: ${formatCostForSms(adjustment.newBalance)} сомони`,
     data: {
@@ -2560,6 +2849,46 @@ export const getCourierTransactions = functions.https.onCall(async (data, contex
   }));
 
   return {transactions};
+});
+
+// Paginated inbox for the courier app. The outbox documents remain available
+// even when FCM cannot deliver a system notification to the device.
+export const getCourierNotifications = functions.https.onCall(async (data) => {
+  const courierId = String(data.courierId || "");
+  if (!courierId) {
+    throw new functions.https.HttpsError("invalid-argument", "courierId required");
+  }
+  const pageSize = Math.min(Math.max(Number(data.limit) || 50, 1), 100);
+  let query = db.collection("courierNotifications")
+    .where("courierId", "==", courierId)
+    .orderBy("createdAt", "desc")
+    .limit(pageSize);
+  if (data.afterId) {
+    const cursor = await db.collection("courierNotifications")
+      .doc(String(data.afterId)).get();
+    if (!cursor.exists || cursor.data()?.courierId !== courierId) {
+      throw new functions.https.HttpsError("invalid-argument", "Invalid cursor");
+    }
+    query = query.startAfter(cursor);
+  }
+  const snapshot = await query.get();
+  return {
+    notifications: snapshot.docs.map(doc => {
+      const type = doc.get("type") || "";
+      return {
+        id: doc.id,
+        type,
+        title: doc.get("title") || "",
+        body: doc.get("body") || "",
+        createdAt: doc.get("createdAt") || 0,
+        // A broadcast marketplace notification belongs to no courier yet.
+        // Do not expose its identifier through the inbox detail action.
+        deliveryId: type === "ADMIN_MARKETPLACE_ORDER" ? "" :
+          (doc.get("payload")?.deliveryId || ""),
+      };
+    }),
+    nextCursor: snapshot.size === pageSize ? snapshot.docs[snapshot.size - 1].id : null,
+  };
 });
 
 
@@ -3470,7 +3799,7 @@ export const adminCreateDeliveryChain = functions.https.onCall(async (data, cont
     await sendSms(firstItem.clientPhone, startSmsText);
   }
 
-  await sendPushToCourier(courierData, {
+  await sendArchivedPushToCourier(courierId, courierData, {
     title: "Новая цепочка заказов",
     body: `Вам назначена цепочка из ${items.length} заказов`,
     data: {
@@ -3713,12 +4042,7 @@ export const adminSetDeliveryStatus = functions.https.onCall(async (data, contex
     if ((deliveryData.cost || 0) > 0) {
       // Reuse cost computed previously (e.g. re-completing after a cancel).
       totalCost = deliveryData.cost;
-    } else if (
-      deliveryType !== "default" &&
-      deliveryType !== "heavyCargoMeter" &&
-      fixedPrice !== null &&
-      fixedPrice !== undefined
-    ) {
+    } else if (fixedPrice !== null && fixedPrice !== undefined) {
       // Fixed-price service type — always the fixed price.
       totalCost = fixedPrice;
     } else if ((deliveryData.liveCost || 0) > 0) {
@@ -4219,7 +4543,7 @@ export const announceWinner = functions.https.onCall(async (data, context) => {
   for (const courierDoc of courierDocs.docs) {
     const courierData = courierDoc.data();
     if (courierDoc.id === winnerId) {
-      await sendPushToCourier(courierData, {
+      await sendArchivedPushToCourier(courierDoc.id, courierData, {
         title: "🎉 Поздравляем! Вы — победитель месяца!",
         body: text,
         data: {
@@ -4230,7 +4554,7 @@ export const announceWinner = functions.https.onCall(async (data, context) => {
       }, {withSystemNotification: true});
       winnerNotified = true;
     } else {
-      await sendPushToCourier(courierData, {
+      await sendArchivedPushToCourier(courierDoc.id, courierData, {
         title: "🏆 Победитель месяца",
         body: shortText,
         data: {
@@ -4266,6 +4590,7 @@ interface MotorolOrderItem {
   name: string;
   quantity: number;
   price: number;
+  imageUrl: string;
 }
 
 /**
@@ -4281,7 +4606,7 @@ interface MotorolOrderItem {
  *   restaurantAddress?: string,
  *   pickup: { address?: string, latitude: number, longitude: number },   // restaurant
  *   destination?: { address?: string, latitude: number, longitude: number }, // client
- *   items?: Array<{ name: string, quantity: number, price: number }>,
+ *   items?: Array<{ name: string, quantity: number, price: number, imageUrl?: string }>,
  *   productsPrice?: number,
  *   deliveryFee?: number,     // fixed courier payment (no meter)
  *   totalPrice?: number,
@@ -4343,6 +4668,7 @@ export const receiveMarketplaceOrderFromMotorol = functions.https.onRequest(asyn
         name: String(it.name || it.product_name || "Позиция"),
         quantity: Number(it.quantity || 1),
         price: Number(it.price || 0),
+        imageUrl: String(it.imageUrl || it.image_url || ""),
       })) : [];
 
     const deliveryFee = Number(body.deliveryFee || 0);
@@ -4453,7 +4779,7 @@ export const receiveMarketplaceOrderFromMotorol = functions.https.onRequest(asyn
     // Push failures (e.g. stale FCM tokens) must never fail the request — the
     // delivery is already created and couriers see it via the realtime query.
     await Promise.allSettled(availableCourierIds.map((courierId) =>
-      sendPushToCourier(courierDataById.get(courierId), {
+      sendArchivedPushToCourier(courierId, courierDataById.get(courierId), {
         title: "Новый заказ еды",
         body: restaurantName ?
           `Заказ из ${restaurantName}` : "Новый заказ на доставку",
@@ -4604,3 +4930,70 @@ export const setMinAppVersion = functions.https.onCall(async (data, context) => 
 
   return { success: true };
 });
+
+// ============ ADMIN PANEL INCREMENTAL SYNC ============
+// The browser keeps complete local copies of these root collections. This
+// compact feed lets it request only documents that were created, changed or
+// deleted since its last cursor instead of downloading the whole history.
+const ADMIN_SYNC_COLLECTIONS = new Set([
+  "deliveries",
+  "taxi_orders",
+  "transactions",
+  "users",
+  "tariffs",
+  "settings",
+  "taxiDrivers",
+  "taxiAuditLog",
+  "winner_announcements",
+]);
+
+export const recordAdminSyncChange = functions.firestore
+  .document("{collectionName}/{documentId}")
+  .onWrite(async (change, context) => {
+    const collectionName = String(context.params.collectionName || "");
+    if (!ADMIN_SYNC_COLLECTIONS.has(collectionName)) return null;
+
+    const eventKey = crypto
+      .createHash("sha256")
+      .update(context.eventId)
+      .digest("hex");
+    const retentionMs = 60 * 24 * 60 * 60 * 1000;
+    await db.collection("_syncChanges").doc(eventKey).set({
+      collectionName,
+      documentId: String(context.params.documentId),
+      operation: change.after.exists ? "upsert" : "delete",
+      changedAt: admin.firestore.FieldValue.serverTimestamp(),
+      expireAt: admin.firestore.Timestamp.fromMillis(Date.now() + retentionMs),
+    });
+    return null;
+  });
+
+// Every admin cancellation creates one durable inbox entry and an FCM push.
+// Watching the status transition covers both regular and marketplace orders.
+export const notifyCourierOfAdminCancellation = functions.firestore
+  .document("deliveries/{deliveryId}")
+  .onUpdate(async (change, context) => {
+    const before = change.before.data();
+    const after = change.after.data();
+    if (before.status === "CANCELLED" || after.status !== "CANCELLED" ||
+        !after.cancelledByAdminId || !after.courierId) return;
+
+    const deliveryId = context.params.deliveryId as string;
+    const changedAt = Number(after.statusChangedAt || after.endTime || Date.now());
+    const notificationRef = db.collection("courierNotifications")
+      .doc(`admin_cancel_${deliveryId}_${changedAt}`);
+    try {
+      await notificationRef.create({
+        courierId: after.courierId,
+        type: "ADMIN_DELIVERY_CANCELLED",
+        title: "Заказ отменён администратором",
+        body: `Заказ №${deliveryId.slice(0, 8)} отменён. Проверьте операции баланса, если комиссия уже списывалась.`,
+        payload: {deliveryId},
+        status: "PENDING",
+        attempts: 0,
+        createdAt: changedAt,
+      });
+    } catch (error: any) {
+      if (error.code !== 6 && error.code !== "already-exists") throw error;
+    }
+  });

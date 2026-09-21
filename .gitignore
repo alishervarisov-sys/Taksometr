@@ -15,6 +15,11 @@ admin-panel/node_modules/
 admin-panel/dist/
 admin-panel/build/
 
+# Windows dispatcher
+windows/**/bin/
+windows/**/obj/
+.dotnet-cli/
+
 # IDE
 .vscode/
 .idea/
@@ -31,3 +36,19 @@ auva-70253-firebase-adminsdk-fbsvc-ab3de45e52.json
 
 # Logs
 firebase/firebase-debug.log
+
+# Local Gradle cache
+android/.gradle-codex/
+
+# Windows compiled builds
+windows/publish-onefile/
+
+# Build artifacts
+*.apk
+*.apk.idsig
+*.exe
+*.zip
+
+# JVM crash files
+hs_err_pid*.log
+replay_pid*.log

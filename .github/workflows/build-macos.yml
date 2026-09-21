@@ -1,0 +1,28 @@
+name: Build macOS installer
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-dmg:
+    runs-on: macos-14
+    defaults:
+      run:
+        working-directory: macos
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: macos/package-lock.json
+      - run: npm ci
+      - run: npm run check
+      - run: npm run dist:mac
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ZaKi-Admin-macOS-universal
+          path: macos/release/*.dmg
+          if-no-files-found: error

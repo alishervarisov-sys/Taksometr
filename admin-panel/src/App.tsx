@@ -24,29 +24,30 @@ import Login from './pages/Login';
 const theme = createTheme({
   palette: {
     primary: {
-      main: '#1B5E20',
-      light: '#4C8C4A',
-      dark: '#003300',
+      main: '#3786F6',
+      light: '#70ABFF',
+      dark: '#1E64C8',
     },
     secondary: {
-      main: '#FFC107',
+      main: '#E8F2FF',
     },
     background: {
-      default: '#F5F5F5',
+      default: '#F4F8FF',
+      paper: '#FFFFFF',
     },
   },
   typography: {
     fontFamily: '"Inter", "Roboto", "Helvetica", "Arial", sans-serif',
   },
   shape: {
-    borderRadius: 12,
+    borderRadius: 18,
   },
   components: {
     MuiCard: {
       styleOverrides: {
         root: {
-          borderRadius: 16,
-          boxShadow: '0 2px 12px rgba(0,0,0,0.08)',
+          borderRadius: 20,
+          boxShadow: '0 2px 12px rgba(30,100,200,0.06)',
         },
       },
     },

@@ -69,9 +69,25 @@ object AppModule {
         ZaKiDatabase::class.java,
         "zaki_database"
     )
-    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
     .fallbackToDestructiveMigration()
     .build()
+
+    private val MIGRATION_7_8 = object : androidx.room.migration.Migration(7, 8) {
+        override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE deliveries ADD COLUMN acceptanceLimitMinutes INTEGER NOT NULL DEFAULT 10")
+            db.execSQL("ALTER TABLE deliveries ADD COLUMN acceptanceDurationMs INTEGER")
+        }
+    }
+
+    private val MIGRATION_8_9 = object : androidx.room.migration.Migration(8, 9) {
+        override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE deliveries ADD COLUMN restaurantName TEXT NOT NULL DEFAULT ''")
+            db.execSQL("ALTER TABLE deliveries ADD COLUMN orderItemsJson TEXT NOT NULL DEFAULT '[]'")
+            db.execSQL("ALTER TABLE deliveries ADD COLUMN productsPrice REAL NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE deliveries ADD COLUMN totalPrice REAL NOT NULL DEFAULT 0")
+        }
+    }
 
     private val MIGRATION_1_2 = object : androidx.room.migration.Migration(1, 2) {
         override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {

@@ -21,10 +21,12 @@ import com.zaki.taksometr.data.local.dao.RoutePointDao
 import com.zaki.taksometr.data.local.entity.PendingOperationEntity
 import com.zaki.taksometr.data.local.entity.RoutePointEntity
 import com.zaki.taksometr.domain.model.GeoPoint
+import com.zaki.taksometr.domain.repository.DeliveryRepository
 import com.zaki.taksometr.domain.repository.TariffRepository
 import com.zaki.taksometr.presentation.MainActivity
 import com.zaki.taksometr.util.Constants
 import com.zaki.taksometr.util.LocationUtils
+import com.zaki.taksometr.util.Resource
 import com.zaki.taksometr.widget.TaksometrWidgetProvider
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.*
@@ -40,6 +42,7 @@ class LocationTrackingService : Service() {
     @Inject lateinit var firestore: FirebaseFirestore
     @Inject lateinit var prefs: SharedPreferences
     @Inject lateinit var tariffRepository: TariffRepository
+    @Inject lateinit var deliveryRepository: DeliveryRepository
     @Inject lateinit var pendingOperationDao: PendingOperationDao
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -62,6 +65,7 @@ class LocationTrackingService : Service() {
     private var currentSpeedKmh: Float = 0f
     private var maxSpeedKmh: Float = 0f
     private var lastDeliverySpeedUpdate = 0L
+    @Volatile private var autoPickupInFlightForId: String? = null
 
     private val deliveryId: String
         get() = prefs.getString(Constants.PREF_ACTIVE_DELIVERY_ID, "") ?: ""
@@ -222,12 +226,15 @@ class LocationTrackingService : Service() {
             return
         }
 
+        val currentDeliveryId = deliveryId
+        if (currentDeliveryId.isEmpty()) return
+        // Check every accurate fix, including stationary ones that the route
+        // recorder discards. The courier may already be standing at pickup.
+        maybeStartMarketplaceTrip(currentDeliveryId, newPoint)
+
         if (!LocationUtils.isValidPoint(newPoint, lastValidPoint, lastValidTimestamp)) {
             return
         }
-
-        val currentDeliveryId = deliveryId
-        if (currentDeliveryId.isEmpty()) return
 
         val isGapAnchor = pendingGapAnchor
         if (!isGapAnchor) {
@@ -265,6 +272,48 @@ class LocationTrackingService : Service() {
         val notification = createNotification("Маршрут: $distanceText")
         val manager = getSystemService(NOTIFICATION_SERVICE) as android.app.NotificationManager
         manager.notify(Constants.TRACKING_NOTIFICATION_ID, notification)
+    }
+
+    private fun maybeStartMarketplaceTrip(currentDeliveryId: String, point: GeoPoint) {
+        val isStationaryFix = lastValidPoint?.let {
+            LocationUtils.haversineDistance(it, point) < 5.0
+        } ?: false
+        if (point.accuracy > 20f ||
+            (!isStationaryFix && !LocationUtils.isValidPoint(point, lastValidPoint, lastValidTimestamp)) ||
+            autoPickupInFlightForId == currentDeliveryId
+        ) return
+        autoPickupInFlightForId = currentDeliveryId
+        serviceScope.launch {
+            try {
+                val order = deliveryDao.getById(currentDeliveryId)
+                val pickupLat = order?.pickupLat
+                val pickupLng = order?.pickupLng
+                if (currentDeliveryId != deliveryId || order?.orderKind != "MARKETPLACE" ||
+                    order.status != "IN_PROGRESS" || order.isPaused ||
+                    order.adminOrderStage !in listOf(null, "ACCEPTED") ||
+                    pickupLat == null || pickupLng == null
+                ) return@launch
+
+                val distance = LocationUtils.haversineDistance(
+                    point, GeoPoint(pickupLat, pickupLng)
+                )
+                if (currentDeliveryId == deliveryId && distance <= Constants.PICKUP_ARRIVAL_RADIUS_METERS) {
+                    when (val result = deliveryRepository.updateMarketplaceDeliveryStage(
+                        currentDeliveryId, "ON_THE_WAY", null
+                    )) {
+                        is Resource.Error -> android.util.Log.w(
+                            "LocationTrackingService",
+                            "Could not auto-start trip $currentDeliveryId: ${result.message}"
+                        )
+                        else -> Unit
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.w("LocationTrackingService", "Pickup geofence check failed", e)
+            } finally {
+                autoPickupInFlightForId = null
+            }
+        }
     }
 
     private var lastFirestoreUpdate = 0L
@@ -448,7 +497,7 @@ class LocationTrackingService : Service() {
             .setContentText(contentText)
             .setSmallIcon(R.drawable.ic_delivery)
             .apply { largeIcon?.let { setLargeIcon(it) } }
-            .setColor(android.graphics.Color.parseColor("#1B5E20"))
+            .setColor(android.graphics.Color.parseColor("#3786F6"))
             .setContentIntent(pendingIntent)
             .setOngoing(true)
             .setSilent(true)

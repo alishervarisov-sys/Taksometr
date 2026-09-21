@@ -6,6 +6,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.net.Uri
 import android.os.Looper
 import androidx.core.app.NotificationCompat
 import com.google.android.gms.location.FusedLocationProviderClient
@@ -19,6 +20,7 @@ import com.google.firebase.messaging.RemoteMessage
 import com.zaki.taksometr.R
 import com.zaki.taksometr.ZaKiApp
 import com.zaki.taksometr.domain.repository.AuthRepository
+import com.zaki.taksometr.domain.repository.DeliveryRepository
 import com.zaki.taksometr.util.Constants
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
@@ -31,6 +33,7 @@ import javax.inject.Inject
 class ZaKiFirebaseMessagingService : FirebaseMessagingService() {
 
     @Inject lateinit var authRepository: AuthRepository
+    @Inject lateinit var deliveryRepository: DeliveryRepository
     @Inject lateinit var fusedLocationClient: FusedLocationProviderClient
     @Inject lateinit var firestore: FirebaseFirestore
     @Inject lateinit var prefs: SharedPreferences
@@ -56,6 +59,25 @@ class ZaKiFirebaseMessagingService : FirebaseMessagingService() {
                 }
                 val title = message.data["title"] ?: message.notification?.title ?: "Новый заказ"
                 val body  = message.data["body"]  ?: message.notification?.body  ?: "Свободный заказ ожидает принятия"
+                showNotification(title, body, ZaKiApp.NEW_ORDER_CHANNEL_ID)
+            }
+            "ADMIN_ORDER_UPDATED" -> {
+                val deliveryId = message.data["deliveryId"]
+                CoroutineScope(Dispatchers.IO).launch {
+                    // Pull the edited addresses/phone/type into Room immediately.
+                    // The active screen observes Room, so its map and geofence
+                    // switch to the corrected order without an app restart.
+                    if (!deliveryId.isNullOrEmpty()) {
+                        deliveryRepository.syncDeliveryStatusFromFirestore(deliveryId)
+                    }
+                    deliveryRepository.syncRemoteActiveDelivery()
+                    // Reload the tracking service's in-memory route/type state.
+                    // In particular, a changed pickup resets the old distance
+                    // anchor before GPS points for the new pickup are counted.
+                    LocationTrackingService.switchService(this@ZaKiFirebaseMessagingService)
+                }
+                val title = message.data["title"] ?: message.notification?.title ?: "Заказ изменён"
+                val body = message.data["body"] ?: message.notification?.body ?: "Диспетчер обновил данные заказа"
                 showNotification(title, body)
             }
             "WINNER_ANNOUNCEMENT" -> {
@@ -148,7 +170,11 @@ class ZaKiFirebaseMessagingService : FirebaseMessagingService() {
         } catch (_: Exception) {}
     }
 
-    private fun showNotification(title: String, body: String) {
+    private fun showNotification(
+        title: String,
+        body: String,
+        channelId: String = ZaKiApp.NOTIFICATION_CHANNEL_ID
+    ) {
         val intent = Intent(this, com.zaki.taksometr.presentation.MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
@@ -161,16 +187,23 @@ class ZaKiFirebaseMessagingService : FirebaseMessagingService() {
         // notification is instantly recognizable as ZaKi, like other apps.
         val largeIcon = android.graphics.BitmapFactory.decodeResource(resources, R.mipmap.ic_launcher)
 
-        val notification = NotificationCompat.Builder(this, ZaKiApp.NOTIFICATION_CHANNEL_ID)
+        val notification = NotificationCompat.Builder(this, channelId)
             .setContentTitle(title)
             .setContentText(body)
             .setSmallIcon(R.drawable.ic_notification)
             .apply { largeIcon?.let { setLargeIcon(it) } }
             // Brand green tint applied to the small (status-bar) icon.
-            .setColor(android.graphics.Color.parseColor("#1B5E20"))
+            .setColor(android.graphics.Color.parseColor("#3786F6"))
             .setAutoCancel(true)
             .setContentIntent(pendingIntent)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
+            // Android 7 and older do not have notification channels, so set
+            // the custom sound on the notification itself as well.
+            .apply {
+                if (channelId == ZaKiApp.NEW_ORDER_CHANNEL_ID) {
+                    setSound(Uri.parse("android.resource://$packageName/${R.raw.notice8}"))
+                }
+            }
             .build()
 
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager

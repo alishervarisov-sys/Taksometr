@@ -70,10 +70,10 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        background: 'linear-gradient(135deg, #1B5E20 0%, #003300 100%)',
+        background: 'linear-gradient(135deg, #F4F8FF 0%, #EAF4FF 100%)',
       }}
     >
-      <Card sx={{ maxWidth: 400, width: '100%', mx: 2 }}>
+      <Card sx={{ maxWidth: 400, width: '100%', mx: 2, borderRadius: 4 }}>
         <CardContent sx={{ p: 4 }}>
           <Typography variant="h4" align="center" sx={{ fontWeight: 700, color: 'primary.main', mb: 1 }}>
             ZaKi Admin

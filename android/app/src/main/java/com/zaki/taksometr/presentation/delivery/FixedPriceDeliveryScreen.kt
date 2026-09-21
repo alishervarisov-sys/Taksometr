@@ -1,5 +1,6 @@
-﻿package com.zaki.taksometr.presentation.delivery
+package com.zaki.taksometr.presentation.delivery
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -30,6 +31,7 @@ fun FixedPriceDeliveryScreen(
     val state by viewModel.state.collectAsState()
     val context = LocalContext.current
     var showCompleteDialog by remember { mutableStateOf(false) }
+    BackHandler(onBack = onBack)
 
     val delivery = state.delivery
     val deliveryTypeName = when (delivery?.deliveryType) {
@@ -43,6 +45,8 @@ fun FixedPriceDeliveryScreen(
     }
 
     Scaffold(
+        containerColor = CourierCanvas,
+
         topBar = {
             TopAppBar(
                 title = { Text(str(Strings.delivery)) },
@@ -52,9 +56,9 @@ fun FixedPriceDeliveryScreen(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    titleContentColor = MaterialTheme.colorScheme.onPrimary,
-                    navigationIconContentColor = MaterialTheme.colorScheme.onPrimary
+                    containerColor = CourierSky,
+                    titleContentColor = CourierInk,
+                    navigationIconContentColor = CourierBlueDark
                 )
             )
         }

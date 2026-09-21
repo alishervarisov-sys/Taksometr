@@ -238,7 +238,7 @@ const Dashboard: React.FC<DashboardProps> = ({ adminId }) => {
       title: 'Всего курьеров',
       value: stats.totalCouriers,
       icon: <PeopleIcon sx={{ fontSize: 40 }} />,
-      color: '#1B5E20',
+      color: '#3786F6',
     },
     {
       title: 'Активные курьеры',
@@ -250,7 +250,7 @@ const Dashboard: React.FC<DashboardProps> = ({ adminId }) => {
       title: 'На смене',
       value: onShiftCouriers.length,
       icon: <OnShiftIcon sx={{ fontSize: 40 }} />,
-      color: '#1B5E20',
+      color: '#3786F6',
     },
     {
       title: 'Доставки сегодня',
@@ -300,7 +300,7 @@ const Dashboard: React.FC<DashboardProps> = ({ adminId }) => {
       <Card sx={{ mt: 3 }}>
         <CardContent>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
-            <OnShiftIcon sx={{ color: '#1B5E20' }} />
+            <OnShiftIcon sx={{ color: '#3786F6' }} />
             <Typography variant="h6" sx={{ fontWeight: 700 }}>
               Курьеры на смене ({onShiftCouriers.length})
             </Typography>

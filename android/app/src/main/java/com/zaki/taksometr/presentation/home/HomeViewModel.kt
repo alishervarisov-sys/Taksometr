@@ -41,7 +41,8 @@ data class PendingMarketplaceOrder(
     val destinationAddress: String = "",
     val destinationLat: Double? = null,
     val destinationLng: Double? = null,
-    val createdAt: Long = 0L
+    val createdAt: Long = 0L,
+    val acceptanceLimitMinutes: Int = 10
 )
 
 data class WinnerAnnouncement(
@@ -196,7 +197,8 @@ class HomeViewModel @Inject constructor(
                         destinationAddress = destination?.get("address") as? String ?: "",
                         destinationLat = (destination?.get("latitude") as? Number)?.toDouble(),
                         destinationLng = (destination?.get("longitude") as? Number)?.toDouble(),
-                        createdAt = doc.getLong("createdAt") ?: 0L
+                        createdAt = doc.getLong("createdAt") ?: 0L,
+                        acceptanceLimitMinutes = (doc.getLong("acceptanceLimitMinutes") ?: 10L).toInt()
                     )
                 }
             .sortedByDescending { it.createdAt }
@@ -258,7 +260,8 @@ class HomeViewModel @Inject constructor(
                         destinationAddress = destination?.get("address") as? String ?: "",
                         destinationLat = (destination?.get("latitude") as? Number)?.toDouble(),
                         destinationLng = (destination?.get("longitude") as? Number)?.toDouble(),
-                        createdAt = doc.getLong("createdAt") ?: 0L
+                        createdAt = doc.getLong("createdAt") ?: 0L,
+                        acceptanceLimitMinutes = (doc.getLong("acceptanceLimitMinutes") ?: 10L).toInt()
                     ))
                 )
             }

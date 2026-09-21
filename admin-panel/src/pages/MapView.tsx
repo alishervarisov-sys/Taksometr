@@ -42,7 +42,7 @@ type StatusFilter = 'all' | CourierStatus;
 
 const STATUS_META: Record<CourierStatus, { label: string; color: string; chip: 'error' | 'success' | 'default' }> = {
   busy: { label: 'Занят', color: '#D32F2F', chip: 'error' },
-  free: { label: 'Свободен', color: '#1B5E20', chip: 'success' },
+  free: { label: 'Свободен', color: '#3786F6', chip: 'success' },
   offline: { label: 'Не на смене', color: '#757575', chip: 'default' },
 };
 
@@ -508,7 +508,7 @@ const MapView: React.FC<MapViewProps> = ({ adminId }) => {
   const renderZonesSection = () => {
     const zones = zoneMode === 'start' ? startZones : endZones;
     const maxCount = zones.length > 0 ? zones[0].count : 0;
-    const baseColor = zoneMode === 'start' ? '#1B5E20' : '#D32F2F';
+    const baseColor = zoneMode === 'start' ? '#3786F6' : '#D32F2F';
 
     // Центр карты зон — самая активная зона либо Душанбе
     const zonesCenter = zones.length > 0

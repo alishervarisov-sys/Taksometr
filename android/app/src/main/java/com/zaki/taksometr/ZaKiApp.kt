@@ -1,9 +1,12 @@
 package com.zaki.taksometr
 
 import android.app.Application
+import android.media.AudioAttributes
+import android.net.Uri
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.os.Build
+import com.zaki.taksometr.R
 import dagger.hilt.android.HiltAndroidApp
 
 @HiltAndroidApp
@@ -40,6 +43,24 @@ class ZaKiApp : Application() {
                 description = "Общие уведомления приложения"
             }
 
+            // A separate channel is necessary because Android keeps a channel's
+            // sound settings after it has been created. This lets new-order
+            // alerts use the bundled melody without changing other alerts.
+            val newOrderSound = Uri.parse("android.resource://$packageName/${R.raw.notice8}")
+            val newOrderChannel = NotificationChannel(
+                NEW_ORDER_CHANNEL_ID,
+                "Новые заказы",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Звуковое уведомление о новом заказе"
+                setSound(
+                    newOrderSound,
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+                        .build()
+                )
+            }
+
             // Low-key persistent notification shown while the courier is on shift
             // and the continuous location tracker is running.
             val shiftChannel = NotificationChannel(
@@ -54,6 +75,7 @@ class ZaKiApp : Application() {
             val manager = getSystemService(NotificationManager::class.java)
             manager.createNotificationChannel(trackingChannel)
             manager.createNotificationChannel(notificationChannel)
+            manager.createNotificationChannel(newOrderChannel)
             manager.createNotificationChannel(shiftChannel)
         }
     }
@@ -61,6 +83,7 @@ class ZaKiApp : Application() {
     companion object {
         const val TRACKING_CHANNEL_ID = "zaki_tracking"
         const val NOTIFICATION_CHANNEL_ID = "zaki_notifications"
+        const val NEW_ORDER_CHANNEL_ID = "zaki_new_orders"
         const val SHIFT_CHANNEL_ID = "zaki_shift"
     }
 }

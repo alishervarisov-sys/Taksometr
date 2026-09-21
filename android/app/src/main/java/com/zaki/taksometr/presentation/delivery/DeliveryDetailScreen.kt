@@ -33,6 +33,8 @@ fun DeliveryDetailScreen(
     }
 
     Scaffold(
+        containerColor = CourierCanvas,
+
         topBar = {
             TopAppBar(
                 title = { Text("Детали доставки") },
@@ -42,9 +44,9 @@ fun DeliveryDetailScreen(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    titleContentColor = MaterialTheme.colorScheme.onPrimary,
-                    navigationIconContentColor = MaterialTheme.colorScheme.onPrimary
+                    containerColor = CourierSky,
+                    titleContentColor = CourierInk,
+                    navigationIconContentColor = CourierBlueDark
                 )
             )
         }
@@ -86,7 +88,7 @@ fun DeliveryDetailScreen(
                             ) {
                                 Polyline(
                                     points = delivery.route.map { LatLng(it.latitude, it.longitude) },
-                                    color = Primary,
+                                    color = CourierBlueDark,
                                     width = 6f
                                 )
                                 // Start marker
@@ -146,6 +148,14 @@ fun DeliveryDetailScreen(
                                 value = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault())
                                     .format(Date(delivery.createdAt))
                             )
+                            if (delivery.orderKind == "MARKETPLACE" && delivery.acceptanceDurationMs != null) {
+                                Divider(modifier = Modifier.padding(vertical = 12.dp))
+                                DetailRow(
+                                    icon = Icons.Default.Schedule,
+                                    label = "Время до принятия",
+                                    value = "${LocationUtils.formatDuration(delivery.acceptanceDurationMs)} / лимит ${delivery.acceptanceLimitMinutes} мин"
+                                )
+                            }
                             Divider(modifier = Modifier.padding(vertical = 12.dp))
                             Row(
                                 modifier = Modifier.fillMaxWidth(),

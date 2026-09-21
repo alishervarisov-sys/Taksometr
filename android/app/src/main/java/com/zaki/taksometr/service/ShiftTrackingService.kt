@@ -218,7 +218,7 @@ class ShiftTrackingService : Service() {
             .setContentTitle("ZaKi")
             .setContentText("Вы на смене — отслеживание активно")
             .setSmallIcon(R.drawable.ic_delivery)
-            .setColor(android.graphics.Color.parseColor("#1B5E20"))
+            .setColor(android.graphics.Color.parseColor("#3786F6"))
             .setContentIntent(pendingIntent)
             .setOngoing(true)
             .setSilent(true)

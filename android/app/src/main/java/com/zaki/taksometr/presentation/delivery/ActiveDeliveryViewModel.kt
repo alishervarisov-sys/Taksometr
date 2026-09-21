@@ -33,10 +33,11 @@ import javax.inject.Inject
 /** A marketplace order that is available to be accepted as a second order. */
 data class PendingOrderInfo(
     val id: String = "",
-    val clientPhone: String = "",
     val comment: String = "",
     val pickupAddress: String = "",
-    val destinationAddress: String = ""
+    val destinationAddress: String = "",
+    val createdAt: Long = 0L,
+    val acceptanceLimitMinutes: Int = 10
 )
 
 data class ActiveDeliveryState(
@@ -125,21 +126,16 @@ class ActiveDeliveryViewModel @Inject constructor(
                     // Hide the pending-order offer once the courier is at the limit.
                     pendingOrder = if (list.size >= Constants.MAX_CONCURRENT_DELIVERIES) null else _state.value.pendingOrder
                 )
-                // Re-evaluate the pickup geofence whenever the current order changes.
+                // Refresh the pickup distance whenever the current order changes.
                 evaluatePickupGeofence(current, _state.value.currentLocation)
             }
         }
     }
 
-    // Guards the one-shot automatic ARRIVED_PICKUP transition so it fires at most
-    // once per delivery even though GPS updates arrive continuously.
-    private var autoArrivedFiredForId: String? = null
-
     /**
-     * Checks how far the courier is from the admin-defined pickup point and:
-     *  - exposes the distance + whether they are within the arrival radius, and
-     *  - automatically advances the order to ARRIVED_PICKUP the first time the
-     *    courier reaches the pickup point (only from the initial stage).
+     * Exposes the distance to the admin-defined pickup point for the UI. The
+     * tracking service owns the automatic stage transition so it also works
+     * when this screen is closed.
      */
     private fun evaluatePickupGeofence(current: Delivery?, location: GeoPoint?) {
         // Only marketplace (admin) orders have a gated pickup point.
@@ -166,14 +162,6 @@ class ActiveDeliveryViewModel @Inject constructor(
             distanceToPickupMeters = distance,
             isWithinPickupRadius = within
         )
-
-        val stage = current.adminOrderStage
-        val atInitialStage = stage == null || stage == "ACCEPTED"
-        if (within && atInitialStage && !current.isPaused && autoArrivedFiredForId != current.id) {
-            autoArrivedFiredForId = current.id
-            log("Auto-advancing to ARRIVED_PICKUP: courier within ${distance.toInt()}m of pickup")
-            updateMarketplaceStage(stage = "ARRIVED_PICKUP")
-        }
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -204,8 +192,7 @@ class ActiveDeliveryViewModel @Inject constructor(
                     distanceMeters = distance,
                     currentCost = cost
                 )
-                // Check the pickup geofence on every new GPS fix so the order can
-                // auto-advance to ARRIVED_PICKUP when the courier reaches it.
+                // Keep the proximity hint current with each recorded GPS point.
                 evaluatePickupGeofence(_state.value.delivery, newLocation)
             }
         }
@@ -242,6 +229,25 @@ class ActiveDeliveryViewModel @Inject constructor(
             } else {
                 deliveryRepository.setDeliveryWaiting(currentId, startWaiting)
             }
+        }
+    }
+
+    /**
+     * Leaving the delivery screen must never leave a waiting timer running in
+     * the background. Freeze it first, then navigate. The locally persisted
+     * value makes the button return to "Start waiting" immediately; marketplace
+     * orders also reconcile the same stop with the server for the admin view.
+     */
+    fun stopWaitingBeforeExit(onStopped: () -> Unit) {
+        val current = _state.value.delivery
+        viewModelScope.launch {
+            if (current?.waitingStartedAt != null) {
+                deliveryRepository.setDeliveryWaiting(current.id, false)
+                if (current.orderKind == "MARKETPLACE") {
+                    launch { deliveryRepository.updateMarketplaceDeliveryStage(current.id, null, "STOP") }
+                }
+            }
+            onStopped()
         }
     }
 
@@ -430,10 +436,11 @@ class ActiveDeliveryViewModel @Inject constructor(
                 _state.value = _state.value.copy(
                     pendingOrder = PendingOrderInfo(
                         id = doc.id,
-                        clientPhone = doc.getString("clientPhone") ?: "",
                         comment = doc.getString("comment") ?: "",
                         pickupAddress = pickup?.get("address") as? String ?: "",
-                        destinationAddress = destination?.get("address") as? String ?: ""
+                        destinationAddress = destination?.get("address") as? String ?: "",
+                        createdAt = doc.getLong("createdAt") ?: 0L,
+                        acceptanceLimitMinutes = (doc.getLong("acceptanceLimitMinutes") ?: 10L).toInt()
                     )
                 )
             }

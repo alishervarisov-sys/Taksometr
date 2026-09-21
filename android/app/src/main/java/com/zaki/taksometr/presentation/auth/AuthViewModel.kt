@@ -4,6 +4,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.firebase.messaging.FirebaseMessaging
 import com.zaki.taksometr.BuildConfig
+import com.zaki.taksometr.domain.model.User
+import com.zaki.taksometr.domain.model.UserRole
 import com.zaki.taksometr.domain.repository.AuthRepository
 import com.zaki.taksometr.domain.repository.LocationRepository
 import com.zaki.taksometr.util.Resource
@@ -20,7 +22,7 @@ data class AuthState(
     val password: String = "",
     val isLoading: Boolean = false,
     val error: String? = null,
-    val isSuccess: Boolean = false
+    val authenticatedUser: User? = null
 )
 
 @HiltViewModel
@@ -62,17 +64,23 @@ class AuthViewModel @Inject constructor(
 
             when (val result = authRepository.login(currentState.login, currentState.password)) {
                 is Resource.Success -> {
-                    // Always refresh FCM token on login so push notifications work
-                    FirebaseMessaging.getInstance().token.addOnSuccessListener { token ->
-                        if (token.isNotEmpty()) {
-                            viewModelScope.launch { authRepository.updateFcmToken(token) }
+                    val user = result.data
+                    if (user.role == UserRole.COURIER) {
+                        // Courier-only services must never be started for an admin session.
+                        FirebaseMessaging.getInstance().token.addOnSuccessListener { token ->
+                            if (token.isNotEmpty()) {
+                                viewModelScope.launch { authRepository.updateFcmToken(token) }
+                            }
                         }
+                        viewModelScope.launch {
+                            authRepository.reportAppVersion(BuildConfig.VERSION_CODE, BuildConfig.VERSION_NAME)
+                        }
+                        updateCourierLocationAfterLogin()
                     }
-                    viewModelScope.launch {
-                        authRepository.reportAppVersion(BuildConfig.VERSION_CODE, BuildConfig.VERSION_NAME)
-                    }
-                    updateCourierLocationAfterLogin()
-                    _state.value = _state.value.copy(isLoading = false, isSuccess = true)
+                    _state.value = _state.value.copy(
+                        isLoading = false,
+                        authenticatedUser = user
+                    )
                 }
                 is Resource.Error -> {
                     _state.value = _state.value.copy(isLoading = false, error = result.message)

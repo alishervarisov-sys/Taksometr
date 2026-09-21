@@ -89,6 +89,13 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // Compact change feed used by the admin panel's persistent IndexedDB cache.
+    // Only Cloud Functions append events; clients can never forge a change.
+    match /_syncChanges/{changeId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
     // Continuous courier location breadcrumbs (the "Трекинг" feature).
     // The courier app appends points; the admin panel reads them; old points are
     // auto-removed by the Firestore TTL policy on `expireAt`.

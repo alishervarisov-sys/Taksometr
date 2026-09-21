@@ -81,6 +81,9 @@ class ProfileViewModel @Inject constructor(
     init {
         loadUser()
         loadHistory()
+        viewModelScope.launch {
+            if (userId.isNotBlank()) deliveryRepository.syncHistoryFromFirestore(userId)
+        }
     }
 
     private fun loadUser() {

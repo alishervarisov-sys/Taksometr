@@ -1,0 +1,152 @@
+<Window x:Class="ZaKi.Dispatcher.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="ZaKi Dispatcher" Width="1450" Height="860"
+        Icon="Assets/zaki.ico"
+        MinWidth="1050" MinHeight="650"
+        WindowStartupLocation="CenterScreen"
+        Background="{StaticResource PageBrush}">
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="235" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+
+        <Border Grid.Column="0" Background="#123D1B">
+            <Grid Margin="20,24">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <StackPanel Orientation="Horizontal">
+                    <Border Width="43" Height="43" CornerRadius="12" Background="#F4C542">
+                        <TextBlock Text="Z" FontWeight="Bold" FontSize="23" Foreground="#17331E"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <StackPanel Margin="12,1,0,0">
+                        <TextBlock Text="ZaKi" FontWeight="Bold" FontSize="21" Foreground="White" />
+                        <TextBlock Text="Dispatcher" FontSize="12" Foreground="#B8CFBD" />
+                    </StackPanel>
+                </StackPanel>
+
+                <StackPanel Grid.Row="1" Margin="0,42,0,0">
+                    <Border Background="#2A5B33" CornerRadius="10" Padding="13,11">
+                        <TextBlock Text="▦   Заказы" FontSize="15" Foreground="White" FontWeight="SemiBold" />
+                    </Border>
+                    <TextBlock Text="Следующие модули" Foreground="#86A48C" FontSize="11" Margin="13,24,0,9" />
+                    <TextBlock Text="Курьеры" Foreground="#AFC5B4" Margin="13,8" />
+                    <TextBlock Text="Клиенты" Foreground="#AFC5B4" Margin="13,8" />
+                    <TextBlock Text="Карта и трекинг" Foreground="#AFC5B4" Margin="13,8" />
+                    <TextBlock Text="Аналитика" Foreground="#AFC5B4" Margin="13,8" />
+                </StackPanel>
+
+                <StackPanel Grid.Row="3">
+                    <TextBlock x:Name="AdminNameText" Foreground="White" FontWeight="SemiBold" />
+                    <TextBlock Text="Администратор" Foreground="#96B19C" FontSize="12" Margin="0,3,0,0" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Column="1" Margin="28,22,28,24">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel>
+                    <TextBlock Text="Заказы" FontSize="30" FontWeight="Bold" Foreground="#17331E" />
+                    <TextBlock Text="Локальная база с фоновой синхронизацией Firebase"
+                               Foreground="{StaticResource MutedBrush}" Margin="0,3,0,0" />
+                </StackPanel>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Border x:Name="ConnectionBadge" Background="#E7F4EA" CornerRadius="14" Padding="12,6" Margin="0,0,12,0">
+                        <TextBlock x:Name="ConnectionText" Text="● Проверка…" Foreground="#196127" />
+                    </Border>
+                    <Button x:Name="SyncButton" Content="⟳  Синхронизировать" Background="#196127"
+                            Foreground="White" Click="SyncButton_Click" />
+                </StackPanel>
+            </Grid>
+
+            <Grid Grid.Row="1" Margin="0,22,0,18">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" /><ColumnDefinition Width="12" />
+                    <ColumnDefinition Width="*" /><ColumnDefinition Width="12" />
+                    <ColumnDefinition Width="*" /><ColumnDefinition Width="12" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Border Grid.Column="0" Background="White" CornerRadius="14" Padding="18,14">
+                    <StackPanel><TextBlock Text="Всего локально" Foreground="#657268"/><TextBlock x:Name="TotalCountText" Text="0" FontSize="25" FontWeight="Bold" Foreground="#17331E" Margin="0,5,0,0"/></StackPanel>
+                </Border>
+                <Border Grid.Column="2" Background="White" CornerRadius="14" Padding="18,14">
+                    <StackPanel><TextBlock Text="Ожидают" Foreground="#657268"/><TextBlock x:Name="PendingCountText" Text="0" FontSize="25" FontWeight="Bold" Foreground="#B56A00" Margin="0,5,0,0"/></StackPanel>
+                </Border>
+                <Border Grid.Column="4" Background="White" CornerRadius="14" Padding="18,14">
+                    <StackPanel><TextBlock Text="В процессе" Foreground="#657268"/><TextBlock x:Name="ActiveCountText" Text="0" FontSize="25" FontWeight="Bold" Foreground="#1769AA" Margin="0,5,0,0"/></StackPanel>
+                </Border>
+                <Border Grid.Column="6" Background="White" CornerRadius="14" Padding="18,14">
+                    <StackPanel><TextBlock Text="Ожидают отправки" Foreground="#657268"/><TextBlock x:Name="QueueCountText" Text="0" FontSize="25" FontWeight="Bold" Foreground="#8A3FFC" Margin="0,5,0,0"/></StackPanel>
+                </Border>
+            </Grid>
+
+            <Border Grid.Row="2" Background="White" CornerRadius="14" Padding="16" Margin="0,0,0,14">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" /><ColumnDefinition Width="210" /><ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBox x:Name="SearchBox" Height="40" Margin="0,0,12,0"
+                             ToolTip="Телефон клиента, имя курьера или номер заказа"
+                             TextChanged="SearchBox_TextChanged" />
+                    <ComboBox x:Name="StatusFilter" Grid.Column="1" Height="40" Margin="0,0,12,0"
+                              SelectionChanged="StatusFilter_SelectionChanged">
+                        <ComboBoxItem Content="Все статусы" Tag="ALL" IsSelected="True" />
+                        <ComboBoxItem Content="Ожидают курьера" Tag="PENDING" />
+                        <ComboBoxItem Content="В процессе" Tag="IN_PROGRESS" />
+                        <ComboBoxItem Content="Завершённые" Tag="COMPLETED" />
+                        <ComboBoxItem Content="Отменённые" Tag="CANCELLED" />
+                    </ComboBox>
+                    <StackPanel Grid.Column="2" Orientation="Horizontal">
+                        <Button Content="Завершить" Background="#DDF3E2" Foreground="#145A21"
+                                Margin="0,0,8,0" Click="CompleteButton_Click" />
+                        <Button Content="Отменить" Background="#FCE3E1" Foreground="#A32620"
+                                Click="CancelButton_Click" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <Border Grid.Row="3" Background="White" CornerRadius="14" Padding="1">
+                <DataGrid x:Name="DeliveriesGrid" AutoGenerateColumns="False" IsReadOnly="True"
+                          HeadersVisibility="Column" GridLinesVisibility="Horizontal"
+                          BorderThickness="0" RowHeight="48" ColumnHeaderHeight="44"
+                          SelectionMode="Single" AlternatingRowBackground="#F8FAF8"
+                          MouseDoubleClick="DeliveriesGrid_MouseDoubleClick">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Дата" Binding="{Binding CreatedAtLabel}" Width="150" />
+                        <DataGridTextColumn Header="Клиент" Binding="{Binding ClientPhone}" Width="145" />
+                        <DataGridTextColumn Header="Курьер" Binding="{Binding CourierName}" Width="*" MinWidth="150" />
+                        <DataGridTextColumn Header="Статус" Binding="{Binding StatusLabel}" Width="150" />
+                        <DataGridTextColumn Header="Откуда" Binding="{Binding PickupAddress}" Width="*" MinWidth="170" />
+                        <DataGridTextColumn Header="Расстояние" Binding="{Binding DistanceLabel}" Width="110" />
+                        <DataGridTextColumn Header="Стоимость" Binding="{Binding CostLabel}" Width="130" />
+                        <DataGridCheckBoxColumn Header="Не отправлено" Binding="{Binding HasPendingChanges}" Width="100" />
+                    </DataGrid.Columns>
+                </DataGrid>
+            </Border>
+
+            <Grid Grid.Row="4" Margin="2,12,2,0">
+                <TextBlock x:Name="FooterText" Foreground="#657268" FontSize="12" />
+                <TextBlock Text="Двойной щелчок — детали заказа" HorizontalAlignment="Right"
+                           Foreground="#7B867D" FontSize="12" />
+            </Grid>
+        </Grid>
+    </Grid>
+</Window>

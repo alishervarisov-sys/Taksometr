@@ -32,15 +32,15 @@ object Constants {
     const val TRACK_RETENTION_DAYS = 30L
 
     // Radius (in meters) within which a courier is considered to have "arrived"
-    // at the admin-defined pickup point. The courier cannot advance the order
-    // stage past ACCEPTED until inside this radius, and the ARRIVED_PICKUP stage
-    // is set automatically once the courier enters it.
-    const val PICKUP_ARRIVAL_RADIUS_METERS = 150.0
+    // at the admin-defined pickup point. Entering this radius starts the trip
+    // to the client and the marketplace distance meter.
+    const val PICKUP_ARRIVAL_RADIUS_METERS = 200.0
 
     // Preferences
     const val PREFS_NAME = "zaki_prefs"
     const val PREF_USER_ID = "user_id"
     const val PREF_USER_NAME = "user_name"
+    const val PREF_USER_ROLE = "user_role"
     const val PREF_IS_LOGGED_IN = "is_logged_in"
     const val PREF_ACTIVE_DELIVERY_ID = "active_delivery_id"
     // Mirror of the courier's Firestore `isOnShift` flag, so the tracking service

@@ -14,7 +14,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
-import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.ExperimentalMaterialApi
 import androidx.compose.material.pullrefresh.PullRefreshIndicator
 import androidx.compose.material.pullrefresh.pullRefresh
@@ -38,7 +37,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.zaki.taksometr.presentation.components.SwipeToAcceptButton
+import com.zaki.taksometr.presentation.components.CourierBottomBar
+import com.zaki.taksometr.presentation.components.CourierTab
+import com.zaki.taksometr.presentation.profile.CourierNotificationsViewModel
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -49,8 +52,13 @@ import com.google.accompanist.permissions.rememberPermissionState
 import com.zaki.taksometr.presentation.theme.*
 import com.zaki.taksometr.service.LocationTrackingService
 import com.zaki.taksometr.util.LocationUtils
+import com.zaki.taksometr.util.Greeting
 import com.zaki.taksometr.util.str
 import com.zaki.taksometr.util.Strings
+import kotlinx.coroutines.delay
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @OptIn(
     ExperimentalPermissionsApi::class,
@@ -61,23 +69,17 @@ import com.zaki.taksometr.util.Strings
 fun HomeScreen(
     onStartDelivery: () -> Unit,
     onOrdersMapClick: () -> Unit,
-    onHistoryClick: () -> Unit,
+    onNotificationsClick: () -> Unit,
     onProfileClick: () -> Unit,
     onLogout: () -> Unit,
-    viewModel: HomeViewModel = hiltViewModel()
+    viewModel: HomeViewModel = hiltViewModel(),
+    notificationsViewModel: CourierNotificationsViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsState()
+    val inboxState by notificationsViewModel.state.collectAsState()
     val context = LocalContext.current
+
     val snackbarHostState = remember { SnackbarHostState() }
-    
-    // Language dialog state
-    var showLanguageDialog by remember { mutableStateOf(false) }
-    val prefs = remember { 
-        context.getSharedPreferences(com.zaki.taksometr.util.Constants.PREFS_NAME, android.content.Context.MODE_PRIVATE) 
-    }
-    val currentLanguage = remember(showLanguageDialog) {
-        com.zaki.taksometr.util.LocalizationManager.getCurrentLanguage(prefs)
-    }
 
     val locationPermissions = rememberMultiplePermissionsState(
         permissions = listOf(
@@ -100,12 +102,22 @@ fun HomeScreen(
 
     // Check if GPS is enabled
     var isGpsEnabled by remember { mutableStateOf(isLocationEnabled(context)) }
+    var greetingHour by remember { mutableIntStateOf(Greeting.currentHour()) }
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            greetingHour = Greeting.currentHour()
+            delay(60_000L)
+        }
+    }
 
     // Re-check GPS when app resumes (user might have enabled it in settings)
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
+                greetingHour = Greeting.currentHour()
+                notificationsViewModel.refresh()
                 isGpsEnabled = isLocationEnabled(context)
                 if (locationPermissions.allPermissionsGranted && isGpsEnabled) {
                     viewModel.refreshCourierLocation()
@@ -133,12 +145,14 @@ fun HomeScreen(
     // BLOCK: If no permission or GPS is off — show full-screen blocker
     if (!locationPermissions.allPermissionsGranted || !isGpsEnabled) {
         Scaffold(
+        containerColor = CourierCanvas,
+
             topBar = {
                 TopAppBar(
                     title = { Text("ZaKi") },
                     colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        titleContentColor = MaterialTheme.colorScheme.onPrimary
+                        containerColor = CourierSky,
+                        titleContentColor = CourierBlueDark
                     )
                 )
             }
@@ -193,7 +207,7 @@ fun HomeScreen(
                         },
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = AccentGreen)
+                        colors = ButtonDefaults.buttonColors(containerColor = CourierBlue)
                     ) {
                         Icon(Icons.Default.GpsFixed, contentDescription = null)
                         Spacer(modifier = Modifier.width(8.dp))
@@ -262,61 +276,38 @@ fun HomeScreen(
     }
 
     Scaffold(
+        containerColor = CourierCanvas,
         snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = {
-                    Text(
-                        "ZaKi",
-                        style = MaterialTheme.typography.titleLarge
-                    )
+                    Column {
+                        Text("ZaKi", fontSize = 25.sp, fontWeight = FontWeight.Bold, color = CourierBlueDark)
+                        Text(state.user?.city?.takeIf { it.isNotBlank() } ?: "Душанбе", fontSize = 11.sp, color = CourierMuted)
+                    }
                 },
                 actions = {
-                    // Start-trip moved up here as a prominent action so the
-                    // bottom of the screen stays free for orders.
-                    IconButton(onClick = { viewModel.showDeliveryTypeDialog() }) {
-                        Icon(
-                            Icons.Default.PlayArrow,
-                            contentDescription = str(Strings.startTrip)
-                        )
-                    }
-                    IconButton(onClick = onOrdersMapClick) {
-                        BadgedBox(
-                            badge = {
-                                if (state.pendingMarketplaceOrders.isNotEmpty()) {
-                                    Badge(
-                                        containerColor = MaterialTheme.colorScheme.error,
-                                        contentColor = MaterialTheme.colorScheme.onError
-                                    ) {
-                                        Text(
-                                            if (state.pendingMarketplaceOrders.size > 99) "99+"
-                                            else state.pendingMarketplaceOrders.size.toString()
-                                        )
-                                    }
-                                }
-                            }
-                        ) {
-                            Icon(
-                                Icons.Default.Map,
-                                contentDescription = "Карта ожидающих заказов"
-                            )
+                    IconButton(onClick = onNotificationsClick) {
+                        BadgedBox(badge = {
+                            if (inboxState.hasUnread) Badge()
+                        }) {
+                            Icon(Icons.Default.Notifications, contentDescription = "Уведомления")
                         }
-                    }
-                    IconButton(onClick = { showLanguageDialog = true }) {
-                        Icon(Icons.Outlined.Language, contentDescription = str(Strings.language))
-                    }
-                    IconButton(onClick = onHistoryClick) {
-                        Icon(Icons.Default.History, contentDescription = str(Strings.history))
-                    }
-                    IconButton(onClick = onProfileClick) {
-                        Icon(Icons.Default.AccountCircle, contentDescription = str(Strings.profile))
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    titleContentColor = MaterialTheme.colorScheme.onPrimary,
-                    actionIconContentColor = MaterialTheme.colorScheme.onPrimary
+                    containerColor = CourierSky,
+                    titleContentColor = CourierInk,
+                    actionIconContentColor = CourierBlueDark
                 )
+            )
+        },
+        bottomBar = {
+            CourierBottomBar(
+                selected = CourierTab.HOME,
+                onHome = {},
+                onOrders = onOrdersMapClick,
+                onProfile = onProfileClick
             )
         }
     ) { paddingValues ->
@@ -329,6 +320,7 @@ fun HomeScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
+                .background(CourierCanvas)
                 .pullRefresh(pullRefreshState)
         ) {
             Column(
@@ -347,10 +339,24 @@ fun HomeScreen(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
             // Combined courier info + stats card
+            Text(
+                text = "${str(Greeting.forHour(greetingHour))}, ${state.user?.name?.substringBefore(' ')?.takeIf { it.isNotBlank() } ?: str(Strings.courier)}!",
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                fontSize = 24.sp,
+                fontWeight = FontWeight.Bold,
+                color = CourierInk
+            )
+            Text(
+                text = str(Strings.readyForDeliveries),
+                modifier = Modifier.fillMaxWidth().padding(top = 3.dp, bottom = 16.dp),
+                color = CourierMuted,
+                style = MaterialTheme.typography.bodyMedium
+            )
             Card(
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+                shape = RoundedCornerShape(22.dp),
+                colors = CardDefaults.cardColors(containerColor = CourierSky),
+                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
             ) {
                 Column(modifier = Modifier.fillMaxWidth()) {
                     // Courier info row
@@ -392,9 +398,9 @@ fun HomeScreen(
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
-                                    text = if (onShiftStatus) "На работе" else str(Strings.offline),
+                                    text = if (onShiftStatus) str(Strings.onShift) else str(Strings.offShift),
                                     style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                                    color = CourierMuted
                                 )
                             }
                         }
@@ -408,14 +414,13 @@ fun HomeScreen(
                                 onCheckedChange = { viewModel.toggleShift(it) },
                                 enabled = !state.isUpdatingShift,
                                 colors = SwitchDefaults.colors(
-                                    checkedTrackColor = AccentGreen
+                                    checkedTrackColor = CourierGreen
                                 )
                             )
                             Text(
-                                text = if (onShift) "На смене" else "Не на смене",
+                                text = if (onShift) str(Strings.onShift) else str(Strings.offShift),
                                 style = MaterialTheme.typography.labelSmall,
-                                color = if (onShift) AccentGreen
-                                    else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                                color = if (onShift) CourierGreen else CourierMuted
                             )
                         }
                     }
@@ -425,13 +430,14 @@ fun HomeScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(1.dp)
-                            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
+                            .background(CourierLine)
                     )
 
                     // Stats row embedded in card
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
+                            .background(CourierHeroBrush)
                             .padding(horizontal = 8.dp, vertical = 12.dp),
                         horizontalArrangement = Arrangement.SpaceEvenly,
                         verticalAlignment = Alignment.CenterVertically
@@ -444,20 +450,21 @@ fun HomeScreen(
                                 Icon(
                                     Icons.Default.AttachMoney,
                                     contentDescription = null,
-                                    tint = AccentGreen,
+                                    tint = Color.White,
                                     modifier = Modifier.size(20.dp)
                                 )
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text(
                                     text = LocationUtils.formatCost(state.todayStats.totalEarnings),
                                     style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.Bold
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
                                 )
                             }
                             Text(
                                 text = str(Strings.earnings),
                                 style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                                color = Color.White.copy(alpha = 0.8f)
                             )
                         }
 
@@ -465,7 +472,7 @@ fun HomeScreen(
                             modifier = Modifier
                                 .width(1.dp)
                                 .height(36.dp)
-                                .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f))
+                                .background(Color.White.copy(alpha = 0.3f))
                         )
 
                         Column(
@@ -476,24 +483,40 @@ fun HomeScreen(
                                 Icon(
                                     Icons.Default.DeliveryDining,
                                     contentDescription = null,
-                                    tint = AccentBlue,
+                                    tint = Color.White,
                                     modifier = Modifier.size(20.dp)
                                 )
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text(
                                     text = "${state.todayStats.deliveryCount}",
                                     style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.Bold
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
                                 )
                             }
                             Text(
                                 text = str(Strings.deliveries),
                                 style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                                color = Color.White.copy(alpha = 0.8f)
                             )
                         }
                     }
                 }
+            }
+
+            Button(
+                onClick = { viewModel.showDeliveryTypeDialog() },
+                modifier = Modifier.fillMaxWidth().padding(top = 12.dp).height(54.dp),
+                shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = CourierBlueSoft,
+                    contentColor = CourierBlueDark
+                ),
+                elevation = ButtonDefaults.buttonElevation(defaultElevation = 0.dp)
+            ) {
+                Icon(Icons.Default.PlayArrow, contentDescription = null)
+                Spacer(modifier = Modifier.width(10.dp))
+                Text(str(Strings.startTrip), fontWeight = FontWeight.Bold)
             }
 
             // Active delivery card — lets the courier return to the running meter
@@ -501,17 +524,17 @@ fun HomeScreen(
             state.activeDelivery?.let { active ->
                 Spacer(modifier = Modifier.height(12.dp))
                 val paused = active.isPaused
-                val accent = if (paused) AccentOrange else AccentGreen
+                val accent = if (paused) AccentOrange else CourierBlueDark
                 Card(
                     onClick = {
                         LocationTrackingService.startService(context)
                         onStartDelivery()
                     },
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = accent.copy(alpha = 0.12f)),
-                    border = BorderStroke(1.5.dp, accent),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = CourierSky),
+                    border = BorderStroke(1.dp, CourierLine),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
                 ) {
                     Row(
                         modifier = Modifier
@@ -531,7 +554,8 @@ fun HomeScreen(
                                 Text(
                                     text = str(Strings.activeDeliveryTitle),
                                     style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.Bold
+                                    fontWeight = FontWeight.Bold,
+                                    color = CourierInk
                                 )
                                 if (state.activeCount > 1) {
                                     Spacer(modifier = Modifier.width(6.dp))
@@ -574,6 +598,24 @@ fun HomeScreen(
             // Scrollable orders area — takes all remaining space. Pending orders
             // are shown while the courier is below the concurrent-order limit
             // (the list is already gated by the view model).
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 20.dp, bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = str(Strings.newOrders),
+                    modifier = Modifier.weight(1f),
+                    fontSize = 21.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = CourierInk
+                )
+                TextButton(
+                    onClick = onOrdersMapClick,
+                    colors = ButtonDefaults.textButtonColors(contentColor = CourierBlueDark)
+                ) {
+                    Text("${str(Strings.ordersMap)} →", fontWeight = FontWeight.Bold)
+                }
+            }
             if (state.pendingMarketplaceOrders.isNotEmpty()) {
                 Column(
                     modifier = Modifier
@@ -591,11 +633,21 @@ fun HomeScreen(
                     Spacer(modifier = Modifier.height(4.dp))
                 }
             } else {
-                Spacer(modifier = Modifier.height(24.dp))
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = CourierSurface),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+                ) {
+                    Text(
+                        text = str(Strings.noNewOrders),
+                        modifier = Modifier.padding(20.dp),
+                        color = CourierMuted,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
             }
 
-            // "Начать поездку" moved to the top app bar (PlayArrow icon),
-            // freeing the bottom space for pending orders.
             }
 
             PullRefreshIndicator(
@@ -603,7 +655,7 @@ fun HomeScreen(
                 state = pullRefreshState,
                 modifier = Modifier.align(Alignment.TopCenter),
                 backgroundColor = MaterialTheme.colorScheme.surface,
-                contentColor = MaterialTheme.colorScheme.primary,
+                contentColor = CourierBlue,
                 scale = true
             )
         }
@@ -627,7 +679,7 @@ fun HomeScreen(
                         subtitle = str(Strings.paymentByKilometer)
                     )
                     Spacer(modifier = Modifier.height(8.dp))
-                    
+
                     DeliveryTypeOption(
                         selected = state.selectedDeliveryType == "heavyCargoMeter",
                         onClick = { viewModel.onDeliveryTypeSelected("heavyCargoMeter") },
@@ -635,7 +687,7 @@ fun HomeScreen(
                         subtitle = str(Strings.heavyCargoMeterSubtitle)
                     )
                     Spacer(modifier = Modifier.height(8.dp))
-                    
+
                     val fixedTypes = state.fixedTypes
                     if (fixedTypes.isNotEmpty()) {
                         if (fixedTypes["coal"] ?: 0.0 > 0) {
@@ -647,12 +699,12 @@ fun HomeScreen(
                             )
                             Spacer(modifier = Modifier.height(8.dp))
                         }
-                        
+
                         // Gas options - show as sub-options
                         val hasGas = (fixedTypes["gas15"] ?: 0.0 > 0) || 
                                      (fixedTypes["gas30"] ?: 0.0 > 0) || 
                                      (fixedTypes["gas30plus"] ?: 0.0 > 0)
-                        
+
                         if (hasGas) {
                             if (fixedTypes["gas15"] ?: 0.0 > 0) {
                                 DeliveryTypeOption(
@@ -663,7 +715,7 @@ fun HomeScreen(
                                 )
                                 Spacer(modifier = Modifier.height(8.dp))
                             }
-                            
+
                             if (fixedTypes["gas30"] ?: 0.0 > 0) {
                                 DeliveryTypeOption(
                                     selected = state.selectedDeliveryType == "gas30",
@@ -673,7 +725,7 @@ fun HomeScreen(
                                 )
                                 Spacer(modifier = Modifier.height(8.dp))
                             }
-                            
+
                             if (fixedTypes["gas30plus"] ?: 0.0 > 0) {
                                 DeliveryTypeOption(
                                     selected = state.selectedDeliveryType == "gas30plus",
@@ -684,7 +736,7 @@ fun HomeScreen(
                                 Spacer(modifier = Modifier.height(8.dp))
                             }
                         }
-                        
+
                         if (fixedTypes["errands"] ?: 0.0 > 0) {
                             DeliveryTypeOption(
                                 selected = state.selectedDeliveryType == "errands",
@@ -694,7 +746,7 @@ fun HomeScreen(
                             )
                             Spacer(modifier = Modifier.height(8.dp))
                         }
-                        
+
                         if (fixedTypes["heavyCargo"] ?: 0.0 > 0) {
                             DeliveryTypeOption(
                                 selected = state.selectedDeliveryType == "heavyCargo",
@@ -773,19 +825,6 @@ fun HomeScreen(
                 TextButton(onClick = { viewModel.hideStartDialog() }) {
                     Text(str(Strings.cancel))
                 }
-            }
-        )
-    }
-    
-    // Language dialog
-    if (showLanguageDialog) {
-        com.zaki.taksometr.presentation.components.LanguageDialog(
-            currentLanguage = currentLanguage,
-            onDismiss = { showLanguageDialog = false },
-            onLanguageSelected = { language ->
-                // Restart activity to apply language change
-                val activity = context as? android.app.Activity
-                activity?.recreate()
             }
         )
     }
@@ -903,11 +942,8 @@ private fun WinnerStat(
     }
 }
 
-// The pending-order card always has a fixed light (cream) background, so its
-// text must use fixed dark colors — otherwise in dark/night theme the default
-// onSurface color turns light and the order text becomes invisible.
-private val PendingOrderTextColor = Color(0xFF212121)
-private val PendingOrderLabelColor = Color(0xFF6D4C41)
+private val PendingOrderTextColor: Color @Composable get() = CourierInk
+private val PendingOrderLabelColor: Color @Composable get() = CourierMuted
 
 @Composable
 fun PendingOrderCard(
@@ -919,9 +955,9 @@ fun PendingOrderCard(
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF8E1)),
-        border = BorderStroke(1.5.dp, Color(0xFFFFB300)),
-        elevation = CardDefaults.cardElevation(defaultElevation = 6.dp)
+        colors = CardDefaults.cardColors(containerColor = CourierSurface),
+        border = BorderStroke(1.dp, CourierLine),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {
         Column(
             modifier = Modifier
@@ -938,22 +974,22 @@ fun PendingOrderCard(
                     Icon(
                         Icons.Default.LocalShipping,
                         contentDescription = null,
-                        tint = Color(0xFFE65100),
+                        tint = CourierBlue,
                         modifier = Modifier.size(22.dp)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "Свободный заказ",
+                        text = str(Strings.newOrder),
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
-                        color = Color(0xFFE65100)
+                        color = CourierInk
                     )
                 }
-                Surface(shape = RoundedCornerShape(20.dp), color = Color(0xFFFF6F00)) {
+                Surface(shape = RoundedCornerShape(20.dp), color = CourierBlueSoft) {
                     Text(
                         text = "Новый!",
                         style = MaterialTheme.typography.labelSmall,
-                        color = Color(0xFFFFFFFF),
+                        color = CourierBlueDark,
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                     )
@@ -965,8 +1001,10 @@ fun PendingOrderCard(
                     .fillMaxWidth()
                     .padding(vertical = 12.dp)
                     .height(1.dp)
-                    .background(Color(0xFFFFB300).copy(alpha = 0.5f))
+                .background(CourierLine)
             )
+
+            OrderAcceptanceTimer(pending)
 
             if (pending.pickupAddress.isNotBlank() || (pending.pickupLat != null && pending.pickupLng != null)) {
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
@@ -1015,41 +1053,60 @@ fun PendingOrderCard(
                 }
                 Spacer(modifier = Modifier.height(10.dp))
             }
-            if (pending.clientPhone.isNotBlank()) {
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                    Icon(Icons.Default.Phone, contentDescription = null, tint = PendingOrderLabelColor, modifier = Modifier.size(20.dp))
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("Клиент", style = MaterialTheme.typography.labelSmall, color = PendingOrderLabelColor)
-                        Text(pending.clientPhone, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = PendingOrderTextColor)
-                    }
-                    FilledTonalIconButton(
-                        onClick = { com.zaki.taksometr.util.IntentUtils.dialPhone(context, pending.clientPhone) },
-                        colors = IconButtonDefaults.filledTonalIconButtonColors(
-                            containerColor = AccentGreen.copy(alpha = 0.15f),
-                            contentColor = AccentGreen
-                        )
-                    ) {
-                        Icon(Icons.Default.Call, contentDescription = "Позвонить клиенту")
-                    }
-                }
-                Spacer(modifier = Modifier.height(12.dp))
-            }
-
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(bottom = 12.dp)
                     .height(1.dp)
-                    .background(Color(0xFFFFB300).copy(alpha = 0.5f))
+                    .background(CourierLine)
             )
 
             SwipeToAcceptButton(
                 isAccepting = isAccepting,
-                onAccept = onAccept
+                onAccept = onAccept,
+                accentColor = CourierBlue,
+                onAccentColor = Color.White
             )
         }
     }
+}
+
+/** Live response clock for an unaccepted dispatcher order. */
+@Composable
+private fun OrderAcceptanceTimer(pending: PendingMarketplaceOrder) {
+    var now by remember(pending.id) { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(pending.id, pending.createdAt) {
+        while (true) {
+            now = System.currentTimeMillis()
+            delay(1_000)
+        }
+    }
+    val elapsed = (now - pending.createdAt).coerceAtLeast(0L)
+    val limitMinutes = pending.acceptanceLimitMinutes.coerceAtLeast(1)
+    val isOverdue = elapsed >= limitMinutes * 60_000L
+    val timerColor = if (isOverdue) AccentRed else CourierBlueDark
+    val createdLabel = if (pending.createdAt > 0L) {
+        SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()).format(Date(pending.createdAt))
+    } else "—"
+
+    Spacer(modifier = Modifier.height(12.dp))
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column {
+            Text("Создан: $createdLabel", style = MaterialTheme.typography.labelSmall, color = PendingOrderLabelColor)
+            Text("На принятие: $limitMinutes мин", style = MaterialTheme.typography.labelSmall, color = PendingOrderLabelColor)
+        }
+        Text(
+            text = "${LocationUtils.formatDuration(elapsed)}${if (isOverdue) " · просрочен" else ""}",
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Bold,
+            color = timerColor
+        )
+    }
+    Spacer(modifier = Modifier.height(12.dp))
 }
 
 // Small round button that launches external turn-by-turn navigation to a point.

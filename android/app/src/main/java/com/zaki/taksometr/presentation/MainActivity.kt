@@ -10,10 +10,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.navigation.compose.rememberNavController
 import com.zaki.taksometr.domain.repository.AuthRepository
+import com.zaki.taksometr.domain.model.UserRole
 import com.zaki.taksometr.presentation.navigation.NavGraph
 import com.zaki.taksometr.presentation.navigation.Screen
 import com.zaki.taksometr.presentation.theme.ZaKiTaksometrTheme
@@ -56,9 +58,16 @@ class MainActivity : ComponentActivity() {
             val currentLanguageCode = remember {
                 mutableStateOf(LocalizationManager.getCurrentLanguage(prefs).code)
             }
+            var nightMode by rememberSaveable { mutableStateOf(prefs.getBoolean("night_mode", false)) }
             val appVersionState by appVersionViewModel.state.collectAsState()
 
-            ZaKiTaksometrTheme {
+            ZaKiTaksometrTheme(
+                darkTheme = nightMode,
+                onDarkThemeChange = { enabled ->
+                    nightMode = enabled
+                    prefs.edit().putBoolean("night_mode", enabled).apply()
+                }
+            ) {
                 com.zaki.taksometr.util.ProvideLanguage(currentLanguageCode.value) {
                     Surface(
                         modifier = Modifier.fillMaxSize(),
@@ -68,10 +77,10 @@ class MainActivity : ComponentActivity() {
                             UpdateRequiredScreen(config = appVersionState.config)
                         } else {
                             val navController = rememberNavController()
-                            val startDestination = if (authRepository.isLoggedIn()) {
-                                Screen.Home.route
-                            } else {
-                                Screen.Auth.route
+                            val startDestination = when {
+                                !authRepository.isLoggedIn() -> Screen.Auth.route
+                                authRepository.getSavedUserRole() == UserRole.ADMIN -> Screen.AdminPanel.route
+                                else -> Screen.Home.route
                             }
 
                             NavGraph(

@@ -15,6 +15,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.zaki.taksometr.util.LocalizationManager
 import com.zaki.taksometr.util.Strings
+import com.zaki.taksometr.presentation.theme.CourierSky
+import com.zaki.taksometr.presentation.theme.CourierBlue
+import com.zaki.taksometr.presentation.theme.CourierInk
 
 @Composable
 fun LanguageSelectionScreen(
@@ -29,33 +32,34 @@ fun LanguageSelectionScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(32.dp),
+                .padding(24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
             // Icon/Logo placeholder
             Box(
                 modifier = Modifier
-                    .size(120.dp)
+                    .size(112.dp)
                     .background(
-                        MaterialTheme.colorScheme.primary,
-                        RoundedCornerShape(60.dp)
+                        CourierSky,
+                        RoundedCornerShape(28.dp)
                     ),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     text = "ZaKi",
                     style = MaterialTheme.typography.headlineLarge,
-                    color = MaterialTheme.colorScheme.onPrimary,
+                    color = CourierBlue,
                     fontWeight = FontWeight.Bold
                 )
             }
 
-            Spacer(modifier = Modifier.height(48.dp))
+            Spacer(modifier = Modifier.height(32.dp))
 
             Text(
                 text = Strings.get(Strings.welcomeMessage, selectedLanguage.code),
                 style = MaterialTheme.typography.headlineMedium,
+                color = CourierInk,
                 fontWeight = FontWeight.Bold,
                 textAlign = TextAlign.Center
             )
@@ -69,7 +73,7 @@ fun LanguageSelectionScreen(
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
             )
 
-            Spacer(modifier = Modifier.height(48.dp))
+            Spacer(modifier = Modifier.height(32.dp))
 
             // Language options
             LocalizationManager.Language.values().forEach { language ->
@@ -81,7 +85,7 @@ fun LanguageSelectionScreen(
                 Spacer(modifier = Modifier.height(12.dp))
             }
 
-            Spacer(modifier = Modifier.height(48.dp))
+            Spacer(modifier = Modifier.height(32.dp))
 
             Button(
                 onClick = { onLanguageSelected(selectedLanguage) },
@@ -109,7 +113,7 @@ fun LanguageOption(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(
             containerColor = if (isSelected)
                 MaterialTheme.colorScheme.primaryContainer

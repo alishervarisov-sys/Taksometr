@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Box, Typography, Card, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, Chip, TextField, InputAdornment, Dialog,
@@ -7,9 +7,9 @@ import {
   SelectChangeEvent,
 } from '@mui/material';
 import { Search, Person as PersonIcon, LocalShipping as DeliveryIcon, LocalTaxi as TaxiIcon, Refresh as RefreshIcon } from '@mui/icons-material';
-import { collection, getDocs, query, orderBy, limit, where, startAfter, QueryDocumentSnapshot, DocumentData } from 'firebase/firestore';
 import { GoogleMap, useJsApiLoader, PolylineF, MarkerF } from '@react-google-maps/api';
-import { db, GOOGLE_MAPS_API_KEY } from '../firebase';
+import { GOOGLE_MAPS_API_KEY } from '../firebase';
+import { refreshCachedCollection, subscribeCachedCollection } from '../data/collectionCache';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -106,32 +106,12 @@ const isAdminOrder = (o: DeliveryOrder) =>
 
 type SourceFilter = 'all' | 'courier' | 'admin' | 'taxi';
 
-// Ленивая загрузка: сначала последние INITIAL_PAGE заказов, далее подгрузка порциями при скролле
-const INITIAL_PAGE = 50;
-const LOAD_MORE_PAGE = 500;
+const mapDeliveryDoc = (id: string, data: any): DeliveryOrder =>
+  ({ id, kind: 'delivery', ...data } as DeliveryOrder);
 
-const fetchPage = async (
-  collName: string,
-  cursor: QueryDocumentSnapshot<DocumentData> | null,
-  pageSize: number,
-): Promise<{ docs: QueryDocumentSnapshot<DocumentData>[]; cursor: QueryDocumentSnapshot<DocumentData> | null; hasMore: boolean }> => {
-  let q = query(collection(db, collName), orderBy('createdAt', 'desc'), limit(pageSize));
-  if (cursor) q = query(q, startAfter(cursor));
-  const snap = await getDocs(q);
+const mapTaxiDoc = (id: string, data: any): TaxiHistoryOrder => {
   return {
-    docs: snap.docs,
-    cursor: snap.docs.length > 0 ? snap.docs[snap.docs.length - 1] : cursor,
-    hasMore: snap.docs.length === pageSize,
-  };
-};
-
-const mapDeliveryDoc = (d: QueryDocumentSnapshot<DocumentData>): DeliveryOrder =>
-  ({ id: d.id, kind: 'delivery', ...(d.data() as any) } as DeliveryOrder);
-
-const mapTaxiDoc = (d: QueryDocumentSnapshot<DocumentData>): TaxiHistoryOrder => {
-  const data = d.data() as any;
-  return {
-    id: d.id,
+    id,
     kind: 'taxi',
     orderNumber: data.orderNumber,
     clientPhone: data.customerPhone || '',
@@ -151,8 +131,7 @@ const Clients: React.FC<ClientsProps> = ({ adminId }) => {
   const [allTaxiOrders, setAllTaxiOrders] = useState<TaxiHistoryOrder[]>([]);
   const [nameByPhone, setNameByPhone] = useState<Map<string, string>>(new Map());
   const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [hasMore, setHasMore] = useState(true);
+  const [syncing, setSyncing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
@@ -162,110 +141,60 @@ const Clients: React.FC<ClientsProps> = ({ adminId }) => {
   const [selectedOrder, setSelectedOrder] = useState<DeliveryOrder | null>(null);
   const [routeOpen, setRouteOpen] = useState(false);
 
-  const deliveryCursorRef = useRef<QueryDocumentSnapshot<DocumentData> | null>(null);
-  const taxiCursorRef = useRef<QueryDocumentSnapshot<DocumentData> | null>(null);
-  const busyRef = useRef(false);
-  const sentinelRef = useRef<HTMLDivElement | null>(null);
-
   const { isLoaded } = useJsApiLoader({
     id: 'google-map-script',
     googleMapsApiKey: GOOGLE_MAPS_API_KEY,
   });
 
   useEffect(() => {
-    loadClients();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    const ready = { deliveries: false, taxi: false, users: false };
+    const syncState = { deliveries: true, taxi: true, users: true };
+    const updateStatus = () => {
+      setLoading(!ready.deliveries || !ready.taxi || !ready.users);
+      setSyncing(syncState.deliveries || syncState.taxi || syncState.users);
+    };
 
-  // Первичная загрузка: последние 50 заказов каждой коллекции — быстро открываем страницу
-  const loadClients = async () => {
-    if (busyRef.current) return;
-    busyRef.current = true;
-    setLoading(true);
-    try {
-      // Load user names by phone
-      const usersSnap = await getDocs(query(collection(db, 'users'), where('phone', '!=', '')));
+    const unsubscribeDeliveries = subscribeCachedCollection<any>('deliveries', (documents, status) => {
+      setAllDeliveryOrders(documents.map(item => mapDeliveryDoc(item.id, item.data)));
+      ready.deliveries = !status.loading;
+      syncState.deliveries = status.syncing;
+      updateStatus();
+    });
+    const unsubscribeTaxi = subscribeCachedCollection<any>('taxi_orders', (documents, status) => {
+      setAllTaxiOrders(documents.map(item => mapTaxiDoc(item.id, item.data)));
+      ready.taxi = !status.loading;
+      syncState.taxi = status.syncing;
+      updateStatus();
+    });
+    const unsubscribeUsers = subscribeCachedCollection<any>('users', (documents, status) => {
       const names = new Map<string, string>();
-      usersSnap.docs.forEach(d => {
-        const data = d.data() as any;
-        if (data.phone) names.set(String(data.phone), data.name || '');
+      documents.forEach(item => {
+        if (item.data.phone) names.set(String(item.data.phone), String(item.data.name || ''));
       });
       setNameByPhone(names);
+      ready.users = !status.loading;
+      syncState.users = status.syncing;
+      updateStatus();
+    });
 
-      const delPage = await fetchPage('deliveries', null, INITIAL_PAGE);
-      deliveryCursorRef.current = delPage.cursor;
-      setAllDeliveryOrders(delPage.docs.map(mapDeliveryDoc));
+    return () => {
+      unsubscribeDeliveries();
+      unsubscribeTaxi();
+      unsubscribeUsers();
+    };
+  }, []);
 
-      let more = delPage.hasMore;
-      try {
-        const taxiPage = await fetchPage('taxi_orders', null, INITIAL_PAGE);
-        taxiCursorRef.current = taxiPage.cursor;
-        setAllTaxiOrders(taxiPage.docs.map(mapTaxiDoc));
-        more = more || taxiPage.hasMore;
-      } catch (e) {
-        // taxi_orders may not exist / be inaccessible — ignore
-        console.warn('Не удалось загрузить такси-заказы', e);
-        taxiCursorRef.current = null;
-      }
-      setHasMore(more);
-    } catch (e) {
-      console.error('Ошибка загрузки клиентов', e);
-      setHasMore(false);
-    } finally {
-      setLoading(false);
-      busyRef.current = false;
-    }
+  // The refresh button restarts incremental synchronization from the saved
+  // cursors. It does not download order history again.
+  const loadClients = async () => {
+    setSyncing(true);
+    await Promise.all([
+      refreshCachedCollection('deliveries'),
+      refreshCachedCollection('taxi_orders'),
+      refreshCachedCollection('users'),
+    ]);
+    setSyncing(false);
   };
-
-  // Подгрузка следующей порции заказов при скролле
-  const loadMore = async () => {
-    if (busyRef.current || loading || !hasMore) return;
-    busyRef.current = true;
-    setLoadingMore(true);
-    try {
-      let more = false;
-      if (deliveryCursorRef.current) {
-        const page = await fetchPage('deliveries', deliveryCursorRef.current, LOAD_MORE_PAGE);
-        deliveryCursorRef.current = page.cursor;
-        if (page.docs.length > 0) {
-          setAllDeliveryOrders(prev => [...prev, ...page.docs.map(mapDeliveryDoc)]);
-        }
-        more = more || page.hasMore;
-      }
-      if (taxiCursorRef.current) {
-        try {
-          const page = await fetchPage('taxi_orders', taxiCursorRef.current, LOAD_MORE_PAGE);
-          taxiCursorRef.current = page.cursor;
-          if (page.docs.length > 0) {
-            setAllTaxiOrders(prev => [...prev, ...page.docs.map(mapTaxiDoc)]);
-          }
-          more = more || page.hasMore;
-        } catch (e) {
-          console.warn('Не удалось загрузить такси-заказы', e);
-          taxiCursorRef.current = null;
-        }
-      }
-      setHasMore(more);
-    } catch (e) {
-      console.error('Ошибка подгрузки заказов', e);
-      setHasMore(false);
-    } finally {
-      setLoadingMore(false);
-      busyRef.current = false;
-    }
-  };
-
-  // Автоподгрузка при появлении "сентинела" в зоне видимости
-  useEffect(() => {
-    const el = sentinelRef.current;
-    if (!el || loading || !hasMore) return;
-    const observer = new IntersectionObserver(entries => {
-      if (entries.some(e => e.isIntersecting)) loadMore();
-    }, { rootMargin: '400px' });
-    observer.observe(el);
-    return () => observer.disconnect();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loading, loadingMore, hasMore]);
 
   const clients = useMemo(() => {
     const from = dateFrom ? new Date(dateFrom + 'T00:00:00').getTime() : null;
@@ -378,14 +307,16 @@ const Clients: React.FC<ClientsProps> = ({ adminId }) => {
     <Box>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
         <Typography variant="h5" sx={{ fontWeight: 700 }}>Клиенты</Typography>
-        <Button variant="outlined" startIcon={<RefreshIcon />} onClick={loadClients} disabled={loading}>Обновить</Button>
+        <Button variant="outlined" startIcon={<RefreshIcon />} onClick={loadClients} disabled={loading || syncing}>
+          {syncing ? 'Синхронизация...' : 'Обновить'}
+        </Button>
       </Box>
 
       <Grid container spacing={2} sx={{ mb: 3 }}>
         <Grid item xs={6} md={3}>
           <Card sx={{ p: 2 }}>
             <Typography variant="body2" color="text.secondary">
-              Всего клиентов{hasDateFilter ? ' (за период)' : hasMore ? ' (по загруженным заказам)' : ''}
+              Всего клиентов{hasDateFilter ? ' (за период)' : ''}
             </Typography>
             <Typography variant="h5" fontWeight={700}>{totals.clients}</Typography>
           </Card>
@@ -447,7 +378,7 @@ const Clients: React.FC<ClientsProps> = ({ adminId }) => {
           <Button variant="text" onClick={resetFilters} disabled={!hasDateFilter && sourceFilter === 'all'}>Сбросить</Button>
           <Box sx={{ flex: 1 }} />
           <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
-            Загружено заказов: {allDeliveryOrders.length + allTaxiOrders.length}{hasMore ? ' — прокрутите вниз, чтобы загрузить ещё' : ' (все)'}
+            В локальном кэше: {allDeliveryOrders.length + allTaxiOrders.length} заказов
           </Typography>
         </Stack>
       </Card>
@@ -465,7 +396,7 @@ const Clients: React.FC<ClientsProps> = ({ adminId }) => {
         {loading ? (
           <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, p: 5 }}>
             <CircularProgress />
-            <Typography variant="body2" color="text.secondary">Загрузка последних заказов...</Typography>
+            <Typography variant="body2" color="text.secondary">Подготовка локального кэша...</Typography>
           </Box>
         ) : (
           <TableContainer>
@@ -514,24 +445,6 @@ const Clients: React.FC<ClientsProps> = ({ adminId }) => {
           </TableContainer>
         )}
       </Card>
-
-      {/* Infinite scroll: подгрузка истории заказов при скролле вниз */}
-      {!loading && (
-        <Box ref={sentinelRef} sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 2, py: 3 }}>
-          {loadingMore ? (
-            <>
-              <CircularProgress size={24} />
-              <Typography variant="body2" color="text.secondary">Загрузка ещё заказов...</Typography>
-            </>
-          ) : hasMore ? (
-            <Button variant="outlined" onClick={loadMore}>Загрузить ещё</Button>
-          ) : (
-            <Typography variant="body2" color="text.secondary">
-              Загружена вся история: {allDeliveryOrders.length + allTaxiOrders.length} заказов
-            </Typography>
-          )}
-        </Box>
-      )}
 
       {/* Client detail dialog with order history */}
       <Dialog open={detailOpen} onClose={() => setDetailOpen(false)} maxWidth="md" fullWidth>
@@ -627,7 +540,7 @@ const Clients: React.FC<ClientsProps> = ({ adminId }) => {
                     zoom={14}
                     options={{ streetViewControl: false, mapTypeControl: false }}
                   >
-                    <PolylineF path={selectedOrder.route.map(p => ({ lat: p.latitude, lng: p.longitude }))} options={{ strokeColor: '#1B5E20', strokeWeight: 4 }} />
+                    <PolylineF path={selectedOrder.route.map(p => ({ lat: p.latitude, lng: p.longitude }))} options={{ strokeColor: '#3786F6', strokeWeight: 4 }} />
                     <MarkerF position={{ lat: selectedOrder.route[0].latitude, lng: selectedOrder.route[0].longitude }} label="A" />
                     <MarkerF position={{ lat: selectedOrder.route[selectedOrder.route.length - 1].latitude, lng: selectedOrder.route[selectedOrder.route.length - 1].longitude }} label="B" />
                   </GoogleMap>

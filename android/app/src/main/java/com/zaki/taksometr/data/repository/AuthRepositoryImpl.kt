@@ -66,6 +66,7 @@ class AuthRepositoryImpl @Inject constructor(
             prefs.edit()
                 .putString(Constants.PREF_USER_ID, user.id)
                 .putString(Constants.PREF_USER_NAME, user.name)
+                .putString(Constants.PREF_USER_ROLE, user.role.name)
                 .putBoolean(Constants.PREF_IS_LOGGED_IN, true)
                 .putBoolean(Constants.PREF_IS_ON_SHIFT, user.isOnShift)
                 .apply()
@@ -82,6 +83,8 @@ class AuthRepositoryImpl @Inject constructor(
         ShiftTrackingService.stop(context)
         prefs.edit()
             .remove(Constants.PREF_USER_ID)
+            .remove(Constants.PREF_USER_NAME)
+            .remove(Constants.PREF_USER_ROLE)
             .putBoolean(Constants.PREF_IS_LOGGED_IN, false)
             .putBoolean(Constants.PREF_IS_ON_SHIFT, false)
             .remove(Constants.PREF_ACTIVE_DELIVERY_ID)
@@ -134,6 +137,14 @@ class AuthRepositoryImpl @Inject constructor(
     override fun isLoggedIn(): Boolean {
         return prefs.getBoolean(Constants.PREF_IS_LOGGED_IN, false)
     }
+
+    override fun getSavedUserId(): String? =
+        prefs.getString(Constants.PREF_USER_ID, null)
+
+    override fun getSavedUserRole(): UserRole? =
+        prefs.getString(Constants.PREF_USER_ROLE, null)?.let { savedRole ->
+            runCatching { UserRole.valueOf(savedRole) }.getOrNull()
+        }
 
     override suspend fun updateFcmToken(token: String) {
         val userId = prefs.getString(Constants.PREF_USER_ID, null) ?: return

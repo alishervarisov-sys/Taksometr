@@ -16,7 +16,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusDirection
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.LocalFocusManager
 import com.zaki.taksometr.util.str
 import com.zaki.taksometr.util.Strings
@@ -30,55 +29,64 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.zaki.taksometr.presentation.theme.Primary
-import com.zaki.taksometr.presentation.theme.PrimaryDark
+import com.zaki.taksometr.presentation.theme.CourierCanvas
+import com.zaki.taksometr.presentation.theme.CourierSky
+import com.zaki.taksometr.presentation.theme.CourierInk
+import com.zaki.taksometr.presentation.theme.CourierMuted
+import com.zaki.taksometr.presentation.theme.CourierBlue
+import com.zaki.taksometr.domain.model.User
 
 @Composable
 fun LoginScreen(
-    onLoginSuccess: () -> Unit,
+    onLoginSuccess: (User) -> Unit,
     viewModel: AuthViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsState()
     val focusManager = LocalFocusManager.current
     var passwordVisible by remember { mutableStateOf(false) }
 
-    LaunchedEffect(state.isSuccess) {
-        if (state.isSuccess) {
-            onLoginSuccess()
-        }
+    LaunchedEffect(state.authenticatedUser?.id) {
+        state.authenticatedUser?.let(onLoginSuccess)
     }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    colors = listOf(Primary, PrimaryDark)
-                )
-            )
+            .background(CourierCanvas)
     ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(32.dp),
+                .padding(24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
             // Logo / Title
+            Surface(shape = RoundedCornerShape(24.dp), color = CourierSky) {
             Text(
                 text = "ZaKi",
                 style = MaterialTheme.typography.displayLarge.copy(
                     fontSize = 48.sp,
                     fontWeight = FontWeight.Bold
                 ),
-                color = MaterialTheme.colorScheme.onPrimary
+                color = CourierBlue,
+                modifier = Modifier.padding(horizontal = 30.dp, vertical = 14.dp)
             )
-            Spacer(modifier = Modifier.height(48.dp))
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(
+                text = "Курьерская доставка",
+                style = MaterialTheme.typography.titleMedium,
+                color = CourierMuted
+            )
+            Spacer(modifier = Modifier.height(32.dp))
 
             // Login Card
             Card(
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.cardColors(containerColor = com.zaki.taksometr.presentation.theme.CourierSurface),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
             ) {
                 Column(
                     modifier = Modifier
@@ -89,7 +97,7 @@ fun LoginScreen(
                     Text(
                         text = "Вход в систему",
                         style = MaterialTheme.typography.headlineMedium,
-                        color = MaterialTheme.colorScheme.onSurface
+                        color = CourierInk
                     )
 
                     Spacer(modifier = Modifier.height(24.dp))

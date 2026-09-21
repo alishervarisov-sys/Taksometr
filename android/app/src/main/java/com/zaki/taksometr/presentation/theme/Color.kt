@@ -2,37 +2,34 @@ package com.zaki.taksometr.presentation.theme
 
 import androidx.compose.ui.graphics.Color
 
-// Primary
-val Primary = Color(0xFF1B5E20)
-val PrimaryLight = Color(0xFF4C8C4A)
-val PrimaryDark = Color(0xFF003300)
+// Courier light-blue visual system.
+val Primary = LightCourierBlue
+val PrimaryLight = Color(0xFF70ABFF)
+val PrimaryDark = LightCourierBlueDark
 val OnPrimary = Color(0xFFFFFFFF)
 
-// Secondary
-val Secondary = Color(0xFFFFC107)
-val SecondaryLight = Color(0xFFFFF350)
-val SecondaryDark = Color(0xFFC79100)
-val OnSecondary = Color(0xFF000000)
+val Secondary = LightCourierBlueSoft
+val SecondaryLight = Color(0xFFF2F8FF)
+val SecondaryDark = Color(0xFFCAE3FF)
+val OnSecondary = LightCourierBlueDark
 
-// Background
-val BackgroundLight = Color(0xFFF5F5F5)
-val BackgroundDark = Color(0xFF121212)
+val BackgroundLight = LightCourierCanvas
+val BackgroundDark = Color(0xFF0F1F35)
 val SurfaceLight = Color(0xFFFFFFFF)
-val SurfaceDark = Color(0xFF1E1E1E)
+val SurfaceDark = Color(0xFF192D49)
 
 // Status colors
-val StatusOnline = Color(0xFF4CAF50)
-val StatusOffline = Color(0xFF9E9E9E)
-val StatusDelivery = Color(0xFF2196F3)
-val StatusCompleted = Color(0xFF4CAF50)
-val StatusCancelled = Color(0xFFF44336)
+val StatusOnline = LightCourierGreen
+val StatusOffline = LightCourierMuted
+val StatusDelivery = LightCourierBlue
+val StatusCompleted = LightCourierGreen
+val StatusCancelled = Color(0xFFE45D6A)
 
-// Accent
-val AccentGreen = Color(0xFF00C853)
-val AccentRed = Color(0xFFFF1744)
-val AccentBlue = Color(0xFF2979FF)
-val AccentOrange = Color(0xFFFF6D00)
+// Semantic accents; blue remains the action color.
+val AccentGreen = LightCourierGreen
+val AccentRed = Color(0xFFE45D6A)
+val AccentBlue = LightCourierBlue
+val AccentOrange = Color(0xFFF4A84F)
 
-// Card
 val CardLight = Color(0xFFFFFFFF)
-val CardDark = Color(0xFF2C2C2C)
+val CardDark = SurfaceDark

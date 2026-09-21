@@ -53,8 +53,8 @@ const Layout: React.FC<LayoutProps> = ({ onLogout, isSuperAdmin }) => {
     { text: 'Статистика', icon: <StatsIcon />, path: '/statistics' },
     { text: 'Аналитика', icon: <AnalyticsIcon />, path: '/analytics' },
     { text: 'Telegram Отчёт', icon: <TelegramIcon />, path: '/telegram-report' },
-    { text: 'TAXI', icon: <TaxiIcon sx={{ color: '#FFC107' }} />, path: '/taxi', taxiItem: true },
-    { text: 'Таксисты', icon: <PeopleIcon sx={{ color: '#FFC107' }} />, path: '/taxi-drivers', taxiItem: true },
+    { text: 'TAXI', icon: <TaxiIcon sx={{ color: '#3786F6' }} />, path: '/taxi', taxiItem: true },
+    { text: 'Таксисты', icon: <PeopleIcon sx={{ color: '#3786F6' }} />, path: '/taxi-drivers', taxiItem: true },
     { text: 'Версии', icon: <SystemUpdateIcon />, path: '/app-versions' },
   ];
 
@@ -79,14 +79,14 @@ const Layout: React.FC<LayoutProps> = ({ onLogout, isSuperAdmin }) => {
                 mx: 1,
                 borderRadius: 2,
                 ...(item.taxiItem && {
-                  '& .MuiListItemText-primary': { fontWeight: 700, color: '#FFC107' },
+                  '& .MuiListItemText-primary': { fontWeight: 700, color: '#3786F6' },
                 }),
                 '&.Mui-selected': {
-                  backgroundColor: item.taxiItem ? '#FFC107' : 'primary.main',
-                  color: item.taxiItem ? '#000' : 'white',
-                  '& .MuiListItemIcon-root': { color: item.taxiItem ? '#000' : 'white' },
-                  '& .MuiListItemText-primary': { color: item.taxiItem ? '#000' : 'white', fontWeight: 700 },
-                  '&:hover': { backgroundColor: item.taxiItem ? '#FFB300' : 'primary.dark' },
+                  backgroundColor: 'primary.main',
+                  color: 'white',
+                  '& .MuiListItemIcon-root': { color: 'white' },
+                  '& .MuiListItemText-primary': { color: 'white', fontWeight: 700 },
+                  '&:hover': { backgroundColor: 'primary.dark' },
                 },
               }}
             >

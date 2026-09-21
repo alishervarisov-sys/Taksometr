@@ -9,7 +9,7 @@ import {
   ClientPhoneAutocomplete, AddressAutocomplete, fetchClientRecentAddresses,
   AddressSuggestion, PhoneSuggestion,
 } from '../components/OrderAutocomplete';
-import { Search } from '@mui/icons-material';
+import { Edit, Search } from '@mui/icons-material';
 import { collection, getDocs, query, orderBy, limit, doc, getDoc, where, onSnapshot, startAfter, QueryDocumentSnapshot, DocumentData, QueryConstraint } from 'firebase/firestore';
 import { GoogleMap, useJsApiLoader, PolylineF, MarkerF } from '@react-google-maps/api';
 import { db, GOOGLE_MAPS_API_KEY, functions } from '../firebase';
@@ -32,6 +32,8 @@ interface Delivery {
   createdAt: number;
   route: Array<{ latitude: number; longitude: number }>;
   orderKind?: string;
+  deliveryType?: string;
+  fixedPrice?: number | null;
   adminOrderStage?: string;
   comment?: string;
   courierPhone?: string;
@@ -39,6 +41,8 @@ interface Delivery {
   destination?: { address?: string; latitude: number; longitude: number };
   currentSpeedKmh?: number;
   maxSpeedKmh?: number;
+  acceptanceLimitMinutes?: number;
+  acceptanceDurationMs?: number | null;
 }
 
 interface CourierOption {
@@ -51,6 +55,21 @@ type ReportType = 'commission' | 'earnings';
 
 interface DeliveriesProps {
   adminId: string;
+}
+
+interface OrderFormState {
+  clientPhone: string;
+  comment: string;
+  courierId: string;
+  deliveryType: string;
+  fixedPrice: string;
+  pickupAddress: string;
+  pickupLat: string;
+  pickupLng: string;
+  destinationAddress: string;
+  destinationLat: string;
+  destinationLng: string;
+  acceptanceLimitMinutes: string;
 }
 
 const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
@@ -76,6 +95,14 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
   const [isSearching, setIsSearching] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [isCreatingOrder, setIsCreatingOrder] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editTarget, setEditTarget] = useState<Delivery | null>(null);
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
+  const [editMapPickerMode, setEditMapPickerMode] = useState<'pickup' | 'destination' | null>(null);
+  const [editForm, setEditForm] = useState<OrderFormState>({
+    clientPhone: '', comment: '', courierId: '', deliveryType: 'default', fixedPrice: '',
+    pickupAddress: '', pickupLat: '', pickupLng: '', destinationAddress: '', destinationLat: '', destinationLng: '', acceptanceLimitMinutes: '10',
+  });
   const [changingStatusId, setChangingStatusId] = useState<string | null>(null);
   const [changingStageId, setChangingStageId] = useState<string | null>(null);
   // Manual assignment / reassignment of an order to a specific courier.
@@ -107,6 +134,7 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
     destinationAddress: '',
     destinationLat: '',
     destinationLng: '',
+    acceptanceLimitMinutes: '10',
   });
   // Saved addresses of the client picked from autocomplete (phone → addresses).
   const [clientAddresses, setClientAddresses] = useState<AddressSuggestion[]>([]);
@@ -116,6 +144,8 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
   // afterwards invalidates them. 'map' means the point was picked on the map.
   const coordSourceRef = useRef<{ pickup: 'autocomplete' | 'map' | null; destination: 'autocomplete' | 'map' | null }>({ pickup: null, destination: null });
   const selectedAddressRef = useRef<{ pickup: string | null; destination: string | null }>({ pickup: null, destination: null });
+  const editCoordSourceRef = useRef<{ pickup: 'autocomplete' | 'map' | 'existing' | null; destination: 'autocomplete' | 'map' | 'existing' | null }>({ pickup: null, destination: null });
+  const editSelectedAddressRef = useRef<{ pickup: string | null; destination: string | null }>({ pickup: null, destination: null });
 
   // Delivery type options, built the same way as the courier app: two metered
   // options always available, plus each fixed type whose price is configured (> 0).
@@ -543,7 +573,7 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
   };
 
   const resetCreateForm = () => {
-    setCreateForm({ clientPhone: '', comment: '', courierId: '', deliveryType: 'default', pickupAddress: '', pickupLat: '', pickupLng: '', destinationAddress: '', destinationLat: '', destinationLng: '' });
+    setCreateForm({ clientPhone: '', comment: '', courierId: '', deliveryType: 'default', pickupAddress: '', pickupLat: '', pickupLng: '', destinationAddress: '', destinationLat: '', destinationLng: '', acceptanceLimitMinutes: '10' });
     setClientAddresses([]);
     coordSourceRef.current = { pickup: null, destination: null };
     selectedAddressRef.current = { pickup: null, destination: null };
@@ -561,6 +591,11 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
     }
 
     const hasDestination = !!createForm.destinationLat && !!createForm.destinationLng;
+    const acceptanceLimitMinutes = Number(createForm.acceptanceLimitMinutes);
+    if (!Number.isInteger(acceptanceLimitMinutes) || acceptanceLimitMinutes < 1 || acceptanceLimitMinutes > 1440) {
+      alert('Время на принятие должно быть целым числом от 1 до 1440 минут');
+      return;
+    }
 
     try {
       setIsCreatingOrder(true);
@@ -573,6 +608,7 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
         courierId: createForm.courierId || null,
         // Delivery type the courier would pick when starting the meter.
         deliveryType: createForm.deliveryType || 'default',
+        acceptanceLimitMinutes,
         pickup: {
           address: createForm.pickupAddress,
           latitude: Number(createForm.pickupLat),
@@ -585,7 +621,7 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
         } : null,
       });
       if (result?.data?.assignedCourierId) {
-        alert(`✅ Заказ создан и назначен курьеру: ${result.data.assignedCourierName || ''}`);
+        alert(`✅ Заказ создан и предложен курьеру: ${result.data.assignedCourierName || ''}`);
       } else {
         alert(`✅ Заказ создан. Доступно курьеров: ${result?.data?.availableCouriers ?? 0}`);
       }
@@ -596,6 +632,156 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
       alert('Ошибка создания заказа: ' + (error.message || 'Неизвестная ошибка'));
     } finally {
       setIsCreatingOrder(false);
+    }
+  };
+
+  const openEditDialog = (delivery: Delivery) => {
+    if (delivery.orderKind !== 'MARKETPLACE' || !['PENDING', 'IN_PROGRESS'].includes(delivery.status)) return;
+    const pickupAddress = delivery.pickup?.address || '';
+    const destinationAddress = delivery.destination?.address || '';
+    setEditTarget(delivery);
+    setEditForm({
+      clientPhone: delivery.clientPhone || '',
+      comment: delivery.comment || '',
+      courierId: delivery.courierId || '',
+      deliveryType: delivery.deliveryType || 'default',
+      fixedPrice: delivery.fixedPrice != null ? String(delivery.fixedPrice) : '',
+      pickupAddress,
+      pickupLat: delivery.pickup?.latitude != null ? String(delivery.pickup.latitude) : '',
+      pickupLng: delivery.pickup?.longitude != null ? String(delivery.pickup.longitude) : '',
+      destinationAddress,
+      destinationLat: delivery.destination?.latitude != null ? String(delivery.destination.latitude) : '',
+      destinationLng: delivery.destination?.longitude != null ? String(delivery.destination.longitude) : '',
+      acceptanceLimitMinutes: String(delivery.acceptanceLimitMinutes ?? 10),
+    });
+    editCoordSourceRef.current = {
+      pickup: delivery.pickup ? 'existing' : null,
+      destination: delivery.destination ? 'existing' : null,
+    };
+    editSelectedAddressRef.current = { pickup: pickupAddress, destination: destinationAddress };
+    const point = delivery.pickup || delivery.destination;
+    if (point) setMapCenter({ lat: point.latitude, lng: point.longitude });
+    setEditMapPickerMode(null);
+    setEditOpen(true);
+  };
+
+  const closeEditDialog = () => {
+    if (isSavingEdit) return;
+    setEditOpen(false);
+    setEditTarget(null);
+    setEditMapPickerMode(null);
+  };
+
+  const applyEditAddressSuggestion = (field: 'pickup' | 'destination', s: AddressSuggestion) => {
+    setEditForm(prev => field === 'pickup'
+      ? { ...prev, pickupAddress: s.address, pickupLat: String(s.latitude), pickupLng: String(s.longitude) }
+      : { ...prev, destinationAddress: s.address, destinationLat: String(s.latitude), destinationLng: String(s.longitude) });
+    editCoordSourceRef.current[field] = 'autocomplete';
+    editSelectedAddressRef.current[field] = s.address;
+    const center = { lat: s.latitude, lng: s.longitude };
+    setMapCenter(center);
+    localStorage.setItem('zaki_admin_map_center', JSON.stringify(center));
+  };
+
+  const handleEditAddressInput = (field: 'pickup' | 'destination', text: string) => {
+    setEditForm(prev => {
+      const next = field === 'pickup' ? { ...prev, pickupAddress: text } : { ...prev, destinationAddress: text };
+      const selected = editSelectedAddressRef.current[field];
+      if (selected != null && text.trim() !== selected.trim()) {
+        editCoordSourceRef.current[field] = null;
+        editSelectedAddressRef.current[field] = null;
+        if (field === 'pickup') { next.pickupLat = ''; next.pickupLng = ''; }
+        else { next.destinationLat = ''; next.destinationLng = ''; }
+      }
+      return next;
+    });
+  };
+
+  const handleEditMapPick = (lat: number, lng: number) => {
+    if (!editMapPickerMode) return;
+    const center = { lat, lng };
+    setMapCenter(center);
+    localStorage.setItem('zaki_admin_map_center', JSON.stringify(center));
+    setEditForm(prev => editMapPickerMode === 'pickup'
+      ? { ...prev, pickupLat: String(lat), pickupLng: String(lng) }
+      : { ...prev, destinationLat: String(lat), destinationLng: String(lng) });
+    editCoordSourceRef.current[editMapPickerMode] = 'map';
+  };
+
+  const handleEditDeliveryType = (value: string) => {
+    const configured = fixedTypes[value];
+    setEditForm(prev => ({
+      ...prev,
+      deliveryType: value,
+      fixedPrice: value === 'adminFixedPrice'
+        ? prev.fixedPrice
+        : (value === 'default' || value === 'heavyCargoMeter')
+          ? ''
+          : (configured > 0 ? String(configured) : prev.fixedPrice),
+    }));
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editTarget) return;
+    if (!editForm.clientPhone.trim() || !editForm.pickupLat || !editForm.pickupLng) {
+      alert('Заполните телефон клиента и точку «Откуда»');
+      return;
+    }
+    const pickupLat = Number(editForm.pickupLat);
+    const pickupLng = Number(editForm.pickupLng);
+    const hasDestination = !!editForm.destinationLat && !!editForm.destinationLng;
+    const destinationLat = hasDestination ? Number(editForm.destinationLat) : null;
+    const destinationLng = hasDestination ? Number(editForm.destinationLng) : null;
+    const fixedPrice = editForm.fixedPrice.trim() ? Number(editForm.fixedPrice) : null;
+    const acceptanceLimitMinutes = Number(editForm.acceptanceLimitMinutes);
+    if (!Number.isFinite(pickupLat) || !Number.isFinite(pickupLng) ||
+        (hasDestination && (!Number.isFinite(destinationLat) || !Number.isFinite(destinationLng)))) {
+      alert('Проверьте координаты адресов');
+      return;
+    }
+    if (fixedPrice != null && (!Number.isFinite(fixedPrice) || fixedPrice <= 0)) {
+      alert('Стоимость должна быть больше нуля');
+      return;
+    }
+    if (editForm.deliveryType === 'adminFixedPrice' && fixedPrice == null) {
+      alert('Укажите фиксированную стоимость');
+      return;
+    }
+    if (!Number.isInteger(acceptanceLimitMinutes) || acceptanceLimitMinutes < 1 || acceptanceLimitMinutes > 1440) {
+      alert('Время на принятие должно быть целым числом от 1 до 1440 минут');
+      return;
+    }
+
+    try {
+      setIsSavingEdit(true);
+      const updateFn = httpsCallable(functions, 'adminUpdateMarketplaceDelivery');
+      await updateFn({
+        adminId,
+        deliveryId: editTarget.id,
+        clientPhone: editForm.clientPhone.trim(),
+        comment: editForm.comment.trim(),
+        courierId: editForm.courierId || null,
+        deliveryType: editForm.deliveryType,
+        fixedPrice,
+        acceptanceLimitMinutes,
+        pickup: {
+          address: editForm.pickupAddress.trim(),
+          latitude: pickupLat,
+          longitude: pickupLng,
+        },
+        destination: hasDestination ? {
+          address: editForm.destinationAddress.trim(),
+          latitude: destinationLat,
+          longitude: destinationLng,
+        } : null,
+      });
+      setEditOpen(false);
+      setEditTarget(null);
+      setEditMapPickerMode(null);
+    } catch (error: any) {
+      alert('Ошибка сохранения заказа: ' + (error.message || 'Неизвестная ошибка'));
+    } finally {
+      setIsSavingEdit(false);
     }
   };
 
@@ -615,10 +801,20 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
     const s = Math.floor(cost); const d = Math.round((cost - s) * 100);
     return d > 0 ? `${s.toLocaleString()}.${String(d).padStart(2, '0')} сомони` : `${s.toLocaleString()} сомони`;
   };
+  const deliveryTypeLabel = (type?: string) => {
+    if (type === 'adminFixedPrice') return 'Фиксированная цена администратора';
+    return deliveryTypeOptions.find(option => option.value === (type || 'default'))?.label || type || 'По счётчику';
+  };
   const formatDuration = (start: number, end: number | null) => {
     if (!start) return '—';
     const mins = Math.floor(((end || Date.now()) - start) / 60000);
     return mins >= 60 ? `${Math.floor(mins / 60)} ч ${mins % 60} мин` : `${mins} мин`;
+  };
+  const formatDurationMs = (durationMs: number) => {
+    const totalSeconds = Math.floor(Math.max(0, durationMs) / 1000);
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return `${minutes}:${String(seconds).padStart(2, '0')}`;
   };
   const formatSpeed = (distanceMeters: number, startTime: number, endTime: number | null) => {
     if (!distanceMeters || !startTime || !endTime) return '—';
@@ -757,10 +953,17 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
                   <TableCell>{formatDistance(delivery.distanceMeters)}</TableCell>
                   <TableCell>{formatSpeed(delivery.distanceMeters, delivery.startTime, delivery.endTime)}</TableCell>
                   <TableCell>{delivery.status === 'COMPLETED' && delivery.startTime && delivery.endTime ? formatDuration(delivery.startTime, delivery.endTime) : '—'}</TableCell>
-                  <TableCell>{(delivery.status === 'IN_PROGRESS' && !(delivery.cost > 0)) ? `${formatCost(delivery.liveCost || 0)} (счётчик)` : formatCost(delivery.cost || 0)}</TableCell>
+                  <TableCell>{delivery.fixedPrice != null && delivery.fixedPrice > 0
+                    ? `${formatCost(delivery.fixedPrice)} (фикс.)`
+                    : (delivery.status === 'IN_PROGRESS' && !(delivery.cost > 0))
+                      ? `${formatCost(delivery.liveCost || 0)} (счётчик)`
+                      : formatCost(delivery.cost || 0)}</TableCell>
                   <TableCell>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                       {getStatusChip(delivery.status)}
+                      {delivery.orderKind === 'MARKETPLACE' && (delivery.status === 'PENDING' || delivery.status === 'IN_PROGRESS') && (
+                        <Button size="small" color="primary" variant="outlined" startIcon={<Edit />} onClick={(e) => { e.stopPropagation(); openEditDialog(delivery); }}>Изменить</Button>
+                      )}
                       {delivery.status === 'COMPLETED' && (
                         <Button size="small" color="error" variant="outlined" disabled={changingStatusId === delivery.id} onClick={(e) => { e.stopPropagation(); handleChangeStatus(delivery, 'CANCELLED'); }}>Отменить</Button>
                       )}
@@ -867,7 +1070,7 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
                 label="Курьер (необязательно)"
                 value={createForm.courierId}
                 onChange={(e) => setCreateForm(prev => ({ ...prev, courierId: e.target.value }))}
-                helperText={createForm.courierId ? 'Заказ будет сразу назначен выбранному курьеру' : 'Не выбрано — заказ увидят все курьеры'}
+                helperText={createForm.courierId ? 'Заказ увидит только выбранный курьер и должен принять его' : 'Не выбрано — заказ увидят все курьеры'}
               >
                 <MenuItem value="">Не назначать (свободный заказ)</MenuItem>
                 {couriers.map(c => (
@@ -893,6 +1096,18 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
                   </MenuItem>
                 ))}
               </TextField>
+            </Grid>
+            <Grid item xs={12} md={6}>
+              <TextField
+                fullWidth
+                required
+                type="number"
+                label="Время на принятие, мин"
+                value={createForm.acceptanceLimitMinutes}
+                onChange={(e) => setCreateForm(prev => ({ ...prev, acceptanceLimitMinutes: e.target.value }))}
+                inputProps={{ min: 1, max: 1440, step: 1 }}
+                helperText="По умолчанию 10 минут; по истечении таймер курьера станет красным"
+              />
             </Grid>
             <Grid item xs={12}>
               {isLoaded && (
@@ -942,6 +1157,154 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
         </DialogActions>
       </Dialog>
 
+      <Dialog open={editOpen} onClose={closeEditDialog} maxWidth="md" fullWidth>
+        <DialogTitle>Редактировать активный заказ</DialogTitle>
+        <DialogContent>
+          <Grid container spacing={2} sx={{ mt: 0.5 }}>
+            <Grid item xs={12} md={6}>
+              <TextField
+                fullWidth
+                label="Телефон клиента"
+                value={editForm.clientPhone}
+                onChange={(e) => setEditForm(prev => ({ ...prev, clientPhone: e.target.value }))}
+              />
+            </Grid>
+            <Grid item xs={12} md={6}>
+              <TextField
+                fullWidth
+                label="Комментарий"
+                value={editForm.comment}
+                onChange={(e) => setEditForm(prev => ({ ...prev, comment: e.target.value }))}
+              />
+            </Grid>
+            <Grid item xs={12} md={6}>
+              <TextField
+                select
+                fullWidth
+                label="Курьер"
+                value={editForm.courierId}
+                onChange={(e) => setEditForm(prev => ({ ...prev, courierId: e.target.value }))}
+                helperText={editForm.courierId ? 'Можно назначить или переназначить курьера' : 'Без курьера заказ станет свободным'}
+              >
+                <MenuItem value="">Свободный заказ</MenuItem>
+                {couriers.map(c => <MenuItem key={c.id} value={c.id}>{c.name || c.id}</MenuItem>)}
+              </TextField>
+            </Grid>
+            <Grid item xs={12} md={6}>
+              <TextField
+                select
+                fullWidth
+                label="Тип доставки"
+                value={editForm.deliveryType}
+                onChange={(e) => handleEditDeliveryType(e.target.value)}
+              >
+                {deliveryTypeOptions.map(opt => <MenuItem key={opt.value} value={opt.value}>{opt.label}</MenuItem>)}
+                {!deliveryTypeOptions.some(opt => opt.value === editForm.deliveryType) && editForm.deliveryType !== 'adminFixedPrice' && (
+                  <MenuItem value={editForm.deliveryType}>{deliveryTypeLabel(editForm.deliveryType)}</MenuItem>
+                )}
+                <MenuItem value="adminFixedPrice">Фиксированная цена администратора</MenuItem>
+              </TextField>
+            </Grid>
+            <Grid item xs={12} md={6}>
+              <TextField
+                fullWidth
+                type="number"
+                label="Фиксированная стоимость, сомони"
+                value={editForm.fixedPrice}
+                onChange={(e) => setEditForm(prev => ({ ...prev, fixedPrice: e.target.value }))}
+                inputProps={{ min: 0, step: 0.01 }}
+                helperText="Пусто — стоимость считается по счётчику; для фиксированного типа укажите цену"
+              />
+            </Grid>
+            <Grid item xs={12} md={6}>
+              <TextField
+                fullWidth
+                required
+                type="number"
+                label="Время на принятие, мин"
+                value={editForm.acceptanceLimitMinutes}
+                onChange={(e) => setEditForm(prev => ({ ...prev, acceptanceLimitMinutes: e.target.value }))}
+                inputProps={{ min: 1, max: 1440, step: 1 }}
+                helperText="Можно изменить. Зафиксированное время принятия в истории не меняется."
+              />
+            </Grid>
+            <Grid item xs={12}>
+              <Divider>Адрес забора</Divider>
+            </Grid>
+            <Grid item xs={12}>
+              <AddressAutocomplete
+                label="Адрес откуда"
+                value={editForm.pickupAddress}
+                onInputChange={(t) => handleEditAddressInput('pickup', t)}
+                onSelect={(s) => applyEditAddressSuggestion('pickup', s)}
+                recentDeliveries={deliveries}
+              />
+            </Grid>
+            <Grid item xs={12} md={6}>
+              <TextField fullWidth label="Широта" value={editForm.pickupLat} onChange={(e) => setEditForm(prev => ({ ...prev, pickupLat: e.target.value }))} />
+            </Grid>
+            <Grid item xs={12} md={6}>
+              <TextField fullWidth label="Долгота" value={editForm.pickupLng} onChange={(e) => setEditForm(prev => ({ ...prev, pickupLng: e.target.value }))} />
+            </Grid>
+            <Grid item xs={12}>
+              <Divider>Адрес назначения</Divider>
+            </Grid>
+            <Grid item xs={12}>
+              <AddressAutocomplete
+                label="Адрес куда"
+                value={editForm.destinationAddress}
+                onInputChange={(t) => handleEditAddressInput('destination', t)}
+                onSelect={(s) => applyEditAddressSuggestion('destination', s)}
+                recentDeliveries={deliveries}
+              />
+            </Grid>
+            <Grid item xs={12} md={6}>
+              <TextField fullWidth label="Широта" value={editForm.destinationLat} onChange={(e) => setEditForm(prev => ({ ...prev, destinationLat: e.target.value }))} />
+            </Grid>
+            <Grid item xs={12} md={6}>
+              <TextField fullWidth label="Долгота" value={editForm.destinationLng} onChange={(e) => setEditForm(prev => ({ ...prev, destinationLng: e.target.value }))} />
+            </Grid>
+            <Grid item xs={12}>
+              <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} sx={{ mb: 1 }}>
+                <Button variant={editMapPickerMode === 'pickup' ? 'contained' : 'outlined'} onClick={() => setEditMapPickerMode('pickup')}>Указать точку забора на карте</Button>
+                <Button variant={editMapPickerMode === 'destination' ? 'contained' : 'outlined'} onClick={() => setEditMapPickerMode('destination')}>Указать точку назначения</Button>
+              </Stack>
+              {isLoaded && (
+                <Box sx={{ height: 300, borderRadius: 2, overflow: 'hidden', border: '1px solid #ddd' }}>
+                  <GoogleMap
+                    mapContainerStyle={{ width: '100%', height: '100%' }}
+                    center={mapCenter}
+                    zoom={13}
+                    options={{ streetViewControl: false, mapTypeControl: false }}
+                    onClick={(e) => {
+                      const lat = e.latLng?.lat(); const lng = e.latLng?.lng();
+                      if (lat != null && lng != null) handleEditMapPick(lat, lng);
+                    }}
+                  >
+                    {editForm.pickupLat && editForm.pickupLng && <MarkerF position={{ lat: Number(editForm.pickupLat), lng: Number(editForm.pickupLng) }} label="A" />}
+                    {editForm.destinationLat && editForm.destinationLng && <MarkerF position={{ lat: Number(editForm.destinationLat), lng: Number(editForm.destinationLng) }} label="B" />}
+                  </GoogleMap>
+                </Box>
+              )}
+            </Grid>
+            {editTarget?.status === 'IN_PROGRESS' && editTarget.pickup &&
+              (String(editTarget.pickup.latitude) !== editForm.pickupLat || String(editTarget.pickup.longitude) !== editForm.pickupLng) && (
+                <Grid item xs={12}>
+                  <Alert severity="warning">
+                    Адрес забора изменён: текущее ожидание остановится и сохранится, этап заказа вернётся к поездке на новую точку.
+                  </Alert>
+                </Grid>
+              )}
+          </Grid>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={closeEditDialog} disabled={isSavingEdit}>Отмена</Button>
+          <Button variant="contained" onClick={handleSaveEdit} disabled={isSavingEdit}>
+            {isSavingEdit ? 'Сохранение...' : 'Сохранить изменения'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
       <Dialog open={detailOpen} onClose={() => setDetailOpen(false)} maxWidth="md" fullWidth>
         <DialogTitle sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           Детали доставки
@@ -953,7 +1316,7 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
               {isLoaded && selectedDelivery.route && selectedDelivery.route.length > 0 ? (
                 <Box sx={{ height: 300, borderRadius: 2, overflow: 'hidden', mb: 2 }}>
                   <GoogleMap mapContainerStyle={{ width: '100%', height: '100%' }} center={getMapCenter(selectedDelivery.route)} zoom={14} options={{ streetViewControl: false, mapTypeControl: false }}>
-                    <PolylineF path={selectedDelivery.route.map(p => ({ lat: p.latitude, lng: p.longitude }))} options={{ strokeColor: '#1B5E20', strokeWeight: 4 }} />
+                    <PolylineF path={selectedDelivery.route.map(p => ({ lat: p.latitude, lng: p.longitude }))} options={{ strokeColor: '#3786F6', strokeWeight: 4 }} />
                     <MarkerF position={{ lat: selectedDelivery.route[0].latitude, lng: selectedDelivery.route[0].longitude }} label="A" />
                     <MarkerF position={{ lat: selectedDelivery.route[selectedDelivery.route.length - 1].latitude, lng: selectedDelivery.route[selectedDelivery.route.length - 1].longitude }} label="B" />
                   </GoogleMap>
@@ -966,6 +1329,7 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
                 <Grid item xs={6}><Typography variant="body2" color="text.secondary">Клиент</Typography><Typography fontWeight={600}>{selectedDelivery.clientPhone}</Typography></Grid>
                 <Grid item xs={6}><Typography variant="body2" color="text.secondary">Тип заказа</Typography><Typography fontWeight={600}>{selectedDelivery.orderKind === 'MARKETPLACE' ? 'Админ заказ' : 'Обычный'}</Typography></Grid>
                 {selectedDelivery.orderKind === 'MARKETPLACE' && <>
+                  <Grid item xs={6}><Typography variant="body2" color="text.secondary">Тариф</Typography><Typography fontWeight={600}>{deliveryTypeLabel(selectedDelivery.deliveryType)}{selectedDelivery.fixedPrice != null ? ` — ${formatCost(selectedDelivery.fixedPrice)}` : ''}</Typography></Grid>
                   <Grid item xs={6}><Typography variant="body2" color="text.secondary">Откуда</Typography><Typography fontWeight={600}>{selectedDelivery.pickup?.address || '—'}</Typography></Grid>
                   <Grid item xs={6}><Typography variant="body2" color="text.secondary">Куда</Typography><Typography fontWeight={600}>{selectedDelivery.destination?.address || '—'}</Typography></Grid>
                   <Grid item xs={6}>
@@ -992,12 +1356,24 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
                   <Grid item xs={6}><Typography variant="body2" color="text.secondary">Комментарий</Typography><Typography fontWeight={600}>{selectedDelivery.comment || '—'}</Typography></Grid>
                 </>}
                 <Grid item xs={12}><Divider /></Grid>
+                {selectedDelivery.orderKind === 'MARKETPLACE' && (() => {
+                  const limit = selectedDelivery.acceptanceLimitMinutes ?? 10;
+                  const acceptanceMs = selectedDelivery.acceptanceDurationMs;
+                  const elapsedMs = acceptanceMs ?? Math.max(0, Date.now() - (selectedDelivery.createdAt || Date.now()));
+                  const overdue = elapsedMs >= limit * 60_000;
+                  const value = `${formatDurationMs(elapsedMs)}${acceptanceMs == null ? ' (идёт)' : ' (зафиксировано)'}`;
+                  return <>
+                    <Grid item xs={6}><Typography variant="body2" color="text.secondary">Создан</Typography><Typography>{formatDate(selectedDelivery.createdAt)}</Typography></Grid>
+                    <Grid item xs={6}><Typography variant="body2" color="text.secondary">Принятие заказа</Typography><Typography fontWeight={600} color={overdue ? 'error.main' : 'primary.main'}>{value} / лимит {limit} мин</Typography></Grid>
+                    <Grid item xs={12}><Divider /></Grid>
+                  </>;
+                })()}
                 <Grid item xs={4}><Typography variant="body2" color="text.secondary">Начало</Typography><Typography>{formatDate(selectedDelivery.startTime)}</Typography></Grid>
                 <Grid item xs={4}><Typography variant="body2" color="text.secondary">Конец</Typography><Typography>{selectedDelivery.endTime ? formatDate(selectedDelivery.endTime) : 'В процессе'}</Typography></Grid>
                 <Grid item xs={4}><Typography variant="body2" color="text.secondary">Длительность</Typography><Typography>{formatDuration(selectedDelivery.startTime, selectedDelivery.endTime)}</Typography></Grid>
                 <Grid item xs={12}><Divider /></Grid>
                 <Grid item xs={3}><Typography variant="body2" color="text.secondary">Расстояние</Typography><Typography fontWeight={600}>{formatDistance(selectedDelivery.distanceMeters)}</Typography></Grid>
-                <Grid item xs={3}><Typography variant="body2" color="text.secondary">Стоимость</Typography><Typography fontWeight={600} color="green">{formatCost(selectedDelivery.cost || 0)}</Typography></Grid>
+                <Grid item xs={3}><Typography variant="body2" color="text.secondary">Стоимость</Typography><Typography fontWeight={600} color="green">{formatCost(selectedDelivery.fixedPrice ?? selectedDelivery.cost ?? selectedDelivery.liveCost ?? 0)}</Typography></Grid>
                 <Grid item xs={3}><Typography variant="body2" color="text.secondary">Комиссия</Typography><Typography fontWeight={600} color="orange">{formatCost(selectedDelivery.commission || 0)}</Typography></Grid>
                 <Grid item xs={3}><Typography variant="body2" color="text.secondary">Ожидание</Typography><Typography fontWeight={600}>{selectedDelivery.waitingMinutes ? `${Math.ceil(selectedDelivery.waitingMinutes)} мин (${formatCost(selectedDelivery.waitingCost || 0)})` : '—'}</Typography></Grid>
                 <Grid item xs={3}><Typography variant="body2" color="text.secondary">Ср. скорость</Typography><Typography fontWeight={600} color="primary">{formatSpeed(selectedDelivery.distanceMeters, selectedDelivery.startTime, selectedDelivery.endTime)}</Typography></Grid>
@@ -1018,6 +1394,9 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
           )}
           {selectedDelivery && (selectedDelivery.status === 'IN_PROGRESS' || selectedDelivery.status === 'PENDING') && (
             <>
+              {selectedDelivery.orderKind === 'MARKETPLACE' && (
+                <Button color="primary" variant="contained" startIcon={<Edit />} onClick={() => openEditDialog(selectedDelivery)}>Редактировать</Button>
+              )}
               <Button color="success" variant="contained" disabled={changingStatusId === selectedDelivery.id} onClick={() => handleChangeStatus(selectedDelivery, 'COMPLETED')}>Завершить</Button>
               <Button color="error" variant="outlined" disabled={changingStatusId === selectedDelivery.id} onClick={() => handleChangeStatus(selectedDelivery, 'CANCELLED')}>Отменить</Button>
             </>

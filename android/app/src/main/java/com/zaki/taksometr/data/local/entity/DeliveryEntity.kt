@@ -3,7 +3,10 @@ package com.zaki.taksometr.data.local.entity
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 import com.zaki.taksometr.domain.model.Delivery
+import com.zaki.taksometr.domain.model.DeliveryOrderItem
 import com.zaki.taksometr.domain.model.DeliveryStatus
+import org.json.JSONArray
+import org.json.JSONObject
 
 @Entity(tableName = "deliveries")
 data class DeliveryEntity(
@@ -23,6 +26,10 @@ data class DeliveryEntity(
     val orderKind: String = "REGULAR",
     val adminOrderStage: String? = null,
     val comment: String = "",
+    val restaurantName: String = "",
+    val orderItemsJson: String = "[]",
+    val productsPrice: Double = 0.0,
+    val totalPrice: Double = 0.0,
     val pickupAddress: String = "",
     val pickupLat: Double? = null,
     val pickupLng: Double? = null,
@@ -35,7 +42,9 @@ data class DeliveryEntity(
     val isSynced: Boolean = false,
     val waitingAccumulatedMs: Long = 0L,
     val onTheWayStartedAt: Long? = null,
-    val isPaused: Boolean = false
+    val isPaused: Boolean = false,
+    val acceptanceLimitMinutes: Int = 10,
+    val acceptanceDurationMs: Long? = null
 ) {
     fun toDelivery(): Delivery = Delivery(
         id = id,
@@ -53,6 +62,10 @@ data class DeliveryEntity(
         orderKind = orderKind,
         adminOrderStage = adminOrderStage,
         comment = comment,
+        restaurantName = restaurantName,
+        orderItems = parseOrderItems(orderItemsJson),
+        productsPrice = productsPrice,
+        totalPrice = totalPrice,
         pickupAddress = pickupAddress,
         pickupLat = pickupLat,
         pickupLng = pickupLng,
@@ -64,7 +77,9 @@ data class DeliveryEntity(
         courierPhone = courierPhone,
         waitingAccumulatedMs = waitingAccumulatedMs,
         onTheWayStartedAt = onTheWayStartedAt,
-        isPaused = isPaused
+        isPaused = isPaused,
+        acceptanceLimitMinutes = acceptanceLimitMinutes,
+        acceptanceDurationMs = acceptanceDurationMs
     )
 
     companion object {
@@ -84,6 +99,10 @@ data class DeliveryEntity(
             orderKind = delivery.orderKind,
             adminOrderStage = delivery.adminOrderStage,
             comment = delivery.comment,
+            restaurantName = delivery.restaurantName,
+            orderItemsJson = orderItemsToJson(delivery.orderItems),
+            productsPrice = delivery.productsPrice,
+            totalPrice = delivery.totalPrice,
             pickupAddress = delivery.pickupAddress,
             pickupLat = delivery.pickupLat,
             pickupLng = delivery.pickupLng,
@@ -95,7 +114,34 @@ data class DeliveryEntity(
             courierPhone = delivery.courierPhone,
             waitingAccumulatedMs = delivery.waitingAccumulatedMs,
             onTheWayStartedAt = delivery.onTheWayStartedAt,
-            isPaused = delivery.isPaused
+            isPaused = delivery.isPaused,
+            acceptanceLimitMinutes = delivery.acceptanceLimitMinutes,
+            acceptanceDurationMs = delivery.acceptanceDurationMs
         )
     }
 }
+
+private fun orderItemsToJson(items: List<DeliveryOrderItem>): String =
+    JSONArray().apply {
+        items.forEach { item ->
+            put(JSONObject().apply {
+                put("name", item.name)
+                put("quantity", item.quantity)
+                put("price", item.price)
+                put("imageUrl", item.imageUrl)
+            })
+        }
+    }.toString()
+
+private fun parseOrderItems(json: String): List<DeliveryOrderItem> = runCatching {
+    val array = JSONArray(json)
+    List(array.length()) { index ->
+        val item = array.getJSONObject(index)
+        DeliveryOrderItem(
+            name = item.optString("name"),
+            quantity = item.optDouble("quantity", 1.0),
+            price = item.optDouble("price", 0.0),
+            imageUrl = item.optString("imageUrl")
+        )
+    }
+}.getOrDefault(emptyList())

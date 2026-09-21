@@ -1,5 +1,12 @@
 import { initializeApp } from 'firebase/app';
-import { getFirestore } from 'firebase/firestore';
+import {
+  CACHE_SIZE_UNLIMITED,
+  enablePersistentCacheIndexAutoCreation,
+  getPersistentCacheIndexManager,
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
+} from 'firebase/firestore';
 import { getFunctions } from 'firebase/functions';
 import { getAuth } from 'firebase/auth';
 import { getStorage } from 'firebase/storage';
@@ -14,7 +21,26 @@ const firebaseConfig = {
 };
 
 const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app);
+// Keep the admin data in IndexedDB. The same build is embedded into the
+// Windows dispatcher, so previously loaded screens remain usable when the
+// connection is temporarily unavailable. Multiple-tab mode keeps the hosted
+// web panel and the Windows WebView cache safe when both are open.
+export const db = initializeFirestore(app, {
+  localCache: persistentLocalCache({
+    // The admin APK is expected to retain every document it has already seen.
+    // Firestore then restores screens from IndexedDB and only synchronizes
+    // additions/changes with the backend.
+    cacheSizeBytes: CACHE_SIZE_UNLIMITED,
+    tabManager: persistentMultipleTabManager(),
+  }),
+});
+
+// Local indexes make large cached queries (deliveries, clients, transactions)
+// run from the device instead of scanning the entire IndexedDB cache each time.
+const cacheIndexManager = getPersistentCacheIndexManager(db);
+if (cacheIndexManager) {
+  enablePersistentCacheIndexAutoCreation(cacheIndexManager);
+}
 export const functions = getFunctions(app);
 export const auth = getAuth(app);
 export const storage = getStorage(app);

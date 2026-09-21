@@ -59,7 +59,8 @@ fun SwipeToAcceptButton(
     idleText: String = "Свайпните вправо, чтобы принять",
     acceptingText: String = "Принятие заказа...",
     accentColor: Color = MaterialTheme.colorScheme.primary,
-    onAccentColor: Color = MaterialTheme.colorScheme.onPrimary
+    onAccentColor: Color = MaterialTheme.colorScheme.onPrimary,
+    labelColor: Color = MaterialTheme.colorScheme.onSurface
 ) {
     val density = LocalDensity.current
     val trackHeight = 56.dp
@@ -128,7 +129,7 @@ fun SwipeToAcceptButton(
             textAlign = TextAlign.Center,
             style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.Bold,
-            color = accentColor
+            color = labelColor
         )
 
         Box(

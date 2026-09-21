@@ -1,6 +1,7 @@
 ﻿package com.zaki.taksometr.presentation.delivery
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.background
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -39,6 +40,7 @@ fun DeliveryCompleteScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .background(CourierCanvas)
             .padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
@@ -67,8 +69,9 @@ fun DeliveryCompleteScreen(
             // Delivery details card
             Card(
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(containerColor = com.zaki.taksometr.presentation.theme.CourierSurface),
+                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
             ) {
                 Column(
                     modifier = Modifier
@@ -159,7 +162,7 @@ fun DeliveryCompleteScreen(
                     ) {
                         Polyline(
                             points = delivery.route.map { LatLng(it.latitude, it.longitude) },
-                            color = Primary,
+                            color = CourierBlueDark,
                             width = 6f
                         )
                     }

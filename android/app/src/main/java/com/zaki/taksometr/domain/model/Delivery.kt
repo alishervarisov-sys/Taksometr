@@ -17,6 +17,10 @@ data class Delivery(
     val orderKind: String = "REGULAR",
     val adminOrderStage: String? = null,
     val comment: String = "",
+    val restaurantName: String = "",
+    val orderItems: List<DeliveryOrderItem> = emptyList(),
+    val productsPrice: Double = 0.0,
+    val totalPrice: Double = 0.0,
     val pickupAddress: String = "",
     val pickupLat: Double? = null,
     val pickupLng: Double? = null,
@@ -37,7 +41,20 @@ data class Delivery(
     val onTheWayStartedAt: Long? = null,
     // True when the courier has explicitly paused this order's meter (distance
     // and waiting are frozen) while keeping it IN_PROGRESS.
-    val isPaused: Boolean = false
+    val isPaused: Boolean = false,
+    // Dispatcher response SLA for a marketplace order. The elapsed value is
+    // written by the server when a courier accepts the order, so it remains a
+    // trustworthy part of both parties' history.
+    val acceptanceLimitMinutes: Int = 10,
+    val acceptanceDurationMs: Long? = null
+)
+
+/** A purchased dish as supplied by Motorol for a marketplace food order. */
+data class DeliveryOrderItem(
+    val name: String = "",
+    val quantity: Double = 1.0,
+    val price: Double = 0.0,
+    val imageUrl: String = ""
 )
 
 enum class DeliveryStatus {

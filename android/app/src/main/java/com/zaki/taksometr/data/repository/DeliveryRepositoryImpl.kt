@@ -15,6 +15,7 @@ import com.zaki.taksometr.data.local.entity.DeliveryEntity
 import com.zaki.taksometr.data.local.entity.PendingCompletionEntity
 import com.zaki.taksometr.data.local.entity.PendingOperationEntity
 import com.zaki.taksometr.domain.model.Delivery
+import com.zaki.taksometr.domain.model.DeliveryOrderItem
 import com.zaki.taksometr.domain.model.DeliveryStatus
 import com.zaki.taksometr.domain.model.GeoPoint
 import com.zaki.taksometr.domain.repository.DeliveryRepository
@@ -908,12 +909,29 @@ class DeliveryRepositoryImpl @Inject constructor(
                 // Preserve locally-tracked pause/meter fields that don't live on
                 // the server document.
                 val local = deliveryDao.getById(delivery.id)
+                val pickupWasReset = delivery.orderKind == "MARKETPLACE" &&
+                    delivery.adminOrderStage == "ACCEPTED" &&
+                    local?.adminOrderStage !in listOf(null, "ACCEPTED")
+                val stoppedWaitingMs = if (
+                    local?.waitingStartedAt != null && delivery.waitingStartedAt == null
+                ) {
+                    local.waitingAccumulatedMs +
+                        (System.currentTimeMillis() - local.waitingStartedAt).coerceAtLeast(0L)
+                } else {
+                    local?.waitingAccumulatedMs ?: 0L
+                }
+                val serverWaitingMs = (delivery.waitingMinutes * 60000.0).toLong()
                 val merged = DeliveryEntity.fromDelivery(delivery).copy(
                     isSynced = true,
-                    waitingAccumulatedMs = local?.waitingAccumulatedMs ?: 0L,
-                    onTheWayStartedAt = local?.onTheWayStartedAt ?: delivery.onTheWayStartedAt
+                    waitingAccumulatedMs = maxOf(stoppedWaitingMs, serverWaitingMs),
+                    onTheWayStartedAt = if (pickupWasReset) null
+                        else local?.onTheWayStartedAt ?: delivery.onTheWayStartedAt,
+                    isPaused = local?.isPaused ?: false
                 )
                 deliveryDao.insert(merged)
+                if (pickupWasReset && delivery.id == getCurrentActiveDeliveryId()) {
+                    prefs.edit().remove(Constants.PREF_ON_THE_WAY_STARTED_AT).apply()
+                }
             }
             prefs.edit().remove(Constants.PREF_PENDING_MARKETPLACE_DELIVERY_ID).apply()
 
@@ -1086,7 +1104,8 @@ class DeliveryRepositoryImpl @Inject constructor(
             // Keep the legacy global pref for backward compatibility (used as a
             // fallback for deliveries that reached ON_THE_WAY before this update).
             prefs.edit()
-                .putLong(Constants.PREF_ON_THE_WAY_STARTED_AT, now)
+                .putLong(Constants.PREF_ON_THE_WAY_STARTED_AT,
+                    current?.onTheWayStartedAt ?: now)
                 .apply()
         }
     }
@@ -1230,6 +1249,22 @@ class DeliveryRepositoryImpl @Inject constructor(
             android.util.Log.d("DeliveryRepo", "Firestore status: $firestoreStatus")
             
             val localEntity = deliveryDao.getById(deliveryId)
+
+            // The dispatcher may have reassigned this active order. Remove it
+            // from the previous courier immediately instead of leaving a stale
+            // local IN_PROGRESS order running on that device.
+            val firestoreCourierId = doc.getString("courierId") ?: ""
+            if (localEntity != null && firestoreCourierId != userId) {
+                deliveryDao.deleteById(deliveryId)
+                routePointDao.deleteByDeliveryId(deliveryId)
+                if (getCurrentActiveDeliveryId() == deliveryId) {
+                    prefs.edit()
+                        .remove(Constants.PREF_ACTIVE_DELIVERY_ID)
+                        .remove(Constants.PREF_ON_THE_WAY_STARTED_AT)
+                        .apply()
+                }
+                return Resource.Success(null)
+            }
             
             if (firestoreStatus != "IN_PROGRESS" && localEntity?.status == "IN_PROGRESS") {
                 // Stale delivery - update local
@@ -1302,6 +1337,15 @@ class DeliveryRepositoryImpl @Inject constructor(
                 accuracy = (point["accuracy"] as? Number)?.toFloat() ?: 0f
             )
         }
+        val orderItems = (get("items") as? List<*>)?.mapNotNull { rawItem ->
+            val item = rawItem as? Map<*, *> ?: return@mapNotNull null
+            DeliveryOrderItem(
+                name = (item["name"] ?: item["product_name"] ?: "Позиция").toString(),
+                quantity = (item["quantity"] as? Number)?.toDouble() ?: 1.0,
+                price = (item["price"] as? Number)?.toDouble() ?: 0.0,
+                imageUrl = (item["imageUrl"] ?: item["image_url"] ?: "").toString()
+            )
+        } ?: emptyList()
 
         return Delivery(
             id = id,
@@ -1320,6 +1364,10 @@ class DeliveryRepositoryImpl @Inject constructor(
             orderKind = getString("orderKind") ?: "REGULAR",
             adminOrderStage = getString("adminOrderStage"),
             comment = getString("comment") ?: "",
+            restaurantName = getString("restaurantName") ?: "",
+            orderItems = orderItems,
+            productsPrice = getDouble("productsPrice") ?: 0.0,
+            totalPrice = getDouble("totalPrice") ?: 0.0,
             pickupAddress = (get("pickup") as? Map<*, *>)?.get("address") as? String ?: "",
             pickupLat = ((get("pickup") as? Map<*, *>)?.get("latitude") as? Number)?.toDouble(),
             pickupLng = ((get("pickup") as? Map<*, *>)?.get("longitude") as? Number)?.toDouble(),
@@ -1328,7 +1376,11 @@ class DeliveryRepositoryImpl @Inject constructor(
             destinationLng = ((get("destination") as? Map<*, *>)?.get("longitude") as? Number)?.toDouble(),
             waitingMinutes = getDouble("waitingMinutes") ?: 0.0,
             waitingStartedAt = getLong("waitingStartedAt"),
-            courierPhone = getString("courierPhone") ?: ""
+            courierPhone = getString("courierPhone") ?: "",
+            waitingAccumulatedMs = ((getDouble("waitingMinutes") ?: 0.0) * 60000.0).toLong(),
+            onTheWayStartedAt = getLong("onTheWayStartedAt"),
+            acceptanceLimitMinutes = (getLong("acceptanceLimitMinutes") ?: 10L).toInt(),
+            acceptanceDurationMs = getLong("acceptanceDurationMs")
         )
     }
 }

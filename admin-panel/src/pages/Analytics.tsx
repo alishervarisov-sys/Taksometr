@@ -13,8 +13,7 @@ import {
   ResponsiveContainer, ComposedChart, Area, Bar, Line, XAxis, YAxis,
   CartesianGrid, Tooltip, Legend, PieChart, Pie, Cell, BarChart,
 } from 'recharts';
-import { collection, query, where, orderBy, limit, getDocs } from 'firebase/firestore';
-import { db } from '../firebase';
+import { subscribeCachedCollection } from '../data/collectionCache';
 
 interface AnalyticsProps {
   adminId: string;
@@ -70,11 +69,11 @@ interface Metrics {
 
 const COLORS = {
   revenue: '#00C853',
-  net: '#1B5E20',
+  net: '#3786F6',
   commission: '#FF6D00',
   orders: '#2196F3',
   taxi: '#FFC107',
-  delivery: '#1B5E20',
+  delivery: '#3786F6',
   purple: '#7B1FA2',
   teal: '#00897B',
   red: '#D32F2F',
@@ -133,6 +132,33 @@ const Analytics: React.FC<AnalyticsProps> = () => {
   const [range, setRange] = useState<{ start: number; end: number }>({ start: 0, end: Date.now() });
 
   useEffect(() => {
+    const ready = { deliveries: false, taxi: false, users: false };
+    const updateLoading = () => setLoading(!ready.deliveries || !ready.taxi || !ready.users);
+
+    const unsubscribeDeliveries = subscribeCachedCollection<any>('deliveries', (documents, status) => {
+      setAllDeliveries(documents.map(item => normalizeDelivery(item.id, item.data)));
+      ready.deliveries = !status.loading;
+      updateLoading();
+    });
+    const unsubscribeTaxi = subscribeCachedCollection<any>('taxi_orders', (documents, status) => {
+      setAllTaxi(documents.map(item => normalizeTaxi(item.id, item.data)));
+      ready.taxi = !status.loading;
+      updateLoading();
+    });
+    const unsubscribeUsers = subscribeCachedCollection<any>('users', (documents, status) => {
+      setTotalCouriers(documents.filter(item => item.data.role === 'COURIER').length);
+      ready.users = !status.loading;
+      updateLoading();
+    });
+
+    return () => {
+      unsubscribeDeliveries();
+      unsubscribeTaxi();
+      unsubscribeUsers();
+    };
+  }, []);
+
+  useEffect(() => {
     if (period !== 'custom') loadData();
   }, [period]);
 
@@ -173,42 +199,11 @@ const Analytics: React.FC<AnalyticsProps> = () => {
   };
 
   // ─── Data loading ───────────────────────────────────────────────────────────
-  // We load whole collections and filter client-side (same proven approach as the
-  // Dashboard leaderboard). This avoids Firestore inequality/index pitfalls and
-  // handles `createdAt` stored as either a number or a Firestore Timestamp.
-  const loadData = async () => {
-    setLoading(true);
+  // Raw collections are supplied by the persistent cache above. Changing a date
+  // range only recalculates local aggregates and never downloads history again.
+  const loadData = () => {
     const { start, end } = getDateRange();
     setRange({ start, end });
-
-    // Deliveries — load everything, filter by date on the client.
-    try {
-      const delSnap = await getDocs(collection(db, 'deliveries'));
-      setAllDeliveries(delSnap.docs.map(d => normalizeDelivery(d.id, d.data())));
-    } catch (e) {
-      console.error('deliveries load failed', e);
-      setAllDeliveries([]);
-    }
-
-    // Taxi orders
-    try {
-      const taxiSnap = await getDocs(collection(db, 'taxi_orders'));
-      setAllTaxi(taxiSnap.docs.map(d => normalizeTaxi(d.id, d.data())));
-    } catch (e) {
-      console.warn('taxi_orders load failed', e);
-      setAllTaxi([]);
-    }
-
-    // Total couriers (independent of everything above)
-    try {
-      const cSnap = await getDocs(query(collection(db, 'users'), where('role', '==', 'COURIER')));
-      setTotalCouriers(cSnap.size);
-    } catch (e) {
-      console.warn('couriers load failed', e);
-      setTotalCouriers(0);
-    }
-
-    setLoading(false);
   };
 
   // ─── Derived analytics ──────────────────────────────────────────────────────

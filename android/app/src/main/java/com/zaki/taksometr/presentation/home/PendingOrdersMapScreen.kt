@@ -1,5 +1,9 @@
 package com.zaki.taksometr.presentation.home
 
+import com.zaki.taksometr.presentation.theme.CourierSky
+import com.zaki.taksometr.presentation.theme.CourierInk
+import com.zaki.taksometr.presentation.theme.CourierBlueDark
+import com.zaki.taksometr.presentation.theme.CourierCanvas
 import android.Manifest
 import android.content.pm.PackageManager
 import android.location.Location
@@ -151,6 +155,8 @@ fun PendingOrdersMapScreen(
     }
 
     Scaffold(
+        containerColor = CourierCanvas,
+
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
@@ -169,9 +175,9 @@ fun PendingOrdersMapScreen(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    titleContentColor = MaterialTheme.colorScheme.onPrimary,
-                    navigationIconContentColor = MaterialTheme.colorScheme.onPrimary
+                    containerColor = CourierSky,
+                    titleContentColor = CourierInk,
+                    navigationIconContentColor = CourierBlueDark
                 )
             )
         }
@@ -201,9 +207,9 @@ fun PendingOrdersMapScreen(
                         snippet = estimate?.label() ?: order.pickupAddress,
                         icon = BitmapDescriptorFactory.defaultMarker(
                             if (order.id == selectedOrderId) {
-                                BitmapDescriptorFactory.HUE_ORANGE
+                                BitmapDescriptorFactory.HUE_AZURE
                             } else {
-                                BitmapDescriptorFactory.HUE_GREEN
+                                BitmapDescriptorFactory.HUE_CYAN
                             }
                         ),
                         onClick = {

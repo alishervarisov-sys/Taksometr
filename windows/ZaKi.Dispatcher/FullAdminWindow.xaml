@@ -1,0 +1,53 @@
+<Window x:Class="ZaKi.Dispatcher.FullAdminWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
+        Title="ZaKi Admin — Windows"
+        Icon="Assets/zaki.ico"
+        Width="1500" Height="900" MinWidth="1050" MinHeight="650"
+        WindowStartupLocation="CenterScreen"
+        Background="#F3F6F4">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="52" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Border Background="#123D1B" Padding="15,0">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <Border Width="34" Height="34" CornerRadius="9" Background="#F4C542">
+                        <TextBlock Text="Z" FontSize="19" FontWeight="Bold" Foreground="#17331E"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <TextBlock Text="ZaKi Admin • полная Windows-панель" Foreground="White"
+                               FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center" Margin="11,0,0,0" />
+                </StackPanel>
+
+                <TextBlock x:Name="StateText" Grid.Column="1" Text="Локальная панель загружается…"
+                           Foreground="#B8CFBD" HorizontalAlignment="Center" VerticalAlignment="Center" />
+
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button Content="Локальные заказы" Background="#2A5B33" Foreground="White"
+                            Margin="0,0,9,0" Click="OpenNativeOrders_Click" />
+                    <Button Content="Обновить панель" Background="#F4C542" Foreground="#17331E"
+                            Click="Reload_Click" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="1">
+            <wv2:WebView2 x:Name="AdminWebView" Visibility="Hidden" />
+            <StackPanel x:Name="LoadingPanel" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <ProgressBar Width="320" Height="7" IsIndeterminate="True" Foreground="#196127" />
+                <TextBlock Text="Запуск всех модулей ZaKi Admin…" Margin="0,16,0,0"
+                           Foreground="#526157" FontSize="15" HorizontalAlignment="Center" />
+            </StackPanel>
+        </Grid>
+    </Grid>
+</Window>

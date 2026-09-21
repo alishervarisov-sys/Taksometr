@@ -51,7 +51,7 @@ const mapContainerStyle = {
   borderRadius: '16px',
 };
 
-const ON_METER_COLOR = '#1B5E20';   // green — driving with the counter on
+const ON_METER_COLOR = '#3786F6';   // green — driving with the counter on
 const OFF_METER_COLOR = '#D32F2F';  // red — driving without the counter (the problem)
 
 // Haversine distance in meters.
