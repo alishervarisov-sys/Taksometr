@@ -32,7 +32,9 @@ export interface RecentDelivery {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const DEBOUNCE_MS = 350;
+// Local matches are displayed immediately. This short pause only limits the
+// follow-up Firebase request while an operator is still typing.
+const DEBOUNCE_MS = 180;
 const MIN_PHONE_DIGITS = 3;
 const MIN_ADDRESS_CHARS = 2;
 const MAX_PHONE_RESULTS = 8;
@@ -181,6 +183,39 @@ function mergePhoneAgg(target: Map<string, PhoneSuggestion>, source: Map<string,
   });
 }
 
+function collectRecentPhoneSuggestions(digits: string, recent: RecentDelivery[]): Map<string, PhoneSuggestion> {
+  const suggestions = new Map<string, PhoneSuggestion>();
+  recent.forEach((d) => {
+    const normalizedPhone = digitsOf(String(d.clientPhone || ''));
+    if (!normalizedPhone || !normalizedPhone.includes(digits)) return;
+    const phone = String(d.clientPhone || '');
+    const existing = suggestions.get(normalizedPhone) || { phone, orders: 0, lastUsedAt: 0 };
+    existing.orders += 1;
+    existing.lastUsedAt = Math.max(existing.lastUsedAt || 0, d.createdAt || 0);
+    if (phone.startsWith('+')) existing.phone = phone;
+    if (!existing.lastAddress) {
+      const address = d.pickup?.address || d.destination?.address;
+      if (address) existing.lastAddress = address;
+    }
+    suggestions.set(normalizedPhone, existing);
+  });
+  return suggestions;
+}
+
+function sortPhoneSuggestions(suggestions: Iterable<PhoneSuggestion>, digits: string): PhoneSuggestion[] {
+  const rank = (suggestion: PhoneSuggestion): number => {
+    const phoneDigits = digitsOf(suggestion.phone);
+    if (phoneDigits === digits) return 0;
+    if (phoneDigits.startsWith(digits)) return 1;
+    return 2;
+  };
+
+  return Array.from(suggestions)
+    .filter((suggestion) => digitsOf(suggestion.phone).includes(digits))
+    .sort((a, b) => rank(a) - rank(b) || b.orders - a.orders || (b.lastUsedAt || 0) - (a.lastUsedAt || 0))
+    .slice(0, MAX_PHONE_RESULTS);
+}
+
 async function fetchPhoneSuggestions(input: string, recent: RecentDelivery[]): Promise<PhoneSuggestion[]> {
   const digits = digitsOf(input);
   if (digits.length < MIN_PHONE_DIGITS) return [];
@@ -212,33 +247,10 @@ async function fetchPhoneSuggestions(input: string, recent: RecentDelivery[]): P
     }
     if (matchedVariant) preferredPhoneVariant = matchedVariant;
 
-    // Supplementary partial matching over already-loaded recent deliveries
-    recent.forEach((d) => {
-      const dp = digitsOf(String(d.clientPhone || ''));
-      if (!dp || !dp.includes(digits)) return;
-      const p = String(d.clientPhone || '');
-      const ex = agg.get(dp) || { phone: p, orders: 0, lastUsedAt: 0 };
-      ex.orders += 1;
-      ex.lastUsedAt = Math.max(ex.lastUsedAt || 0, d.createdAt || 0);
-      if (p.startsWith('+')) ex.phone = p;
-      if (!ex.lastAddress) {
-        const a = d.pickup?.address || d.destination?.address;
-        if (a) ex.lastAddress = a;
-      }
-      agg.set(dp, ex);
-    });
-
-    const rank = (s: PhoneSuggestion): number => {
-      const dp = digitsOf(s.phone);
-      if (dp === digits) return 0;
-      if (dp.startsWith(digits)) return 1;
-      return 2;
-    };
-
-    const result = Array.from(agg.values())
-      .filter((s) => digitsOf(s.phone).includes(digits))
-      .sort((a, b) => rank(a) - rank(b) || b.orders - a.orders || (b.lastUsedAt || 0) - (a.lastUsedAt || 0))
-      .slice(0, MAX_PHONE_RESULTS);
+    // Merge partial matches from the already-open deliveries without another
+    // network request. The same data is also shown immediately while typing.
+    mergePhoneAgg(agg, collectRecentPhoneSuggestions(digits, recent));
+    const result = sortPhoneSuggestions(agg.values(), digits);
 
     if (phoneCache.size >= MAX_PHONE_CACHE) {
       const oldest = phoneCache.keys().next().value;
@@ -254,57 +266,115 @@ async function fetchPhoneSuggestions(input: string, recent: RecentDelivery[]): P
 
 // ─── Search: address ─────────────────────────────────────────────────────────
 
+const addressCache = new Map<string, AddressSuggestion[]>();
+const addressInflight = new Map<string, Promise<AddressSuggestion[]>>();
+const MAX_ADDRESS_CACHE = 100;
+
+function addRecentAddressMatches(queryText: string, recent: RecentDelivery[], map: Map<string, AddressSuggestion>) {
+  const normalizedQuery = normAddr(queryText);
+  recent.forEach((delivery) => {
+    for (const point of [delivery.pickup, delivery.destination]) {
+      if (point?.address && normAddr(point.address).includes(normalizedQuery)) {
+        addDeliveryToAddressMap(delivery, map);
+        break;
+      }
+    }
+  });
+}
+
+function sortAddressSuggestions(suggestions: Iterable<AddressSuggestion>, normalizedQuery: string): AddressSuggestion[] {
+  return Array.from(suggestions)
+    .map((suggestion) => ({ suggestion, rank: addressRank(normAddr(suggestion.address), normalizedQuery) }))
+    .filter(({ rank }) => rank <= 3)
+    .sort((a, b) => a.rank - b.rank || b.suggestion.usage - a.suggestion.usage || (b.suggestion.lastUsedAt || 0) - (a.suggestion.lastUsedAt || 0))
+    .map(({ suggestion }) => suggestion)
+    .slice(0, MAX_ADDRESS_RESULTS);
+}
+
+function getRecentAddressSuggestions(input: string, recent: RecentDelivery[]): AddressSuggestion[] {
+  const prefix = input.trim();
+  if (prefix.length < MIN_ADDRESS_CHARS) return [];
+  const map = new Map<string, AddressSuggestion>();
+  addRecentAddressMatches(prefix, recent, map);
+  return sortAddressSuggestions(map.values(), normAddr(prefix));
+}
+
 async function fetchAddressSuggestions(input: string, recent: RecentDelivery[]): Promise<AddressSuggestion[]> {
   const prefix = input.trim();
   if (prefix.length < MIN_ADDRESS_CHARS) return [];
-  const q = normAddr(prefix);
+  const normalizedQuery = normAddr(prefix);
+  const cached = addressCache.get(normalizedQuery);
+  if (cached) return cached;
+  const running = addressInflight.get(normalizedQuery);
+  if (running) return running;
 
-  const map = new Map<string, AddressSuggestion>();
+  const task = (async (): Promise<AddressSuggestion[]> => {
+    const map = new Map<string, AddressSuggestion>();
 
-  // Prefix search over own base (server-side, automatic single-field indexes on
-  // the pickup.address / destination.address subfields)
-  const results = await Promise.allSettled([
-    getDocs(query(collection(db, 'deliveries'),
-      where('pickup.address', '>=', prefix), where('pickup.address', '<', prefix + RANGE_END), limit(10))),
-    getDocs(query(collection(db, 'deliveries'),
-      where('destination.address', '>=', prefix), where('destination.address', '<', prefix + RANGE_END), limit(10))),
-  ]);
-  results.forEach((r) => {
-    if (r.status !== 'fulfilled') return;
-    r.value.docs.forEach((d) => addDeliveryToAddressMap(d.data() as RecentDelivery, map));
-  });
+    // Prefix search over own base (server-side, automatic single-field indexes on
+    // the pickup.address / destination.address subfields)
+    const results = await Promise.allSettled([
+      getDocs(query(collection(db, 'deliveries'),
+        where('pickup.address', '>=', prefix), where('pickup.address', '<', prefix + RANGE_END), limit(10))),
+      getDocs(query(collection(db, 'deliveries'),
+        where('destination.address', '>=', prefix), where('destination.address', '<', prefix + RANGE_END), limit(10))),
+    ]);
+    results.forEach((result) => {
+      if (result.status !== 'fulfilled') return;
+      result.value.docs.forEach((document) => addDeliveryToAddressMap(document.data() as RecentDelivery, map));
+    });
 
-  // Supplementary partial / word matching over already-loaded recent deliveries
-  recent.forEach((d) => {
-    for (const p of [d.pickup, d.destination]) {
-      const a = p?.address;
-      if (!a) continue;
-      const n = normAddr(a);
-      if (n.includes(q)) addDeliveryToAddressMap(d, map);
+    // Supplementary partial / word matching over already-loaded recent deliveries
+    addRecentAddressMatches(prefix, recent, map);
+    const suggestions = sortAddressSuggestions(map.values(), normalizedQuery);
+
+    if (addressCache.size >= MAX_ADDRESS_CACHE) {
+      const oldest = addressCache.keys().next().value;
+      if (oldest !== undefined) addressCache.delete(oldest);
     }
-  });
+    addressCache.set(normalizedQuery, suggestions);
+    return suggestions;
+  })().finally(() => { addressInflight.delete(normalizedQuery); });
 
-  return Array.from(map.values())
-    .map((s) => ({ s, rank: addressRank(normAddr(s.address), q) }))
-    .filter(({ rank }) => rank <= 3)
-    .sort((a, b) => a.rank - b.rank || b.s.usage - a.s.usage || (b.s.lastUsedAt || 0) - (a.s.lastUsedAt || 0))
-    .map(({ s }) => s)
-    .slice(0, MAX_ADDRESS_RESULTS);
+  addressInflight.set(normalizedQuery, task);
+  return task;
 }
 
 // ─── Client's recent saved addresses (phone → addresses) ────────────────────
 
+const clientAddressCache = new Map<string, AddressSuggestion[]>();
+const clientAddressInflight = new Map<string, Promise<AddressSuggestion[]>>();
+const MAX_CLIENT_ADDRESS_CACHE = 60;
+
 export async function fetchClientRecentAddresses(phone: string, max = 6): Promise<AddressSuggestion[]> {
   if (!phone) return [];
-  const snap = await getDocs(query(collection(db, 'deliveries'), where('clientPhone', '==', phone), limit(40)));
-  const items = snap.docs
-    .map((d) => d.data() as RecentDelivery)
-    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-  const map = new Map<string, AddressSuggestion>();
-  items.forEach((d) => addDeliveryToAddressMap(d, map));
-  return Array.from(map.values())
-    .sort((a, b) => b.usage - a.usage || (b.lastUsedAt || 0) - (a.lastUsedAt || 0))
-    .slice(0, max);
+  const cacheKey = `${digitsOf(phone)}:${max}`;
+  const cached = clientAddressCache.get(cacheKey);
+  if (cached) return cached;
+  const running = clientAddressInflight.get(cacheKey);
+  if (running) return running;
+
+  const task = (async (): Promise<AddressSuggestion[]> => {
+    const snapshot = await getDocs(query(collection(db, 'deliveries'), where('clientPhone', '==', phone), limit(40)));
+    const items = snapshot.docs
+      .map((document) => document.data() as RecentDelivery)
+      .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+    const map = new Map<string, AddressSuggestion>();
+    items.forEach((delivery) => addDeliveryToAddressMap(delivery, map));
+    const suggestions = Array.from(map.values())
+      .sort((a, b) => b.usage - a.usage || (b.lastUsedAt || 0) - (a.lastUsedAt || 0))
+      .slice(0, max);
+
+    if (clientAddressCache.size >= MAX_CLIENT_ADDRESS_CACHE) {
+      const oldest = clientAddressCache.keys().next().value;
+      if (oldest !== undefined) clientAddressCache.delete(oldest);
+    }
+    clientAddressCache.set(cacheKey, suggestions);
+    return suggestions;
+  })().finally(() => { clientAddressInflight.delete(cacheKey); });
+
+  clientAddressInflight.set(cacheKey, task);
+  return task;
 }
 
 // ─── UI: phone autocomplete field ────────────────────────────────────────────
@@ -335,7 +405,7 @@ export const ClientPhoneAutocomplete: React.FC<ClientPhoneAutocompleteProps> = (
       setOptions([]); setSearchDone(false); setLoading(false);
       return;
     }
-    const seq = ++seqRef.current;
+    const seq = seqRef.current;
     setLoading(true);
     try {
       const res = await fetchPhoneSuggestions(text, recentDeliveries);
@@ -364,9 +434,14 @@ export const ClientPhoneAutocomplete: React.FC<ClientPhoneAutocompleteProps> = (
         if (reason !== 'input') return;
         onInputChange(newInput);
         setOpen(true);
-        if (digitsOf(newInput).length < MIN_PHONE_DIGITS) {
+        const digits = digitsOf(newInput);
+        // Invalidate an older Firebase response immediately, then show matches
+        // from the deliveries that are already in the browser.
+        seqRef.current += 1;
+        if (digits.length < MIN_PHONE_DIGITS) {
           setOptions([]); setSearchDone(false); setLoading(false);
         } else {
+          setOptions(sortPhoneSuggestions(collectRecentPhoneSuggestions(digits, recentDeliveries).values(), digits));
           setLoading(true); setSearchDone(false);
         }
         runSearch(newInput);
@@ -440,7 +515,7 @@ export const AddressAutocomplete: React.FC<AddressAutocompleteProps> = ({
       setOptions([]); setSearchDone(false); setLoading(false);
       return;
     }
-    const seq = ++seqRef.current;
+    const seq = seqRef.current;
     setLoading(true);
     try {
       const res = await fetchAddressSuggestions(text, recentDeliveries);
@@ -469,9 +544,13 @@ export const AddressAutocomplete: React.FC<AddressAutocompleteProps> = ({
         if (reason !== 'input') return;
         onInputChange(newInput);
         setOpen(true);
+        // Keep the suggestion list responsive even on a slow connection; the
+        // Firebase result replaces these local matches when it arrives.
+        seqRef.current += 1;
         if (newInput.trim().length < MIN_ADDRESS_CHARS) {
           setOptions([]); setSearchDone(false); setLoading(false);
         } else {
+          setOptions(getRecentAddressSuggestions(newInput, recentDeliveries));
           setLoading(true); setSearchDone(false);
         }
         runSearch(newInput);

@@ -78,6 +78,48 @@ interface OrderFormState {
   acceptanceLimitMinutes: string;
 }
 
+interface SavedAddressPoint {
+  latitude: number;
+  longitude: number;
+  updatedAt: number;
+}
+
+const SAVED_ADDRESS_POINTS_KEY = 'zaki_admin_saved_address_points';
+const MAX_SAVED_ADDRESS_POINTS = 300;
+
+const normalizeAddressKey = (address: string) => address.trim().toLowerCase().replace(/\s+/g, ' ');
+
+function getSavedAddressPoint(address: string): SavedAddressPoint | null {
+  const key = normalizeAddressKey(address);
+  if (!key) return null;
+  try {
+    const saved = JSON.parse(localStorage.getItem(SAVED_ADDRESS_POINTS_KEY) || '{}') as Record<string, SavedAddressPoint>;
+    const point = saved[key];
+    return point && Number.isFinite(point.latitude) && Number.isFinite(point.longitude) ? point : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveAddressPoint(address: string, latitude: number, longitude: number) {
+  const key = normalizeAddressKey(address);
+  if (!key || !Number.isFinite(latitude) || !Number.isFinite(longitude)) return;
+  try {
+    const saved = JSON.parse(localStorage.getItem(SAVED_ADDRESS_POINTS_KEY) || '{}') as Record<string, SavedAddressPoint>;
+    saved[key] = { latitude, longitude, updatedAt: Date.now() };
+    const entries = Object.entries(saved);
+    if (entries.length > MAX_SAVED_ADDRESS_POINTS) {
+      entries
+        .sort(([, a], [, b]) => a.updatedAt - b.updatedAt)
+        .slice(0, entries.length - MAX_SAVED_ADDRESS_POINTS)
+        .forEach(([oldKey]) => delete saved[oldKey]);
+    }
+    localStorage.setItem(SAVED_ADDRESS_POINTS_KEY, JSON.stringify(saved));
+  } catch {
+    // The order can still be created if the browser blocks local storage.
+  }
+}
+
 const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -550,24 +592,28 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
     setMapCenter(center);
     localStorage.setItem('zaki_admin_map_center', JSON.stringify(center));
     if (mapPickerMode === 'pickup') {
+      saveAddressPoint(createForm.pickupAddress, lat, lng);
       setCreateForm(prev => ({ ...prev, pickupLat: String(lat), pickupLng: String(lng) }));
       coordSourceRef.current.pickup = 'map';
     }
     if (mapPickerMode === 'destination') {
+      saveAddressPoint(createForm.destinationAddress, lat, lng);
       setCreateForm(prev => ({ ...prev, destinationLat: String(lat), destinationLng: String(lng) }));
       coordSourceRef.current.destination = 'map';
     }
   };
 
-  // Fill address + linked coordinates from the ZaKi base and move the map
-  // marker to the selected point (marker renders automatically from lat/lng).
+  // Prefer the point that an admin corrected manually for this address. This
+  // prevents an old, inaccurate historical order from moving the marker back.
   const applyAddressSuggestion = (field: 'pickup' | 'destination', s: AddressSuggestion) => {
+    const savedPoint = getSavedAddressPoint(s.address);
+    const point = savedPoint || s;
     setCreateForm(prev => field === 'pickup'
-      ? { ...prev, pickupAddress: s.address, pickupLat: String(s.latitude), pickupLng: String(s.longitude) }
-      : { ...prev, destinationAddress: s.address, destinationLat: String(s.latitude), destinationLng: String(s.longitude) });
+      ? { ...prev, pickupAddress: s.address, pickupLat: String(point.latitude), pickupLng: String(point.longitude) }
+      : { ...prev, destinationAddress: s.address, destinationLat: String(point.latitude), destinationLng: String(point.longitude) });
     coordSourceRef.current[field] = 'autocomplete';
     selectedAddressRef.current[field] = s.address;
-    const center = { lat: s.latitude, lng: s.longitude };
+    const center = { lat: point.latitude, lng: point.longitude };
     setMapCenter(center);
     localStorage.setItem('zaki_admin_map_center', JSON.stringify(center));
   };
@@ -710,12 +756,14 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
   };
 
   const applyEditAddressSuggestion = (field: 'pickup' | 'destination', s: AddressSuggestion) => {
+    const savedPoint = getSavedAddressPoint(s.address);
+    const point = savedPoint || s;
     setEditForm(prev => field === 'pickup'
-      ? { ...prev, pickupAddress: s.address, pickupLat: String(s.latitude), pickupLng: String(s.longitude) }
-      : { ...prev, destinationAddress: s.address, destinationLat: String(s.latitude), destinationLng: String(s.longitude) });
+      ? { ...prev, pickupAddress: s.address, pickupLat: String(point.latitude), pickupLng: String(point.longitude) }
+      : { ...prev, destinationAddress: s.address, destinationLat: String(point.latitude), destinationLng: String(point.longitude) });
     editCoordSourceRef.current[field] = 'autocomplete';
     editSelectedAddressRef.current[field] = s.address;
-    const center = { lat: s.latitude, lng: s.longitude };
+    const center = { lat: point.latitude, lng: point.longitude };
     setMapCenter(center);
     localStorage.setItem('zaki_admin_map_center', JSON.stringify(center));
   };
@@ -739,6 +787,7 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
     const center = { lat, lng };
     setMapCenter(center);
     localStorage.setItem('zaki_admin_map_center', JSON.stringify(center));
+    saveAddressPoint(editMapPickerMode === 'pickup' ? editForm.pickupAddress : editForm.destinationAddress, lat, lng);
     setEditForm(prev => editMapPickerMode === 'pickup'
       ? { ...prev, pickupLat: String(lat), pickupLng: String(lng) }
       : { ...prev, destinationLat: String(lat), destinationLng: String(lng) });
