@@ -19,6 +19,7 @@ import TelegramReport from './pages/TelegramReport';
 import Taxi from './pages/Taxi';
 import TaxiDrivers from './pages/TaxiDrivers';
 import AppVersions from './pages/AppVersions';
+import SmartDispatch from './pages/SmartDispatch';
 import Login from './pages/Login';
 
 const theme = createTheme({
@@ -111,6 +112,7 @@ function App() {
               <Route path="winner" element={<Winner adminId={adminId!} />} />
               <Route path="tariffs" element={<Tariffs adminId={adminId!} />} />
               <Route path="deliveries" element={<Deliveries adminId={adminId!} />} />
+              <Route path="smart-dispatch" element={<SmartDispatch adminId={adminId!} />} />
               <Route path="clients" element={<Clients adminId={adminId!} />} />
               {/* Delivery chains removed */}
               <Route path="map" element={<MapView adminId={adminId!} />} />

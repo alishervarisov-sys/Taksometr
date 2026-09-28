@@ -3,7 +3,7 @@ import {
   Box, Typography, Card, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, Chip, TextField, InputAdornment, Dialog,
   DialogTitle, DialogContent, DialogActions, Button, Grid, Divider,
-  MenuItem, ToggleButtonGroup, ToggleButton, Stack, Alert, CircularProgress, FormControlLabel, Switch
+  MenuItem, ToggleButtonGroup, ToggleButton, Stack, Alert, CircularProgress
 } from '@mui/material';
 import {
   ClientPhoneAutocomplete, AddressAutocomplete, fetchClientRecentAddresses,
@@ -50,6 +50,12 @@ interface CourierOption {
   name: string;
 }
 
+interface CourierLocation {
+  latitude: number;
+  longitude: number;
+  timestamp?: number;
+}
+
 type Period = 'all' | 'today' | 'yesterday' | 'week' | 'month' | 'year' | 'custom';
 type ReportType = 'commission' | 'earnings';
 
@@ -72,22 +78,12 @@ interface OrderFormState {
   acceptanceLimitMinutes: string;
 }
 
-interface SmartDispatchConfig {
-  enabled: boolean;
-  offerTimeoutSeconds: number;
-  maxAssignmentAttempts: number;
-  etaWeight: number;
-  distanceWeight: number;
-  courierLoadWeight: number;
-  idleTimeWeight: number;
-  maxDistanceMeters: number;
-}
-
 const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedDelivery, setSelectedDelivery] = useState<Delivery | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
+  const [liveCourierLocation, setLiveCourierLocation] = useState<CourierLocation | null>(null);
   const [couriers, setCouriers] = useState<CourierOption[]>([]);
   const [selectedCourier, setSelectedCourier] = useState('all');
   // Default 'today': the deliveries table opens with today's orders only.
@@ -106,13 +102,6 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
   const [isSearching, setIsSearching] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [isCreatingOrder, setIsCreatingOrder] = useState(false);
-  const [smartDispatchOpen, setSmartDispatchOpen] = useState(false);
-  const [smartDispatchSaving, setSmartDispatchSaving] = useState(false);
-  const [smartDispatchConfig, setSmartDispatchConfig] = useState<SmartDispatchConfig>({
-    enabled: false, offerTimeoutSeconds: 20, maxAssignmentAttempts: 3,
-    etaWeight: 1, distanceWeight: 0.001, courierLoadWeight: 5,
-    idleTimeWeight: 0.01, maxDistanceMeters: 15000,
-  });
   const [editOpen, setEditOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<Delivery | null>(null);
   const [isSavingEdit, setIsSavingEdit] = useState(false);
@@ -218,6 +207,34 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
       return updated ? { ...prev, ...updated } : prev;
     });
   }, [deliveries]);
+
+  // While viewing an active order, keep the courier marker in sync with the
+  // location the courier app writes to users/{courierId}.lastLocation.
+  useEffect(() => {
+    if (!detailOpen || selectedDelivery?.status !== 'IN_PROGRESS' || !selectedDelivery.courierId) {
+      setLiveCourierLocation(null);
+      return;
+    }
+
+    return onSnapshot(doc(db, 'users', selectedDelivery.courierId), (snapshot) => {
+      const location = snapshot.data()?.lastLocation;
+      if (
+        typeof location?.latitude === 'number' &&
+        typeof location?.longitude === 'number'
+      ) {
+        setLiveCourierLocation({
+          latitude: location.latitude,
+          longitude: location.longitude,
+          timestamp: typeof location.timestamp === 'number' ? location.timestamp : undefined,
+        });
+      } else {
+        setLiveCourierLocation(null);
+      }
+    }, (error) => {
+      console.error('[Deliveries] Не удалось получить текущую геопозицию курьера', error);
+      setLiveCourierLocation(null);
+    });
+  }, [detailOpen, selectedDelivery?.courierId, selectedDelivery?.status]);
 
   const loadCouriers = async () => {
     const q = query(collection(db, 'users'), where('role', '==', 'COURIER'));
@@ -602,30 +619,6 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
     resetCreateForm();
   };
 
-  const openSmartDispatchSettings = async () => {
-    try {
-      const getConfig = httpsCallable(functions, 'getSmartDispatchConfig');
-      const result: any = await getConfig({ adminId });
-      setSmartDispatchConfig(previous => ({ ...previous, ...(result.data || {}) }));
-      setSmartDispatchOpen(true);
-    } catch (error: any) {
-      alert('Не удалось загрузить настройки Smart Dispatch: ' + (error.message || 'Неизвестная ошибка'));
-    }
-  };
-
-  const saveSmartDispatchSettings = async () => {
-    try {
-      setSmartDispatchSaving(true);
-      const updateConfig = httpsCallable(functions, 'updateSmartDispatchConfig');
-      await updateConfig({ adminId, config: smartDispatchConfig });
-      setSmartDispatchOpen(false);
-    } catch (error: any) {
-      alert('Не удалось сохранить настройки Smart Dispatch: ' + (error.message || 'Неизвестная ошибка'));
-    } finally {
-      setSmartDispatchSaving(false);
-    }
-  };
-
   const handleCreateMarketplaceOrder = async () => {
     if (!createForm.clientPhone || !createForm.pickupLat || !createForm.pickupLng) {
       alert('Заполните телефон клиента и точку "Откуда"');
@@ -878,7 +871,6 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
         <Typography variant="h5" sx={{ fontWeight: 700 }}>Доставки</Typography>
         <Stack direction="row" spacing={1}>
-          <Button variant="outlined" onClick={openSmartDispatchSettings}>Smart Dispatch</Button>
           <Button variant="contained" onClick={() => setCreateOpen(true)}>Создать заказ</Button>
         </Stack>
       </Box>
@@ -1069,32 +1061,6 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
           <Button variant="contained" onClick={handleAssignSubmit} disabled={assignBusy || !assignCourierId}>
             {assignBusy ? 'Назначение...' : (assignMode === 'assign' ? 'Назначить' : 'Переназначить')}
           </Button>
-        </DialogActions>
-      </Dialog>
-
-      <Dialog open={smartDispatchOpen} onClose={() => setSmartDispatchOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>Smart Dispatch</DialogTitle>
-        <DialogContent>
-          <Alert severity={smartDispatchConfig.enabled ? 'success' : 'info'} sx={{ mt: 1, mb: 2 }}>
-            {smartDispatchConfig.enabled ? 'Новые свободные заказы сначала получат персональное предложение.' : 'Выключено: новые заказы сразу идут в общую ленту, как раньше.'}
-          </Alert>
-          <FormControlLabel
-            control={<Switch checked={smartDispatchConfig.enabled} onChange={(event) => setSmartDispatchConfig(value => ({ ...value, enabled: event.target.checked }))} />}
-            label="Включить автоматическое распределение"
-          />
-          <Grid container spacing={2} sx={{ mt: 0.5 }}>
-            <Grid item xs={6}><TextField fullWidth type="number" label="Таймаут предложения, сек" value={smartDispatchConfig.offerTimeoutSeconds} onChange={(event) => setSmartDispatchConfig(value => ({ ...value, offerTimeoutSeconds: Number(event.target.value) }))} inputProps={{ min: 5, max: 300 }} /></Grid>
-            <Grid item xs={6}><TextField fullWidth type="number" label="Макс. попыток" value={smartDispatchConfig.maxAssignmentAttempts} onChange={(event) => setSmartDispatchConfig(value => ({ ...value, maxAssignmentAttempts: Number(event.target.value) }))} inputProps={{ min: 1, max: 20 }} /></Grid>
-            <Grid item xs={6}><TextField fullWidth type="number" label="Вес ETA" value={smartDispatchConfig.etaWeight} onChange={(event) => setSmartDispatchConfig(value => ({ ...value, etaWeight: Number(event.target.value) }))} /></Grid>
-            <Grid item xs={6}><TextField fullWidth type="number" label="Вес расстояния" value={smartDispatchConfig.distanceWeight} onChange={(event) => setSmartDispatchConfig(value => ({ ...value, distanceWeight: Number(event.target.value) }))} inputProps={{ step: 0.001 }} /></Grid>
-            <Grid item xs={6}><TextField fullWidth type="number" label="Вес загрузки" value={smartDispatchConfig.courierLoadWeight} onChange={(event) => setSmartDispatchConfig(value => ({ ...value, courierLoadWeight: Number(event.target.value) }))} /></Grid>
-            <Grid item xs={6}><TextField fullWidth type="number" label="Вес простоя" value={smartDispatchConfig.idleTimeWeight} onChange={(event) => setSmartDispatchConfig(value => ({ ...value, idleTimeWeight: Number(event.target.value) }))} inputProps={{ step: 0.01 }} /></Grid>
-            <Grid item xs={12}><TextField fullWidth type="number" label="Максимальная дистанция поиска, м" value={smartDispatchConfig.maxDistanceMeters} onChange={(event) => setSmartDispatchConfig(value => ({ ...value, maxDistanceMeters: Number(event.target.value) }))} inputProps={{ min: 100, max: 100000 }} /></Grid>
-          </Grid>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setSmartDispatchOpen(false)}>Отмена</Button>
-          <Button variant="contained" onClick={saveSmartDispatchSettings} disabled={smartDispatchSaving}>{smartDispatchSaving ? 'Сохранение...' : 'Сохранить'}</Button>
         </DialogActions>
       </Dialog>
 
@@ -1386,16 +1352,39 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
         <DialogContent>
           {selectedDelivery && (
             <Box>
-              {isLoaded && selectedDelivery.route && selectedDelivery.route.length > 0 ? (
+              {isLoaded && (selectedDelivery.route?.length > 0 || liveCourierLocation) ? (
                 <Box sx={{ height: 300, borderRadius: 2, overflow: 'hidden', mb: 2 }}>
-                  <GoogleMap mapContainerStyle={{ width: '100%', height: '100%' }} center={getMapCenter(selectedDelivery.route)} zoom={14} options={{ streetViewControl: false, mapTypeControl: false }}>
-                    <PolylineF path={selectedDelivery.route.map(p => ({ lat: p.latitude, lng: p.longitude }))} options={{ strokeColor: '#3786F6', strokeWeight: 4 }} />
-                    <MarkerF position={{ lat: selectedDelivery.route[0].latitude, lng: selectedDelivery.route[0].longitude }} label="A" />
-                    <MarkerF position={{ lat: selectedDelivery.route[selectedDelivery.route.length - 1].latitude, lng: selectedDelivery.route[selectedDelivery.route.length - 1].longitude }} label="B" />
+                  <GoogleMap
+                    mapContainerStyle={{ width: '100%', height: '100%' }}
+                    center={liveCourierLocation
+                      ? { lat: liveCourierLocation.latitude, lng: liveCourierLocation.longitude }
+                      : getMapCenter(selectedDelivery.route)}
+                    zoom={liveCourierLocation ? 16 : 14}
+                    options={{ streetViewControl: false, mapTypeControl: false }}
+                  >
+                    {selectedDelivery.route?.length > 0 && <>
+                      <PolylineF path={selectedDelivery.route.map(p => ({ lat: p.latitude, lng: p.longitude }))} options={{ strokeColor: '#3786F6', strokeWeight: 4 }} />
+                      <MarkerF position={{ lat: selectedDelivery.route[0].latitude, lng: selectedDelivery.route[0].longitude }} label="A" />
+                      <MarkerF position={{ lat: selectedDelivery.route[selectedDelivery.route.length - 1].latitude, lng: selectedDelivery.route[selectedDelivery.route.length - 1].longitude }} label="B" />
+                    </>}
+                    {liveCourierLocation && (
+                      <MarkerF
+                        position={{ lat: liveCourierLocation.latitude, lng: liveCourierLocation.longitude }}
+                        label="К"
+                        title={`Текущая позиция: ${selectedDelivery.courierName || 'курьер'}`}
+                      />
+                    )}
                   </GoogleMap>
                 </Box>
               ) : (
                 <Box sx={{ height: 80, display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: '#f5f5f5', borderRadius: 2, mb: 2 }}><Typography color="text.secondary">Маршрут не доступен</Typography></Box>
+              )}
+              {selectedDelivery.status === 'IN_PROGRESS' && (
+                <Alert severity={liveCourierLocation ? 'success' : 'info'} sx={{ mb: 2 }}>
+                  {liveCourierLocation
+                    ? `Курьер на карте в реальном времени. Последнее обновление: ${formatDate(liveCourierLocation.timestamp || 0)}`
+                    : 'Ожидаем текущую геопозицию курьера.'}
+                </Alert>
               )}
               <Grid container spacing={2}>
                 <Grid item xs={6}><Typography variant="body2" color="text.secondary">Курьер</Typography><Typography fontWeight={600}>{selectedDelivery.courierName}</Typography></Grid>

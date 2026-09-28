@@ -136,7 +136,8 @@ export async function reassignOrder(
     return true;
   });
   if (!changed) return;
-  await appendHistory(db, deliveryId, [{courierId, courierName: "", score: 0, distanceMeters: 0, etaSeconds: 0,
+  const courier = courierId ? await db.collection("users").doc(courierId).get() : null;
+  await appendHistory(db, deliveryId, [{courierId, courierName: courier?.data()?.name || "", score: 0, distanceMeters: 0, etaSeconds: 0,
     etaSource: "", activeOrders: 0, idleTimeSeconds: 0, h3Cell: "", event: reason === "DECLINED" ? "DECLINED" : "EXPIRED",
     reason, at: Date.now()}]);
   console.log(`[DISPATCH] Reassigning order ${deliveryId}: ${reason}`);

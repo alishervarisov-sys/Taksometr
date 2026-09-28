@@ -3,6 +3,7 @@ import {CourierCandidate, DispatchConfig, DispatchHistoryEntry, GeoPoint} from "
 import {distanceMeters, searchCells, toH3Cell} from "./h3-service";
 import {hardConstraintFailure} from "./hard-constraints";
 import {calculateScore, sortCandidates} from "./scoring-service";
+import {applyGoogleRoadMetrics} from "./routes-api-service";
 
 export type CandidateSearchResult = {candidates: CourierCandidate[]; history: DispatchHistoryEntry[]};
 
@@ -48,7 +49,7 @@ export async function findCandidates(
       cells.has(toH3Cell(courier.lastLocation, config.h3Resolution)));
     if (h3Matches.length >= config.minimumCandidates || ring === config.maxSearchRing) break;
   }
-  const candidates = h3Matches.map(courier => {
+  const geographicCandidates = h3Matches.map(courier => {
     const location = courier.lastLocation as GeoPoint;
     const distance = distanceMeters(location, pickup);
     const etaSeconds = Math.round((distance / 1000) / config.averageSpeedKph * 3600);
@@ -59,9 +60,12 @@ export async function findCandidates(
       idleTimeSeconds: Math.max(0, now - idleSince) / 1000};
     return {...partial, score: calculateScore(partial, config)};
   }).filter(candidate => candidate.distanceMeters <= config.maxDistanceMeters);
+  const candidates = sortCandidates(await applyGoogleRoadMetrics(
+    sortCandidates(geographicCandidates), pickup, config
+  ));
   for (const candidate of candidates) history.push({courierId: candidate.id, courierName: candidate.name,
     score: candidate.score, distanceMeters: candidate.distanceMeters, etaSeconds: candidate.etaSeconds,
     etaSource: candidate.etaSource, activeOrders: candidate.activeOrders, idleTimeSeconds: candidate.idleTimeSeconds,
     h3Cell: candidate.h3Cell, event: "CONSIDERED", at: now});
-  return {candidates: sortCandidates(candidates), history};
+  return {candidates, history};
 }

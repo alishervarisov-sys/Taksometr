@@ -50,7 +50,7 @@ export type CourierCandidate = {
   h3Cell: string;
   distanceMeters: number;
   etaSeconds: number;
-  etaSource: "GEODESIC_FALLBACK";
+  etaSource: "GEODESIC_FALLBACK" | "GOOGLE_ROUTES";
   activeOrders: number;
   idleTimeSeconds: number;
   score: number;

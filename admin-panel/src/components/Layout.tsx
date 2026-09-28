@@ -24,6 +24,7 @@ import {
   Groups as ClientsIcon,
   EmojiEvents as TrophyIcon,
   SystemUpdate as SystemUpdateIcon,
+  AutoAwesome as SmartDispatchIcon,
 } from '@mui/icons-material';
 
 const drawerWidth = 260;
@@ -43,6 +44,7 @@ const Layout: React.FC<LayoutProps> = ({ onLogout, isSuperAdmin }) => {
     { text: 'Курьеры', icon: <PeopleIcon />, path: '/couriers' },
     { text: 'Победитель месяца', icon: <TrophyIcon sx={{ color: '#FFC107' }} />, path: '/winner' },
     { text: 'Доставки', icon: <DeliveryIcon />, path: '/deliveries' },
+    { text: 'Smart Dispatch', icon: <SmartDispatchIcon />, path: '/smart-dispatch' },
     { text: 'Клиенты', icon: <ClientsIcon />, path: '/clients' },
     { text: 'Тарифы', icon: <TariffIcon />, path: '/tariffs' },
     { text: 'Комиссия', icon: <WalletIcon />, path: '/commission' },

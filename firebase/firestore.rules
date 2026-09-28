@@ -23,6 +23,13 @@ service cloud.firestore {
       allow create: if true; // Created via Cloud Functions
       allow update: if true; // Validated in Cloud Functions
       allow delete: if false; // Never delete completed deliveries from client
+
+      // Smart Dispatch adds this audit trail server-side. The admin panel uses
+      // a live listener to show courier offers, declines, and timeouts.
+      match /dispatchHistory/{entryId} {
+        allow read: if true;
+        allow write: if false;
+      }
     }
 
     // Tariffs collection
