@@ -49,6 +49,7 @@ Firebase project referenced by current configuration: `auva-70253`.
 | Admin route or page | `admin-panel/src/App.tsx` | `components/Layout.tsx`, relevant `pages/*.tsx` |
 | Admin Firebase setup | `admin-panel/src/firebase.ts` | page-level Firestore/Functions calls |
 | Delivery backend | `firebase/functions/src/index.ts` | search exact exported function name; then rules/indexes |
+| Smart Dispatch | `firebase/functions/src/dispatch/dispatch-service.ts` | `config-service.ts`, `candidate-search-service.ts`, `hungarian-assignment-service.ts` |
 | Taxi orders/bot | `firebase/functions/src/taxi.ts` | `admin-panel/src/pages/Taxi.tsx` |
 | Taxi-driver moderation | `firebase/functions/src/taxiDrivers.ts` | `admin-panel/src/pages/TaxiDrivers.tsx` |
 | Firestore permissions | `firebase/firestore.rules` | callers in Android/admin/Functions and `firestore.indexes.json` |
@@ -195,6 +196,7 @@ Search all clients plus rules before changing a field. Important collections:
 - `taxi_orders`, `taxiDrivers`, `taxiRegistrationSessions`, `taxiAuditLog`:
   taxi flow
 - `balanceTransfers`, `courierAssignments`, `deliveryEditHistory`: audit/workflow
+- `deliveries/{deliveryId}/dispatchHistory`: Smart Dispatch candidate and offer audit trail
 - `_syncChanges`: Windows/admin synchronization feed
 
 The exact deployed schema is implicit in source code and rules; there is no

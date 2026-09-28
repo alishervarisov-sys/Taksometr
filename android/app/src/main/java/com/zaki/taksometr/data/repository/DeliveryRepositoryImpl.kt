@@ -1000,6 +1000,17 @@ class DeliveryRepositoryImpl @Inject constructor(
         }
     }
 
+    override suspend fun declineSmartDispatchOffer(deliveryId: String): Resource<Unit> {
+        return try {
+            functions.getHttpsCallable("declineSmartDispatchOffer")
+                .call(hashMapOf("deliveryId" to deliveryId, "courierId" to userId))
+                .await()
+            Resource.Success(Unit)
+        } catch (e: Exception) {
+            Resource.Error("Ошибка отказа от заказа: ${e.localizedMessage}")
+        }
+    }
+
     override suspend fun updateMarketplaceDeliveryStage(
         deliveryId: String,
         stage: String?,

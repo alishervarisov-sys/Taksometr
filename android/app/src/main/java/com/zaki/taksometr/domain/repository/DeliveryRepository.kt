@@ -35,6 +35,7 @@ interface DeliveryRepository {
     suspend fun clearStaleActiveDelivery()
     suspend fun syncRemoteActiveDelivery(): Resource<Delivery?>
     suspend fun acceptMarketplaceDelivery(deliveryId: String): Resource<Delivery>
+    suspend fun declineSmartDispatchOffer(deliveryId: String): Resource<Unit>
     suspend fun updateMarketplaceDeliveryStage(deliveryId: String, stage: String? = null, waitingAction: String? = null): Resource<Unit>
     suspend fun syncHistoryFromFirestore(courierId: String): Resource<Unit>
     /**

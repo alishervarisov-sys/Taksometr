@@ -42,7 +42,9 @@ data class PendingMarketplaceOrder(
     val destinationLat: Double? = null,
     val destinationLng: Double? = null,
     val createdAt: Long = 0L,
-    val acceptanceLimitMinutes: Int = 10
+    val acceptanceLimitMinutes: Int = 10,
+    val isSmartOffer: Boolean = false,
+    val offerExpiresAt: Long? = null
 )
 
 data class WinnerAnnouncement(
@@ -198,7 +200,9 @@ class HomeViewModel @Inject constructor(
                         destinationLat = (destination?.get("latitude") as? Number)?.toDouble(),
                         destinationLng = (destination?.get("longitude") as? Number)?.toDouble(),
                         createdAt = doc.getLong("createdAt") ?: 0L,
-                        acceptanceLimitMinutes = (doc.getLong("acceptanceLimitMinutes") ?: 10L).toInt()
+                        acceptanceLimitMinutes = (doc.getLong("acceptanceLimitMinutes") ?: 10L).toInt(),
+                        isSmartOffer = doc.getString("dispatchState") == "OFFERED",
+                        offerExpiresAt = doc.getLong("offerExpiresAt")
                     )
                 }
             .sortedByDescending { it.createdAt }
@@ -261,7 +265,9 @@ class HomeViewModel @Inject constructor(
                         destinationLat = (destination?.get("latitude") as? Number)?.toDouble(),
                         destinationLng = (destination?.get("longitude") as? Number)?.toDouble(),
                         createdAt = doc.getLong("createdAt") ?: 0L,
-                        acceptanceLimitMinutes = (doc.getLong("acceptanceLimitMinutes") ?: 10L).toInt()
+                        acceptanceLimitMinutes = (doc.getLong("acceptanceLimitMinutes") ?: 10L).toInt(),
+                        isSmartOffer = doc.getString("dispatchState") == "OFFERED",
+                        offerExpiresAt = doc.getLong("offerExpiresAt")
                     ))
                 )
             }
@@ -416,6 +422,20 @@ class HomeViewModel @Inject constructor(
                         pendingMarketplaceOrders = emptyList()
                     )
                 }
+                is Resource.Loading -> Unit
+            }
+        }
+    }
+
+    fun declineSmartDispatchOffer(orderId: String) {
+        val pending = _state.value.pendingMarketplaceOrders.firstOrNull { it.id == orderId && it.isSmartOffer } ?: return
+        viewModelScope.launch {
+            when (val result = deliveryRepository.declineSmartDispatchOffer(pending.id)) {
+                is Resource.Success -> {
+                    prefs.edit().remove(Constants.PREF_PENDING_MARKETPLACE_DELIVERY_ID).apply()
+                    _state.value = _state.value.copy(pendingMarketplaceOrders = _state.value.pendingMarketplaceOrders.filter { it.id != pending.id })
+                }
+                is Resource.Error -> _state.value = _state.value.copy(error = result.message)
                 is Resource.Loading -> Unit
             }
         }

@@ -1,6 +1,10 @@
 ﻿import * as functions from "firebase-functions";
 import * as admin from "firebase-admin";
 import * as crypto from "crypto";
+import {loadDispatchConfig, saveDispatchConfig} from "./dispatch/config-service";
+import {dispatchBatch, dispatchOrder, expireOutstandingOffers, reassignOrder} from "./dispatch/dispatch-service";
+import {toH3Cell} from "./dispatch/h3-service";
+import {validLocation} from "./dispatch/hard-constraints";
 
 admin.initializeApp();
 
@@ -310,6 +314,32 @@ async function sendArchivedPushToCourier(
   }
   return sendPushToCourier(courierData, payload, options);
 }
+
+async function notifySmartDispatchOffer(courierId: string, courierData: any, deliveryId: string): Promise<void> {
+  const delivery = await db.collection("deliveries").doc(deliveryId).get();
+  const pickup = delivery.exists ? delivery.data()?.pickup : null;
+  await sendArchivedPushToCourier(courierId, courierData, {
+    title: "Персональное предложение заказа",
+    body: pickup?.address ? `Заказ: ${pickup.address}` : "Вам предложен заказ",
+    data: {type: "SMART_DISPATCH_OFFER", deliveryId},
+  }, {withSystemNotification: true});
+}
+
+// Keeps the indexed H3 cell beside each fresh GPS update. The timestamp guard
+// stops the merge update below from recursively processing its own write.
+export const syncCourierDispatchH3 = functions.firestore.document("users/{courierId}")
+  .onUpdate(async (change, context) => {
+    const before = change.before.data();
+    const after = change.after.data();
+    if (!validLocation(after.lastLocation) || before.lastLocation?.timestamp === after.lastLocation.timestamp) return null;
+    const config = await loadDispatchConfig(db);
+    await change.after.ref.set({
+      dispatchH3Cell: toH3Cell(after.lastLocation, config.h3Resolution),
+      dispatchLocationUpdatedAt: after.lastLocation.timestamp,
+    }, {merge: true});
+    console.log(`[DISPATCH] Updated H3 cell for courier ${context.params.courierId}`);
+    return null;
+  });
 
 // ============ PROGRESSIVE DAILY COMMISSION LADDER ============
 /**
@@ -1349,6 +1379,7 @@ export const adminCreateMarketplaceDelivery = functions.https.onCall(async (data
     };
   }
 
+  const dispatchConfig = await loadDispatchConfig(db);
   const courierDocs = await db.collection("users")
     .where("role", "==", "COURIER")
     .where("isBlocked", "==", false)
@@ -1403,11 +1434,23 @@ export const adminCreateMarketplaceDelivery = functions.https.onCall(async (data
     destination: hasDestination ? destination : null,
     availableCourierIds,
     availableCouriersDebug,
+    ...(dispatchConfig.enabled ? {
+      dispatchState: "AUTO_ASSIGNMENT_PENDING",
+      assignmentAttemptCount: 0,
+      attemptedCourierIds: [],
+      availableCourierIds: [],
+    } : {}),
     waitingMinutes: 0,
     waitingCost: 0,
     waitingStartedAt: null,
     tariffSnapshot: tariff,
   });
+
+  if (dispatchConfig.enabled) {
+    await dispatchOrder(db, deliveryRef.id, notifySmartDispatchOffer);
+    return {success: true, deliveryId: deliveryRef.id, deliveryType: resolvedDeliveryType,
+      fixedPrice, smartDispatch: true};
+  }
 
   for (const courierId of availableCourierIds) {
     const courierDoc = await db.collection("users").doc(courierId).get();
@@ -1737,6 +1780,15 @@ export const acceptMarketplaceDelivery = functions.https.onCall(async (data, con
       );
     }
 
+    if (deliveryData.dispatchState === "OFFERED") {
+      if (deliveryData.offerCourierId !== courierId) {
+        throw new functions.https.HttpsError("permission-denied", "This offer belongs to another courier");
+      }
+      if (Number(deliveryData.offerExpiresAt || 0) < Date.now()) {
+        throw new functions.https.HttpsError("deadline-exceeded", "This offer has expired");
+      }
+    }
+
     const availableCourierIds = deliveryData.availableCourierIds || [];
     if (!availableCourierIds.includes(courierId)) {
       throw new functions.https.HttpsError(
@@ -1795,6 +1847,9 @@ export const acceptMarketplaceDelivery = functions.https.onCall(async (data, con
       acceptanceDurationMs: Math.max(0, acceptedAt - createdAt),
       startTime: acceptedAt,
       availableCourierIds: [courierId],
+      dispatchState: deliveryData.dispatchState === "OFFERED" ? "ACCEPTED" : (deliveryData.dispatchState || null),
+      offerExpiresAt: null,
+      offerAcceptedAt: deliveryData.dispatchState === "OFFERED" ? acceptedAt : null,
     });
 
     return {
@@ -1805,6 +1860,15 @@ export const acceptMarketplaceDelivery = functions.https.onCall(async (data, con
   });
 
   await syncCourierStatus(courierId, "acceptMarketplaceDelivery: order accepted by courier");
+  if (acceptanceResult.deliveryData.dispatchState === "OFFERED") {
+    await db.collection("users").doc(courierId).set({lastAssignedAt: acceptanceResult.acceptedAt}, {merge: true});
+    await db.collection("deliveries").doc(deliveryId).collection("dispatchHistory").add({
+      courierId, courierName: acceptanceResult.courierData.name || "", score: 0, distanceMeters: 0,
+      etaSeconds: 0, etaSource: "", activeOrders: 0, idleTimeSeconds: 0, h3Cell: "",
+      event: "ACCEPTED", at: acceptanceResult.acceptedAt,
+    });
+    console.log(`[DISPATCH] Courier ${courierId} accepted order ${deliveryId}`);
+  }
 
   const courierName = acceptanceResult.courierData.name || "";
   const courierPhone = acceptanceResult.courierData.phone || "";
@@ -1823,6 +1887,45 @@ export const acceptMarketplaceDelivery = functions.https.onCall(async (data, con
     courierName,
     courierPhone,
   };
+});
+
+// A decline is valid only for the currently offered courier. The transaction in
+// reassignOrder prevents a delayed mobile request from replacing a newer offer.
+export const declineSmartDispatchOffer = functions.https.onCall(async (data) => {
+  const {deliveryId, courierId} = data as {deliveryId: string; courierId: string};
+  if (!deliveryId || !courierId) {
+    throw new functions.https.HttpsError("invalid-argument", "deliveryId and courierId are required");
+  }
+  await reassignOrder(db, deliveryId, courierId, "DECLINED", notifySmartDispatchOffer);
+  return {success: true};
+});
+
+export const getSmartDispatchConfig = functions.https.onCall(async (data) => {
+  await verifyAdmin(data?.adminId);
+  return loadDispatchConfig(db);
+});
+
+export const updateSmartDispatchConfig = functions.https.onCall(async (data) => {
+  await verifyAdmin(data?.adminId);
+  return saveDispatchConfig(db, data?.config || {}, data.adminId);
+});
+
+/** Scheduler is authoritative for timeouts even while a courier app is closed. */
+export const expireSmartDispatchOffers = functions.pubsub.schedule("every 1 minutes").onRun(async () => {
+  const count = await expireOutstandingOffers(db, notifySmartDispatchOffer);
+  if (count) console.log(`[DISPATCH] Expired ${count} outstanding offers`);
+  return null;
+});
+
+/** Admin-safe batch entry point; geography/constraints are evaluated before Hungarian. */
+export const runSmartDispatchBatch = functions.https.onCall(async (data) => {
+  await verifyAdmin(data?.adminId);
+  const deliveryIds = Array.isArray(data?.deliveryIds) ? data.deliveryIds.filter((id: unknown) => typeof id === "string") : [];
+  if (deliveryIds.length === 0 || deliveryIds.length > 50) {
+    throw new functions.https.HttpsError("invalid-argument", "deliveryIds must contain 1 to 50 orders");
+  }
+  await dispatchBatch(db, deliveryIds, notifySmartDispatchOffer);
+  return {success: true, count: deliveryIds.length};
 });
 
 // ============ ADMIN: ASSIGN A FREE ORDER TO A SPECIFIC COURIER ============

@@ -16,8 +16,8 @@ android {
         applicationId = "com.zaki.taksometr"
         minSdk = 26
         targetSdk = 34
-        versionCode = 25
-        versionName = "1.10.3"
+        versionCode = 26
+        versionName = "1.10.4"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {

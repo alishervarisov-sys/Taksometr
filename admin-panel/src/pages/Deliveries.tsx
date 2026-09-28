@@ -3,7 +3,7 @@ import {
   Box, Typography, Card, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, Chip, TextField, InputAdornment, Dialog,
   DialogTitle, DialogContent, DialogActions, Button, Grid, Divider,
-  MenuItem, ToggleButtonGroup, ToggleButton, Stack, Alert, CircularProgress
+  MenuItem, ToggleButtonGroup, ToggleButton, Stack, Alert, CircularProgress, FormControlLabel, Switch
 } from '@mui/material';
 import {
   ClientPhoneAutocomplete, AddressAutocomplete, fetchClientRecentAddresses,
@@ -72,6 +72,17 @@ interface OrderFormState {
   acceptanceLimitMinutes: string;
 }
 
+interface SmartDispatchConfig {
+  enabled: boolean;
+  offerTimeoutSeconds: number;
+  maxAssignmentAttempts: number;
+  etaWeight: number;
+  distanceWeight: number;
+  courierLoadWeight: number;
+  idleTimeWeight: number;
+  maxDistanceMeters: number;
+}
+
 const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -95,6 +106,13 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
   const [isSearching, setIsSearching] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [isCreatingOrder, setIsCreatingOrder] = useState(false);
+  const [smartDispatchOpen, setSmartDispatchOpen] = useState(false);
+  const [smartDispatchSaving, setSmartDispatchSaving] = useState(false);
+  const [smartDispatchConfig, setSmartDispatchConfig] = useState<SmartDispatchConfig>({
+    enabled: false, offerTimeoutSeconds: 20, maxAssignmentAttempts: 3,
+    etaWeight: 1, distanceWeight: 0.001, courierLoadWeight: 5,
+    idleTimeWeight: 0.01, maxDistanceMeters: 15000,
+  });
   const [editOpen, setEditOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<Delivery | null>(null);
   const [isSavingEdit, setIsSavingEdit] = useState(false);
@@ -584,6 +602,30 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
     resetCreateForm();
   };
 
+  const openSmartDispatchSettings = async () => {
+    try {
+      const getConfig = httpsCallable(functions, 'getSmartDispatchConfig');
+      const result: any = await getConfig({ adminId });
+      setSmartDispatchConfig(previous => ({ ...previous, ...(result.data || {}) }));
+      setSmartDispatchOpen(true);
+    } catch (error: any) {
+      alert('Не удалось загрузить настройки Smart Dispatch: ' + (error.message || 'Неизвестная ошибка'));
+    }
+  };
+
+  const saveSmartDispatchSettings = async () => {
+    try {
+      setSmartDispatchSaving(true);
+      const updateConfig = httpsCallable(functions, 'updateSmartDispatchConfig');
+      await updateConfig({ adminId, config: smartDispatchConfig });
+      setSmartDispatchOpen(false);
+    } catch (error: any) {
+      alert('Не удалось сохранить настройки Smart Dispatch: ' + (error.message || 'Неизвестная ошибка'));
+    } finally {
+      setSmartDispatchSaving(false);
+    }
+  };
+
   const handleCreateMarketplaceOrder = async () => {
     if (!createForm.clientPhone || !createForm.pickupLat || !createForm.pickupLng) {
       alert('Заполните телефон клиента и точку "Откуда"');
@@ -620,7 +662,9 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
           longitude: Number(createForm.destinationLng),
         } : null,
       });
-      if (result?.data?.assignedCourierId) {
+      if (result?.data?.smartDispatch) {
+        alert('✅ Заказ создан. Smart Dispatch ищет подходящего курьера.');
+      } else if (result?.data?.assignedCourierId) {
         alert(`✅ Заказ создан и предложен курьеру: ${result.data.assignedCourierName || ''}`);
       } else {
         alert(`✅ Заказ создан. Доступно курьеров: ${result?.data?.availableCouriers ?? 0}`);
@@ -833,7 +877,10 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
     <Box>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
         <Typography variant="h5" sx={{ fontWeight: 700 }}>Доставки</Typography>
-        <Button variant="contained" onClick={() => setCreateOpen(true)}>Создать заказ</Button>
+        <Stack direction="row" spacing={1}>
+          <Button variant="outlined" onClick={openSmartDispatchSettings}>Smart Dispatch</Button>
+          <Button variant="contained" onClick={() => setCreateOpen(true)}>Создать заказ</Button>
+        </Stack>
       </Box>
 
       {problemDeliveries.length > 0 && (
@@ -1022,6 +1069,32 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
           <Button variant="contained" onClick={handleAssignSubmit} disabled={assignBusy || !assignCourierId}>
             {assignBusy ? 'Назначение...' : (assignMode === 'assign' ? 'Назначить' : 'Переназначить')}
           </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={smartDispatchOpen} onClose={() => setSmartDispatchOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Smart Dispatch</DialogTitle>
+        <DialogContent>
+          <Alert severity={smartDispatchConfig.enabled ? 'success' : 'info'} sx={{ mt: 1, mb: 2 }}>
+            {smartDispatchConfig.enabled ? 'Новые свободные заказы сначала получат персональное предложение.' : 'Выключено: новые заказы сразу идут в общую ленту, как раньше.'}
+          </Alert>
+          <FormControlLabel
+            control={<Switch checked={smartDispatchConfig.enabled} onChange={(event) => setSmartDispatchConfig(value => ({ ...value, enabled: event.target.checked }))} />}
+            label="Включить автоматическое распределение"
+          />
+          <Grid container spacing={2} sx={{ mt: 0.5 }}>
+            <Grid item xs={6}><TextField fullWidth type="number" label="Таймаут предложения, сек" value={smartDispatchConfig.offerTimeoutSeconds} onChange={(event) => setSmartDispatchConfig(value => ({ ...value, offerTimeoutSeconds: Number(event.target.value) }))} inputProps={{ min: 5, max: 300 }} /></Grid>
+            <Grid item xs={6}><TextField fullWidth type="number" label="Макс. попыток" value={smartDispatchConfig.maxAssignmentAttempts} onChange={(event) => setSmartDispatchConfig(value => ({ ...value, maxAssignmentAttempts: Number(event.target.value) }))} inputProps={{ min: 1, max: 20 }} /></Grid>
+            <Grid item xs={6}><TextField fullWidth type="number" label="Вес ETA" value={smartDispatchConfig.etaWeight} onChange={(event) => setSmartDispatchConfig(value => ({ ...value, etaWeight: Number(event.target.value) }))} /></Grid>
+            <Grid item xs={6}><TextField fullWidth type="number" label="Вес расстояния" value={smartDispatchConfig.distanceWeight} onChange={(event) => setSmartDispatchConfig(value => ({ ...value, distanceWeight: Number(event.target.value) }))} inputProps={{ step: 0.001 }} /></Grid>
+            <Grid item xs={6}><TextField fullWidth type="number" label="Вес загрузки" value={smartDispatchConfig.courierLoadWeight} onChange={(event) => setSmartDispatchConfig(value => ({ ...value, courierLoadWeight: Number(event.target.value) }))} /></Grid>
+            <Grid item xs={6}><TextField fullWidth type="number" label="Вес простоя" value={smartDispatchConfig.idleTimeWeight} onChange={(event) => setSmartDispatchConfig(value => ({ ...value, idleTimeWeight: Number(event.target.value) }))} inputProps={{ step: 0.01 }} /></Grid>
+            <Grid item xs={12}><TextField fullWidth type="number" label="Максимальная дистанция поиска, м" value={smartDispatchConfig.maxDistanceMeters} onChange={(event) => setSmartDispatchConfig(value => ({ ...value, maxDistanceMeters: Number(event.target.value) }))} inputProps={{ min: 100, max: 100000 }} /></Grid>
+          </Grid>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setSmartDispatchOpen(false)}>Отмена</Button>
+          <Button variant="contained" onClick={saveSmartDispatchSettings} disabled={smartDispatchSaving}>{smartDispatchSaving ? 'Сохранение...' : 'Сохранить'}</Button>
         </DialogActions>
       </Dialog>
 

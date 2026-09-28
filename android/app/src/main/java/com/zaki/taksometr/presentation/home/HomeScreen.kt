@@ -627,7 +627,8 @@ fun HomeScreen(
                         PendingOrderCard(
                             pending = pending,
                             isAccepting = state.isAcceptingMarketplaceOrder,
-                            onAccept = { viewModel.acceptPendingMarketplaceOrder(pending.id) }
+                            onAccept = { viewModel.acceptPendingMarketplaceOrder(pending.id) },
+                            onDecline = { viewModel.declineSmartDispatchOffer(pending.id) }
                         )
                     }
                     Spacer(modifier = Modifier.height(4.dp))
@@ -949,7 +950,8 @@ private val PendingOrderLabelColor: Color @Composable get() = CourierMuted
 fun PendingOrderCard(
     pending: PendingMarketplaceOrder,
     isAccepting: Boolean,
-    onAccept: () -> Unit
+    onAccept: () -> Unit,
+    onDecline: () -> Unit
 ) {
     val context = LocalContext.current
     Card(
@@ -1067,6 +1069,13 @@ fun PendingOrderCard(
                 accentColor = CourierBlue,
                 onAccentColor = Color.White
             )
+            if (pending.isSmartOffer) {
+                TextButton(
+                    onClick = onDecline,
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !isAccepting
+                ) { Text("Отказаться от предложения") }
+            }
         }
     }
 }
@@ -1081,9 +1090,10 @@ private fun OrderAcceptanceTimer(pending: PendingMarketplaceOrder) {
             delay(1_000)
         }
     }
+    val offerLimitMs = pending.offerExpiresAt?.let { (it - pending.createdAt).coerceAtLeast(1L) }
     val elapsed = (now - pending.createdAt).coerceAtLeast(0L)
     val limitMinutes = pending.acceptanceLimitMinutes.coerceAtLeast(1)
-    val isOverdue = elapsed >= limitMinutes * 60_000L
+    val isOverdue = pending.offerExpiresAt?.let { now >= it } ?: (elapsed >= limitMinutes * 60_000L)
     val timerColor = if (isOverdue) AccentRed else CourierBlueDark
     val createdLabel = if (pending.createdAt > 0L) {
         SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()).format(Date(pending.createdAt))
@@ -1097,7 +1107,7 @@ private fun OrderAcceptanceTimer(pending: PendingMarketplaceOrder) {
     ) {
         Column {
             Text("Создан: $createdLabel", style = MaterialTheme.typography.labelSmall, color = PendingOrderLabelColor)
-            Text("На принятие: $limitMinutes мин", style = MaterialTheme.typography.labelSmall, color = PendingOrderLabelColor)
+            Text(if (pending.isSmartOffer && offerLimitMs != null) "Персональное предложение: ${offerLimitMs / 1000} сек" else "На принятие: $limitMinutes мин", style = MaterialTheme.typography.labelSmall, color = PendingOrderLabelColor)
         }
         Text(
             text = "${LocationUtils.formatDuration(elapsed)}${if (isOverdue) " · просрочен" else ""}",
