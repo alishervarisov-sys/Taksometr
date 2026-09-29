@@ -12,7 +12,7 @@
             <ColumnDefinition Width="*" />
         </Grid.ColumnDefinitions>
 
-        <Border Grid.Column="0" Background="#123D1B">
+        <Border Grid.Column="0" Background="{StaticResource PrimaryDarkBrush}">
             <Grid Margin="20,24">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
@@ -21,30 +21,30 @@
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
                 <StackPanel Orientation="Horizontal">
-                    <Border Width="43" Height="43" CornerRadius="12" Background="#F4C542">
-                        <TextBlock Text="Z" FontWeight="Bold" FontSize="23" Foreground="#17331E"
+                    <Border Width="43" Height="43" CornerRadius="12" Background="{StaticResource PrimaryLightBrush}">
+                        <TextBlock Text="Z" FontWeight="Bold" FontSize="23" Foreground="{StaticResource PrimaryDarkBrush}"
                                    HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </Border>
                     <StackPanel Margin="12,1,0,0">
                         <TextBlock Text="ZaKi" FontWeight="Bold" FontSize="21" Foreground="White" />
-                        <TextBlock Text="Dispatcher" FontSize="12" Foreground="#B8CFBD" />
+                        <TextBlock Text="Dispatcher" FontSize="12" Foreground="#D9E8FF" />
                     </StackPanel>
                 </StackPanel>
 
                 <StackPanel Grid.Row="1" Margin="0,42,0,0">
-                    <Border Background="#2A5B33" CornerRadius="10" Padding="13,11">
+                    <Border Background="{StaticResource PrimaryBrush}" CornerRadius="10" Padding="13,11">
                         <TextBlock Text="▦   Заказы" FontSize="15" Foreground="White" FontWeight="SemiBold" />
                     </Border>
-                    <TextBlock Text="Следующие модули" Foreground="#86A48C" FontSize="11" Margin="13,24,0,9" />
-                    <TextBlock Text="Курьеры" Foreground="#AFC5B4" Margin="13,8" />
-                    <TextBlock Text="Клиенты" Foreground="#AFC5B4" Margin="13,8" />
-                    <TextBlock Text="Карта и трекинг" Foreground="#AFC5B4" Margin="13,8" />
-                    <TextBlock Text="Аналитика" Foreground="#AFC5B4" Margin="13,8" />
+                    <TextBlock Text="Следующие модули" Foreground="#A9C9FA" FontSize="11" Margin="13,24,0,9" />
+                    <TextBlock Text="Курьеры" Foreground="#D9E8FF" Margin="13,8" />
+                    <TextBlock Text="Клиенты" Foreground="#D9E8FF" Margin="13,8" />
+                    <TextBlock Text="Карта и трекинг" Foreground="#D9E8FF" Margin="13,8" />
+                    <TextBlock Text="Аналитика" Foreground="#D9E8FF" Margin="13,8" />
                 </StackPanel>
 
                 <StackPanel Grid.Row="3">
                     <TextBlock x:Name="AdminNameText" Foreground="White" FontWeight="SemiBold" />
-                    <TextBlock Text="Администратор" Foreground="#96B19C" FontSize="12" Margin="0,3,0,0" />
+                    <TextBlock Text="Администратор" Foreground="#C9DEFF" FontSize="12" Margin="0,3,0,0" />
                 </StackPanel>
             </Grid>
         </Border>
@@ -64,15 +64,15 @@
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <StackPanel>
-                    <TextBlock Text="Заказы" FontSize="30" FontWeight="Bold" Foreground="#17331E" />
+                    <TextBlock Text="Заказы" FontSize="30" FontWeight="Bold" Foreground="{StaticResource TextBrush}" />
                     <TextBlock Text="Локальная база с фоновой синхронизацией Firebase"
                                Foreground="{StaticResource MutedBrush}" Margin="0,3,0,0" />
                 </StackPanel>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                    <Border x:Name="ConnectionBadge" Background="#E7F4EA" CornerRadius="14" Padding="12,6" Margin="0,0,12,0">
-                        <TextBlock x:Name="ConnectionText" Text="● Проверка…" Foreground="#196127" />
+                    <Border x:Name="ConnectionBadge" Background="{StaticResource PrimaryLightBrush}" CornerRadius="14" Padding="12,6" Margin="0,0,12,0">
+                        <TextBlock x:Name="ConnectionText" Text="● Проверка…" Foreground="{StaticResource PrimaryDarkBrush}" />
                     </Border>
-                    <Button x:Name="SyncButton" Content="⟳  Синхронизировать" Background="#196127"
+                    <Button x:Name="SyncButton" Content="⟳  Синхронизировать" Background="{StaticResource PrimaryBrush}"
                             Foreground="White" Click="SyncButton_Click" />
                 </StackPanel>
             </Grid>
@@ -85,16 +85,16 @@
                     <ColumnDefinition Width="*" />
                 </Grid.ColumnDefinitions>
                 <Border Grid.Column="0" Background="White" CornerRadius="14" Padding="18,14">
-                    <StackPanel><TextBlock Text="Всего локально" Foreground="#657268"/><TextBlock x:Name="TotalCountText" Text="0" FontSize="25" FontWeight="Bold" Foreground="#17331E" Margin="0,5,0,0"/></StackPanel>
+                    <StackPanel><TextBlock Text="Всего локально" Foreground="{StaticResource MutedBrush}"/><TextBlock x:Name="TotalCountText" Text="0" FontSize="25" FontWeight="Bold" Foreground="{StaticResource TextBrush}" Margin="0,5,0,0"/></StackPanel>
                 </Border>
                 <Border Grid.Column="2" Background="White" CornerRadius="14" Padding="18,14">
-                    <StackPanel><TextBlock Text="Ожидают" Foreground="#657268"/><TextBlock x:Name="PendingCountText" Text="0" FontSize="25" FontWeight="Bold" Foreground="#B56A00" Margin="0,5,0,0"/></StackPanel>
+                    <StackPanel><TextBlock Text="Ожидают" Foreground="{StaticResource MutedBrush}"/><TextBlock x:Name="PendingCountText" Text="0" FontSize="25" FontWeight="Bold" Foreground="#B56A00" Margin="0,5,0,0"/></StackPanel>
                 </Border>
                 <Border Grid.Column="4" Background="White" CornerRadius="14" Padding="18,14">
-                    <StackPanel><TextBlock Text="В процессе" Foreground="#657268"/><TextBlock x:Name="ActiveCountText" Text="0" FontSize="25" FontWeight="Bold" Foreground="#1769AA" Margin="0,5,0,0"/></StackPanel>
+                    <StackPanel><TextBlock Text="В процессе" Foreground="{StaticResource MutedBrush}"/><TextBlock x:Name="ActiveCountText" Text="0" FontSize="25" FontWeight="Bold" Foreground="#1769AA" Margin="0,5,0,0"/></StackPanel>
                 </Border>
                 <Border Grid.Column="6" Background="White" CornerRadius="14" Padding="18,14">
-                    <StackPanel><TextBlock Text="Ожидают отправки" Foreground="#657268"/><TextBlock x:Name="QueueCountText" Text="0" FontSize="25" FontWeight="Bold" Foreground="#8A3FFC" Margin="0,5,0,0"/></StackPanel>
+                    <StackPanel><TextBlock Text="Ожидают отправки" Foreground="{StaticResource MutedBrush}"/><TextBlock x:Name="QueueCountText" Text="0" FontSize="25" FontWeight="Bold" Foreground="#8A3FFC" Margin="0,5,0,0"/></StackPanel>
                 </Border>
             </Grid>
 
@@ -127,7 +127,7 @@
                 <DataGrid x:Name="DeliveriesGrid" AutoGenerateColumns="False" IsReadOnly="True"
                           HeadersVisibility="Column" GridLinesVisibility="Horizontal"
                           BorderThickness="0" RowHeight="48" ColumnHeaderHeight="44"
-                          SelectionMode="Single" AlternatingRowBackground="#F8FAF8"
+                          SelectionMode="Single" AlternatingRowBackground="#F8FBFF"
                           MouseDoubleClick="DeliveriesGrid_MouseDoubleClick">
                     <DataGrid.Columns>
                         <DataGridTextColumn Header="Дата" Binding="{Binding CreatedAtLabel}" Width="150" />
@@ -143,9 +143,9 @@
             </Border>
 
             <Grid Grid.Row="4" Margin="2,12,2,0">
-                <TextBlock x:Name="FooterText" Foreground="#657268" FontSize="12" />
+                <TextBlock x:Name="FooterText" Foreground="{StaticResource MutedBrush}" FontSize="12" />
                 <TextBlock Text="Двойной щелчок — детали заказа" HorizontalAlignment="Right"
-                           Foreground="#7B867D" FontSize="12" />
+                           Foreground="{StaticResource MutedBrush}" FontSize="12" />
             </Grid>
         </Grid>
     </Grid>

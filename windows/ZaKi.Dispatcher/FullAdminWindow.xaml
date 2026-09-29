@@ -6,14 +6,14 @@
         Icon="Assets/zaki.ico"
         Width="1500" Height="900" MinWidth="1050" MinHeight="650"
         WindowStartupLocation="CenterScreen"
-        Background="#F3F6F4">
+        Background="{StaticResource PageBrush}">
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="52" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <Border Background="#123D1B" Padding="15,0">
+        <Border Background="{StaticResource PrimaryDarkBrush}" Padding="15,0">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
@@ -21,8 +21,8 @@
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                    <Border Width="34" Height="34" CornerRadius="9" Background="#F4C542">
-                        <TextBlock Text="Z" FontSize="19" FontWeight="Bold" Foreground="#17331E"
+                    <Border Width="34" Height="34" CornerRadius="9" Background="{StaticResource PrimaryLightBrush}">
+                        <TextBlock Text="Z" FontSize="19" FontWeight="Bold" Foreground="{StaticResource PrimaryDarkBrush}"
                                    HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </Border>
                     <TextBlock Text="ZaKi Admin • полная Windows-панель" Foreground="White"
@@ -30,13 +30,15 @@
                 </StackPanel>
 
                 <TextBlock x:Name="StateText" Grid.Column="1" Text="Локальная панель загружается…"
-                           Foreground="#B8CFBD" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                           Foreground="#D9E8FF" HorizontalAlignment="Center" VerticalAlignment="Center" />
 
                 <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
-                    <Button Content="Локальные заказы" Background="#2A5B33" Foreground="White"
+                    <Button Content="Локальные заказы" Background="#70ABFF" Foreground="White"
                             Margin="0,0,9,0" Click="OpenNativeOrders_Click" />
-                    <Button Content="Обновить панель" Background="#F4C542" Foreground="#17331E"
-                            Click="Reload_Click" />
+                    <Button Content="Обновить панель" Background="{StaticResource PrimaryLightBrush}" Foreground="{StaticResource PrimaryDarkBrush}"
+                            Margin="0,0,9,0" Click="Reload_Click" />
+                    <Button Content="Сменить аккаунт" Background="Transparent" Foreground="White"
+                            BorderBrush="#A9C9FA" BorderThickness="1" Click="SwitchAccount_Click" />
                 </StackPanel>
             </Grid>
         </Border>
@@ -44,9 +46,9 @@
         <Grid Grid.Row="1">
             <wv2:WebView2 x:Name="AdminWebView" Visibility="Hidden" />
             <StackPanel x:Name="LoadingPanel" HorizontalAlignment="Center" VerticalAlignment="Center">
-                <ProgressBar Width="320" Height="7" IsIndeterminate="True" Foreground="#196127" />
+                <ProgressBar Width="320" Height="7" IsIndeterminate="True" Foreground="{StaticResource PrimaryBrush}" />
                 <TextBlock Text="Запуск всех модулей ZaKi Admin…" Margin="0,16,0,0"
-                           Foreground="#526157" FontSize="15" HorizontalAlignment="Center" />
+                           Foreground="{StaticResource MutedBrush}" FontSize="15" HorizontalAlignment="Center" />
             </StackPanel>
         </Grid>
     </Grid>

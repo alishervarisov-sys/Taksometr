@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Outlet, useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import {
   Box, Drawer, AppBar, Toolbar, Typography, List, ListItem,
   ListItemButton, ListItemIcon, ListItemText, IconButton, Divider
@@ -32,9 +32,10 @@ const drawerWidth = 260;
 interface LayoutProps {
   onLogout: () => void;
   isSuperAdmin: boolean;
+  children: React.ReactNode;
 }
 
-const Layout: React.FC<LayoutProps> = ({ onLogout, isSuperAdmin }) => {
+const Layout: React.FC<LayoutProps> = ({ onLogout, isSuperAdmin, children }) => {
   const navigate = useNavigate();
   const location = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -164,7 +165,7 @@ const Layout: React.FC<LayoutProps> = ({ onLogout, isSuperAdmin }) => {
           minHeight: '100vh',
         }}
       >
-        <Outlet />
+        {children}
       </Box>
     </Box>
   );

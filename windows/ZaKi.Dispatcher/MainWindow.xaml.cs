@@ -144,8 +144,8 @@ public partial class MainWindow : Window
         if (_sync.IsOnline)
         {
             ConnectionText.Text = "● Онлайн";
-            ConnectionText.Foreground = new SolidColorBrush(Color.FromRgb(25, 97, 39));
-            ConnectionBadge.Background = new SolidColorBrush(Color.FromRgb(231, 244, 234));
+            ConnectionText.Foreground = new SolidColorBrush(Color.FromRgb(30, 100, 200));
+            ConnectionBadge.Background = new SolidColorBrush(Color.FromRgb(232, 242, 255));
         }
         else
         {

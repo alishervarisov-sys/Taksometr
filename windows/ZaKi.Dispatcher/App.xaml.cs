@@ -31,17 +31,29 @@ public partial class App : Application
             var database = new LocalDatabase();
             await database.InitializeAsync();
 
+            // Extract the bundled panel while the user signs in, so opening the
+            // full admin window does not block on disk I/O.
+            _ = EmbeddedWebAdmin.EnsureExtractedAsync();
+
             var firebase = new FirebaseRestClient();
-            var login = new LoginWindow(firebase);
-            if (login.ShowDialog() != true || login.Session is null)
+            var sessionStore = new SessionStore();
+            var session = sessionStore.Load();
+            if (session is null)
             {
-                Shutdown();
-                return;
+                var login = new LoginWindow(firebase);
+                if (login.ShowDialog() != true || login.Session is null)
+                {
+                    Shutdown();
+                    return;
+                }
+
+                session = login.Session;
+                sessionStore.Save(session);
             }
 
-            _sync = new SyncService(database, firebase, login.Session.AdminId);
+            _sync = new SyncService(database, firebase, session.AdminId);
             _sync.Start();
-            var main = new FullAdminWindow(database, _sync, login.Session);
+            var main = new FullAdminWindow(database, _sync, session, sessionStore);
             MainWindow = main;
             main.Show();
         }

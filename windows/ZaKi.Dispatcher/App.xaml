@@ -3,11 +3,13 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              ShutdownMode="OnExplicitShutdown">
     <Application.Resources>
-        <SolidColorBrush x:Key="PrimaryBrush" Color="#196127" />
-        <SolidColorBrush x:Key="PrimaryDarkBrush" Color="#0E3F19" />
+        <SolidColorBrush x:Key="PrimaryBrush" Color="#3786F6" />
+        <SolidColorBrush x:Key="PrimaryDarkBrush" Color="#1E64C8" />
+        <SolidColorBrush x:Key="PrimaryLightBrush" Color="#E8F2FF" />
         <SolidColorBrush x:Key="SurfaceBrush" Color="#FFFFFF" />
-        <SolidColorBrush x:Key="PageBrush" Color="#F3F6F4" />
-        <SolidColorBrush x:Key="MutedBrush" Color="#657268" />
+        <SolidColorBrush x:Key="PageBrush" Color="#F4F8FF" />
+        <SolidColorBrush x:Key="TextBrush" Color="#172033" />
+        <SolidColorBrush x:Key="MutedBrush" Color="#667085" />
 
         <Style TargetType="Button">
             <Setter Property="Padding" Value="16,9" />
@@ -17,12 +19,12 @@
         </Style>
         <Style TargetType="TextBox">
             <Setter Property="Padding" Value="10,8" />
-            <Setter Property="BorderBrush" Value="#D6DED8" />
+            <Setter Property="BorderBrush" Value="#D6E4F7" />
             <Setter Property="BorderThickness" Value="1" />
         </Style>
         <Style TargetType="ComboBox">
             <Setter Property="Padding" Value="8,7" />
-            <Setter Property="BorderBrush" Value="#D6DED8" />
+            <Setter Property="BorderBrush" Value="#D6E4F7" />
         </Style>
     </Application.Resources>
 </Application>

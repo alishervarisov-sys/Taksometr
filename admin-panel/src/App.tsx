@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { ThemeProvider, createTheme, CssBaseline } from '@mui/material';
 import Layout from './components/Layout';
 import Dashboard from './pages/Dashboard';
@@ -64,6 +64,74 @@ const theme = createTheme({
   },
 });
 
+type CachedPage = {
+  path: string;
+  render: (adminId: string) => React.ReactNode;
+  superAdminOnly?: boolean;
+};
+
+const cachedPages: CachedPage[] = [
+  { path: '/', render: adminId => <Dashboard adminId={adminId} /> },
+  { path: '/couriers', render: adminId => <Couriers adminId={adminId} /> },
+  { path: '/winner', render: adminId => <Winner adminId={adminId} /> },
+  { path: '/tariffs', render: adminId => <Tariffs adminId={adminId} /> },
+  { path: '/deliveries', render: adminId => <Deliveries adminId={adminId} /> },
+  { path: '/smart-dispatch', render: adminId => <SmartDispatch adminId={adminId} /> },
+  { path: '/clients', render: adminId => <Clients adminId={adminId} /> },
+  { path: '/map', render: adminId => <MapView adminId={adminId} /> },
+  { path: '/tracking', render: adminId => <Tracking adminId={adminId} /> },
+  { path: '/statistics', render: adminId => <Statistics adminId={adminId} /> },
+  { path: '/analytics', render: adminId => <Analytics adminId={adminId} /> },
+  { path: '/commission', render: adminId => <Commission adminId={adminId} /> },
+  { path: '/credentials', render: adminId => <Credentials adminId={adminId} /> },
+  { path: '/admins', render: () => <Admins />, superAdminOnly: true },
+  { path: '/telegram-report', render: adminId => <TelegramReport adminId={adminId} /> },
+  { path: '/taxi', render: adminId => <Taxi adminId={adminId} /> },
+  { path: '/taxi-drivers', render: adminId => <TaxiDrivers adminId={adminId} /> },
+  { path: '/app-versions', render: adminId => <AppVersions adminId={adminId} /> },
+];
+
+interface CachedAdminShellProps {
+  adminId: string;
+  isSuperAdmin: boolean;
+  onLogout: () => void;
+}
+
+const CachedAdminShell: React.FC<CachedAdminShellProps> = ({ adminId, isSuperAdmin, onLogout }) => {
+  const location = useLocation();
+  const allowedPages = cachedPages.filter(page => !page.superAdminOnly || isSuperAdmin);
+  const activePage = allowedPages.find(page => page.path === location.pathname) ?? allowedPages[0];
+  const [visitedPaths, setVisitedPaths] = useState<Set<string>>(() => new Set([activePage.path]));
+
+  useEffect(() => {
+    setVisitedPaths(previous => {
+      if (previous.has(activePage.path)) return previous;
+      return new Set(previous).add(activePage.path);
+    });
+  }, [activePage.path]);
+
+  // Pages are mounted only after their first visit and then kept alive. This
+  // retains their UI state, Firestore listeners and IndexedDB-backed data, so
+  // switching back to a visited section is immediate.
+  const pagesToRender = visitedPaths.has(activePage.path)
+    ? visitedPaths
+    : new Set(visitedPaths).add(activePage.path);
+
+  return (
+    <Layout onLogout={onLogout} isSuperAdmin={isSuperAdmin}>
+      {Array.from(pagesToRender).map(path => {
+        const page = allowedPages.find(item => item.path === path);
+        if (!page) return null;
+        return (
+          <div key={path} style={{ display: path === activePage.path ? 'block' : 'none' }}>
+            {page.render(adminId)}
+          </div>
+        );
+      })}
+    </Layout>
+  );
+};
+
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [adminId, setAdminId] = useState<string | null>(null);
@@ -106,30 +174,13 @@ function App() {
               <Route path="*" element={<Navigate to="/login" />} />
             </>
           ) : (
-            <Route path="/" element={<Layout onLogout={handleLogout} isSuperAdmin={adminRole === 'SUPER_ADMIN'} />}>
-              <Route index element={<Dashboard adminId={adminId!} />} />
-              <Route path="couriers" element={<Couriers adminId={adminId!} />} />
-              <Route path="winner" element={<Winner adminId={adminId!} />} />
-              <Route path="tariffs" element={<Tariffs adminId={adminId!} />} />
-              <Route path="deliveries" element={<Deliveries adminId={adminId!} />} />
-              <Route path="smart-dispatch" element={<SmartDispatch adminId={adminId!} />} />
-              <Route path="clients" element={<Clients adminId={adminId!} />} />
-              {/* Delivery chains removed */}
-              <Route path="map" element={<MapView adminId={adminId!} />} />
-              <Route path="tracking" element={<Tracking adminId={adminId!} />} />
-              <Route path="statistics" element={<Statistics adminId={adminId!} />} />
-              <Route path="analytics" element={<Analytics adminId={adminId!} />} />
-              <Route path="commission" element={<Commission adminId={adminId!} />} />
-              <Route path="credentials" element={<Credentials adminId={adminId!} />} />
-              {adminRole === 'SUPER_ADMIN' && (
-                <Route path="admins" element={<Admins />} />
-              )}
-              <Route path="telegram-report" element={<TelegramReport adminId={adminId!} />} />
-              <Route path="taxi" element={<Taxi adminId={adminId!} />} />
-              <Route path="taxi-drivers" element={<TaxiDrivers adminId={adminId!} />} />
-              <Route path="app-versions" element={<AppVersions adminId={adminId!} />} />
-              <Route path="*" element={<Navigate to="/" />} />
-            </Route>
+            <Route path="*" element={
+              <CachedAdminShell
+                adminId={adminId!}
+                isSuperAdmin={adminRole === 'SUPER_ADMIN'}
+                onLogout={handleLogout}
+              />
+            } />
           )}
         </Routes>
       </BrowserRouter>

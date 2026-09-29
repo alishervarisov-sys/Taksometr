@@ -13,16 +13,22 @@ public partial class FullAdminWindow : Window
     private readonly LocalDatabase _database;
     private readonly SyncService _sync;
     private readonly AdminSession _session;
+    private readonly SessionStore _sessionStore;
     private MainWindow? _nativeOrdersWindow;
     private string? _webRoot;
     private string? _routeToRestore;
 
-    public FullAdminWindow(LocalDatabase database, SyncService sync, AdminSession session)
+    public FullAdminWindow(
+        LocalDatabase database,
+        SyncService sync,
+        AdminSession session,
+        SessionStore sessionStore)
     {
         InitializeComponent();
         _database = database;
         _sync = sync;
         _session = session;
+        _sessionStore = sessionStore;
         Loaded += FullAdminWindow_Loaded;
         _sync.StateChanged += Sync_StateChanged;
         Closed += FullAdminWindow_Closed;
@@ -149,7 +155,9 @@ public partial class FullAdminWindow : Window
             // Recovery path also fixes an already visible ERR_FILE_NOT_FOUND.
             AdminWebView.CoreWebView2?.Navigate(homeUrl);
         }
-        _ = _sync.SyncNowAsync(full: true);
+        // The web panel already reloads its own Firebase data. Keep the local
+        // SQLite cache fresh without fetching the full 5,000-order history.
+        _ = _sync.SyncNowAsync();
     }
 
     private void OpenNativeOrders_Click(object sender, RoutedEventArgs e)
@@ -165,6 +173,18 @@ public partial class FullAdminWindow : Window
             ShowInTaskbar = false
         };
         _nativeOrdersWindow.Show();
+    }
+
+    private void SwitchAccount_Click(object sender, RoutedEventArgs e)
+    {
+        if (MessageBox.Show(
+                "При следующем запуске потребуется войти под другим пользователем.",
+                "Сменить аккаунт",
+                MessageBoxButton.OKCancel,
+                MessageBoxImage.Question) != MessageBoxResult.OK) return;
+
+        _sessionStore.Clear();
+        Application.Current.Shutdown();
     }
 
     private void Sync_StateChanged(object? sender, EventArgs e) => Dispatcher.Invoke(UpdateStateText);

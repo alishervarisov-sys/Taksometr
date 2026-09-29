@@ -8,47 +8,50 @@ namespace ZaKi.Dispatcher.Services;
 public static class EmbeddedWebAdmin
 {
     private const string ResourceName = "ZaKi.WebAdmin.zip";
-    private static readonly SemaphoreSlim ExtractionGate = new(1, 1);
+    private static readonly object ExtractionLock = new();
     private static string? _cachedPath;
+    private static Task<string>? _extractionTask;
 
-    public static async Task<string> EnsureExtractedAsync()
+    public static Task<string> EnsureExtractedAsync()
     {
-        if (HasValidIndex(_cachedPath)) return _cachedPath!;
+        if (HasValidIndex(_cachedPath)) return Task.FromResult(_cachedPath!);
 
-        await ExtractionGate.WaitAsync();
-        try
+        lock (ExtractionLock)
         {
-            if (HasValidIndex(_cachedPath)) return _cachedPath!;
+            if (HasValidIndex(_cachedPath)) return Task.FromResult(_cachedPath!);
+            if (_extractionTask is null || _extractionTask.IsFaulted || _extractionTask.IsCanceled)
+                _extractionTask = Task.Run(ExtractWebAdmin);
 
-            await using var resource = Assembly.GetExecutingAssembly()
-                .GetManifestResourceStream(ResourceName)
-                ?? throw new InvalidOperationException("Встроенная веб-панель отсутствует в приложении.");
-
-            using var sha256 = SHA256.Create();
-            var hash = Convert.ToHexString(await sha256.ComputeHashAsync(resource))
-                .ToLowerInvariant()[..16];
-            resource.Position = 0;
-
-            var targetFolder = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "ZaKi", "Dispatcher", "WebAdmin", hash);
-
-            if (!HasValidIndex(targetFolder))
-            {
-                Directory.CreateDirectory(targetFolder);
-                ZipFile.ExtractToDirectory(resource, targetFolder, overwriteFiles: true);
-            }
-
-            if (!HasValidIndex(targetFolder))
-                throw new InvalidDataException("Не удалось подготовить встроенную веб-панель.");
-
-            _cachedPath = targetFolder;
-            return targetFolder;
+            return _extractionTask;
         }
-        finally
+    }
+
+    private static string ExtractWebAdmin()
+    {
+        using var resource = Assembly.GetExecutingAssembly()
+            .GetManifestResourceStream(ResourceName)
+            ?? throw new InvalidOperationException("Встроенная веб-панель отсутствует в приложении.");
+
+        using var sha256 = SHA256.Create();
+        var hash = Convert.ToHexString(sha256.ComputeHash(resource))
+            .ToLowerInvariant()[..16];
+        resource.Position = 0;
+
+        var targetFolder = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "ZaKi", "Dispatcher", "WebAdmin", hash);
+
+        if (!HasValidIndex(targetFolder))
         {
-            ExtractionGate.Release();
+            Directory.CreateDirectory(targetFolder);
+            ZipFile.ExtractToDirectory(resource, targetFolder, overwriteFiles: true);
         }
+
+        if (!HasValidIndex(targetFolder))
+            throw new InvalidDataException("Не удалось подготовить встроенную веб-панель.");
+
+        _cachedPath = targetFolder;
+        return targetFolder;
     }
 
     private static bool HasValidIndex(string? folder) =>

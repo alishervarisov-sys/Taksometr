@@ -216,6 +216,8 @@ Windows source is `windows/ZaKi.Dispatcher/`:
 - `Services/EmbeddedWebAdmin.cs`: extracts/serves embedded web admin
 - `Data/LocalDatabase.cs`: local SQLite state
 - `ZaKi.Dispatcher.csproj`: .NET 9 WPF packaging
+- `installer/ZaKi-Admin-Windows.iss`: Windows installer definition
+- `build-installer.ps1`: publishes the app and produces the installer
 
 Ignore `bin/`, `obj/`, `publish-onefile/`, `release/`, packaged EXEs/ZIPs, and
 `Assets/webadmin.zip` unless the user is specifically building a release.

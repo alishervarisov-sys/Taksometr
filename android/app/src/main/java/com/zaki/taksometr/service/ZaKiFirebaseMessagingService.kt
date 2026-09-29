@@ -53,12 +53,12 @@ class ZaKiFirebaseMessagingService : FirebaseMessagingService() {
 
         when (type) {
             "REQUEST_LOCATION" -> handleLocationRequest()
-            "ADMIN_MARKETPLACE_ORDER" -> {
+            "ADMIN_MARKETPLACE_ORDER", "SMART_DISPATCH_OFFER" -> {
                 message.data["deliveryId"]?.let { deliveryId ->
                     prefs.edit().putString(Constants.PREF_PENDING_MARKETPLACE_DELIVERY_ID, deliveryId).apply()
                 }
                 val title = message.data["title"] ?: message.notification?.title ?: "Новый заказ"
-                val body  = message.data["body"]  ?: message.notification?.body  ?: "Свободный заказ ожидает принятия"
+                val body  = message.data["body"]  ?: message.notification?.body  ?: "Вам предложен заказ"
                 showNotification(title, body, ZaKiApp.NEW_ORDER_CHANNEL_ID)
             }
             "ADMIN_ORDER_UPDATED" -> {

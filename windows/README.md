@@ -26,5 +26,19 @@ dotnet restore .\windows\ZaKi.Dispatcher\ZaKi.Dispatcher.csproj
 dotnet build .\windows\ZaKi.Dispatcher\ZaKi.Dispatcher.csproj -c Release
 ```
 
+## Установка на компьютер
+
+Для выдачи пользователю создаётся обычный установщик Windows: он устанавливает
+приложение в `Program Files`, добавляет пункт меню «Пуск», ярлык (по выбору) и
+удаление через системные настройки.
+
+```powershell
+.\windows\build-installer.ps1
+```
+
+Для создания установщика на компьютере разработчика должен быть установлен
+Inno Setup 6. Готовый `ZaKi-Admin-Windows-Setup-*.exe` появится в
+`windows\release\installer\`.
+
 Для первого входа и операций Cloud Functions нужен интернет. Ранее загруженные
 экраны Firestore и нативный список заказов доступны из локальных кэшей.

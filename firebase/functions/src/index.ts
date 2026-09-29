@@ -245,6 +245,10 @@ async function sendPushToCourier(courierData: any, payload: {
   // (e.g. winner of the month). Leave false for real-time/data-only signals
   // that rely on onMessageReceived() waking the app.
   withSystemNotification?: boolean;
+  // Android 8+ uses notification channels for sound. New-order alerts must use
+  // the dedicated channel that contains ZaKi's bundled melody.
+  androidChannelId?: string;
+  androidSound?: string;
 }): Promise<boolean> {
   const fcmToken = courierData?.fcmToken;
   if (!fcmToken) {
@@ -276,8 +280,8 @@ async function sendPushToCourier(courierData: any, payload: {
       message.android = {
         priority: "high",
         notification: {
-          channelId: "zaki_notifications",
-          sound: "default",
+          channelId: options.androidChannelId || "zaki_notifications",
+          sound: options.androidSound || "default",
         },
       };
     }
@@ -296,7 +300,11 @@ async function sendArchivedPushToCourier(
   courierId: string,
   courierData: any,
   payload: {title: string; body: string; data: {[key: string]: string}},
-  options?: {withSystemNotification?: boolean}
+  options?: {
+    withSystemNotification?: boolean;
+    androidChannelId?: string;
+    androidSound?: string;
+  }
 ): Promise<boolean> {
   try {
     await db.collection("courierNotifications").add({
@@ -322,7 +330,7 @@ async function notifySmartDispatchOffer(courierId: string, courierData: any, del
     title: "Персональное предложение заказа",
     body: pickup?.address ? `Заказ: ${pickup.address}` : "Вам предложен заказ",
     data: {type: "SMART_DISPATCH_OFFER", deliveryId},
-  }, {withSystemNotification: true});
+  }, {withSystemNotification: true, androidChannelId: "zaki_new_orders", androidSound: "notice8"});
 }
 
 // Keeps the indexed H3 cell beside each fresh GPS update. The timestamp guard
