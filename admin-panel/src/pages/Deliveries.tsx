@@ -56,6 +56,11 @@ interface CourierLocation {
   timestamp?: number;
 }
 
+interface PickupEta {
+  minutes: number;
+  roadDistanceMeters: number;
+}
+
 type Period = 'all' | 'today' | 'yesterday' | 'week' | 'month' | 'year' | 'custom';
 type ReportType = 'commission' | 'earnings';
 
@@ -88,6 +93,34 @@ const SAVED_ADDRESS_POINTS_KEY = 'zaki_admin_saved_address_points';
 const MAX_SAVED_ADDRESS_POINTS = 300;
 
 const normalizeAddressKey = (address: string) => address.trim().toLowerCase().replace(/\s+/g, ' ');
+
+// This is deliberately the same conservative approximation used in the
+// courier's pending-orders map: road distance is estimated from the straight
+// line and a city speed of 28 km/h. It remains available when Routes API is
+// unavailable and is refreshed with every live courier location update.
+function estimatePickupEta(
+  courier: CourierLocation | null,
+  pickup: Delivery['pickup'] | undefined,
+): PickupEta | null {
+  if (!courier || !pickup) return null;
+  const values = [courier.latitude, courier.longitude, pickup.latitude, pickup.longitude];
+  if (!values.every(Number.isFinite)) return null;
+
+  const toRadians = (value: number) => value * Math.PI / 180;
+  const earthRadiusMeters = 6_371_000;
+  const latitudeDelta = toRadians(pickup.latitude - courier.latitude);
+  const longitudeDelta = toRadians(pickup.longitude - courier.longitude);
+  const a = Math.sin(latitudeDelta / 2) ** 2 +
+    Math.cos(toRadians(courier.latitude)) * Math.cos(toRadians(pickup.latitude)) *
+    Math.sin(longitudeDelta / 2) ** 2;
+  const straightDistanceMeters = earthRadiusMeters * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  const roadDistanceMeters = straightDistanceMeters * 1.25;
+
+  return {
+    roadDistanceMeters,
+    minutes: Math.max(2, Math.ceil((roadDistanceMeters / 1000) / 28 * 60)),
+  };
+}
 
 function getSavedAddressPoint(address: string): SavedAddressPoint | null {
   const key = normalizeAddressKey(address);
@@ -1435,6 +1468,18 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
                     : 'Ожидаем текущую геопозицию курьера.'}
                 </Alert>
               )}
+              {selectedDelivery.orderKind === 'MARKETPLACE' &&
+                selectedDelivery.status === 'IN_PROGRESS' &&
+                selectedDelivery.adminOrderStage === 'ACCEPTED' && (
+                  <Alert severity={liveCourierLocation ? 'info' : 'warning'} sx={{ mb: 2 }}>
+                    {(() => {
+                      const eta = estimatePickupEta(liveCourierLocation, selectedDelivery.pickup);
+                      return eta
+                        ? `Курьер будет у точки забора примерно через ${eta.minutes} мин. Расстояние: ${formatDistance(eta.roadDistanceMeters)}.`
+                        : 'Курьер принял заказ. Время прибытия появится после получения его геопозиции.';
+                    })()}
+                  </Alert>
+                )}
               <Grid container spacing={2}>
                 <Grid item xs={6}><Typography variant="body2" color="text.secondary">Курьер</Typography><Typography fontWeight={600}>{selectedDelivery.courierName}</Typography></Grid>
                 <Grid item xs={6}><Typography variant="body2" color="text.secondary">Клиент</Typography><Typography fontWeight={600}>{selectedDelivery.clientPhone}</Typography></Grid>

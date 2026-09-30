@@ -3,8 +3,10 @@ import * as admin from "firebase-admin";
 import * as crypto from "crypto";
 import {loadDispatchConfig, saveDispatchConfig} from "./dispatch/config-service";
 import {dispatchBatch, dispatchOrder, expireOutstandingOffers, reassignOrder} from "./dispatch/dispatch-service";
-import {toH3Cell} from "./dispatch/h3-service";
+import {distanceMeters, toH3Cell} from "./dispatch/h3-service";
 import {validLocation} from "./dispatch/hard-constraints";
+import {applyGoogleRoadMetrics} from "./dispatch/routes-api-service";
+import {CourierCandidate, GeoPoint} from "./dispatch/contracts";
 
 admin.initializeApp();
 
@@ -142,6 +144,54 @@ function formatCostForSms(cost: number): string {
     return `${new Intl.NumberFormat("ru-RU").format(somoni)}.${String(diram).padStart(2, "0")}`;
   }
   return new Intl.NumberFormat("ru-RU", {maximumFractionDigits: 0}).format(cost);
+}
+
+function validGeoPoint(value: unknown): value is GeoPoint {
+  const point = value as GeoPoint | null;
+  return !!point && Number.isFinite(point.latitude) && Number.isFinite(point.longitude) &&
+    Math.abs(point.latitude) <= 90 && Math.abs(point.longitude) <= 180;
+}
+
+/**
+ * Calculates a client's arrival estimate from the courier's latest GPS point
+ * to an order pickup point. Google Routes is used when configured; its
+ * geodesic estimate is retained as a safe fallback. Stale or missing GPS is
+ * deliberately omitted rather than presented as a current estimate.
+ */
+async function calculateCourierArrivalMinutes(courierData: any, pickup: unknown): Promise<number | null> {
+  if (!validLocation(courierData.lastLocation) || !validGeoPoint(pickup)) {
+    return null;
+  }
+
+  const config = await loadDispatchConfig(db);
+  if (Date.now() - courierData.lastLocation.timestamp > config.maxGpsAgeSeconds * 1000) {
+    return null;
+  }
+
+  const courierLocation: GeoPoint = courierData.lastLocation;
+  const distance = distanceMeters(courierLocation, pickup);
+  const averageSpeedKph = config.averageSpeedKph > 0 ? config.averageSpeedKph : 22;
+  const fallbackEtaSeconds = Math.round((distance / 1000) / averageSpeedKph * 3600);
+  const candidate: CourierCandidate = {
+    id: "accepted-courier",
+    name: courierData.name || "",
+    phone: courierData.phone || "",
+    location: courierLocation,
+    h3Cell: "",
+    distanceMeters: distance,
+    etaSeconds: fallbackEtaSeconds,
+    etaSource: "GEODESIC_FALLBACK",
+    activeOrders: 0,
+    idleTimeSeconds: 0,
+    score: 0,
+  };
+
+  const [routeCandidate] = await applyGoogleRoadMetrics([candidate], pickup, config);
+  if (!routeCandidate || !Number.isFinite(routeCandidate.etaSeconds) || routeCandidate.etaSeconds < 0) {
+    return null;
+  }
+
+  return Math.max(1, Math.ceil(routeCandidate.etaSeconds / 60));
 }
 
 // ============ CLIENT RATING (отзывы) ============
@@ -1880,12 +1930,30 @@ export const acceptMarketplaceDelivery = functions.https.onCall(async (data, con
 
   const courierName = acceptanceResult.courierData.name || "";
   const courierPhone = acceptanceResult.courierData.phone || "";
+  const pickupAddress = String(acceptanceResult.deliveryData.pickup?.address || "").trim();
 
   let smsText = `Салом! Курьери ZaKi фармоиши шуморо қабул кард. ${courierName}`;
   if (courierPhone) {
     smsText += `, тел: ${courierPhone}`;
   }
   smsText += `.`;
+
+  if (pickupAddress) {
+    smsText += ` Нишонаи гирифтани фармоиш: ${pickupAddress}.`;
+
+    try {
+      const arrivalMinutes = await calculateCourierArrivalMinutes(
+        acceptanceResult.courierData,
+        acceptanceResult.deliveryData.pickup
+      );
+      if (arrivalMinutes !== null) {
+        smsText += ` Курьер тақрибан пас аз ${arrivalMinutes} дақиқа мерасад.`;
+      }
+    } catch (error) {
+      // An ETA is optional: never prevent the acceptance SMS from being sent.
+      console.error(`Unable to calculate arrival time for delivery ${deliveryId}:`, error);
+    }
+  }
 
   await sendSms(acceptanceResult.deliveryData.clientPhone, smsText);
 
@@ -3387,19 +3455,17 @@ export const assignCourierToClient = functions.https.onCall(async (data, context
     );
   }
 
-  // Build SMS message in Tajik
+  // Use the same client-facing wording as when a courier accepts an order.
   const courierName = courierData.name || "";
   const courierPhone = courierData.phone || "";
   
-  let smsText = `Расонандаи мо ${courierName}`;
+  let smsText = `Салом! Курьери ZaKi фармоиши шуморо қабул кард. ${courierName}`;
   
   if (courierPhone) {
-    smsText += ` (тел: ${courierPhone})`;
+    smsText += `, тел: ${courierPhone}`;
   }
   
-  smsText += ` барои шумо таъин карда шуд. `;
-  smsText += `Барои фармоиш додан бо ӯ тамос гиред. `;
-  smsText += `Барои даъвати расонанда телеграм бот: https://t.me/zakidostavka_bot`;
+  smsText += `.`;
 
   // Send SMS to client
   await sendSms(clientPhone, smsText);
