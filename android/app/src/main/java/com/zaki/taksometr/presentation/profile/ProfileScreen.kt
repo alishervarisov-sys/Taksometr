@@ -16,6 +16,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -48,11 +49,14 @@ fun ProfileScreen(
     onDaysClick: () -> Unit,
     onTransactionsClick: () -> Unit,
     onNotificationsClick: () -> Unit,
+    openTopUpInitially: Boolean = false,
     viewModel: ProfileViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsState()
     val context = LocalContext.current
     var showLogoutDialog by remember { mutableStateOf(false) }
+    var showTopUpDialog by rememberSaveable { mutableStateOf(openTopUpInitially) }
+    var topUpAmount by rememberSaveable { mutableStateOf("") }
     var showTransferDialog by remember { mutableStateOf(false) }
     var transferMenuExpanded by remember { mutableStateOf(false) }
     var selectedTransferRecipient by remember { mutableStateOf<TransferRecipient?>(null) }
@@ -77,6 +81,15 @@ fun ProfileScreen(
         state.photoError?.let {
             snackbarHostState.showSnackbar(it)
             viewModel.clearPhotoError()
+        }
+    }
+
+    LaunchedEffect(state.topUpSuccess) {
+        state.topUpSuccess?.let {
+            showTopUpDialog = false
+            topUpAmount = ""
+            snackbarHostState.showSnackbar(it)
+            viewModel.clearTopUpMessage()
         }
     }
 
@@ -294,6 +307,19 @@ fun ProfileScreen(
                         fontWeight = FontWeight.Bold,
                         color = Color.White
                     )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Button(
+                        onClick = { viewModel.clearTopUpMessage(); showTopUpDialog = true },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = state.user != null && !state.isRequestingTopUp
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Пополнить баланс")
+                    }
+                    if (!state.user?.pendingTopUpRequestId.isNullOrBlank()) {
+                        Text("Заявка на ${LocationUtils.formatCost(state.user?.pendingTopUpAmount ?: 0.0)} ожидает одобрения", color = Color.White, modifier = Modifier.padding(top = 8.dp))
+                    }
                 }
             }
 
@@ -443,6 +469,39 @@ fun ProfileScreen(
             onDismiss = { showLanguageDialog = false },
             onLanguageSelected = {
                 (context as? android.app.Activity)?.recreate()
+            }
+        )
+    }
+
+    if (showTopUpDialog) {
+        val pendingRequest = !state.user?.pendingTopUpRequestId.isNullOrBlank()
+        AlertDialog(
+            onDismissRequest = { if (!state.isRequestingTopUp) showTopUpDialog = false },
+            title = { Text("Пополнить баланс") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    if (pendingRequest) {
+                        Text("Заявка на ${LocationUtils.formatCost(state.user?.pendingTopUpAmount ?: 0.0)} уже отправлена. Ожидайте решения администратора.")
+                    } else {
+                        Text("Введите сумму. Баланс будет пополнен после одобрения администратором.")
+                        OutlinedTextField(
+                            value = topUpAmount, onValueChange = { topUpAmount = it },
+                            label = { Text("Сумма, сомони") }, singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            enabled = !state.isRequestingTopUp, modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    state.topUpError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                }
+            },
+            confirmButton = {
+                if (!pendingRequest) Button(
+                    onClick = { viewModel.requestTopUp(topUpAmount) },
+                    enabled = topUpAmount.isNotBlank() && !state.isRequestingTopUp && state.user != null
+                ) { Text(if (state.isRequestingTopUp) "Отправка…" else "Отправить заявку") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showTopUpDialog = false }, enabled = !state.isRequestingTopUp) { Text("Закрыть") }
             }
         )
     }

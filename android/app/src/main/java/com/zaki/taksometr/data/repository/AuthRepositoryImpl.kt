@@ -55,7 +55,11 @@ class AuthRepositoryImpl @Inject constructor(
                 fcmToken = doc.getString("fcmToken") ?: "",
                 photoBase64 = doc.getString("photoBase64") ?: "",
                 rating = doc.getDouble("rating") ?: 0.0,
-                ratingCount = (doc.getLong("ratingCount") ?: 0L).toInt()
+                ratingCount = (doc.getLong("ratingCount") ?: 0L).toInt(),
+                lowBalanceNotificationActive = doc.getBoolean("lowBalanceNotificationActive") ?: false,
+                lowBalanceNotificationId = doc.getString("lowBalanceNotificationId") ?: "",
+                pendingTopUpRequestId = doc.getString("pendingTopUpRequestId") ?: "",
+                pendingTopUpAmount = doc.getDouble("pendingTopUpAmount") ?: 0.0
             )
 
             if (user.isBlocked) {
@@ -81,6 +85,7 @@ class AuthRepositoryImpl @Inject constructor(
         // Stop the continuous shift tracker so it doesn't keep running for a
         // logged-out session.
         ShiftTrackingService.stop(context)
+        com.zaki.taksometr.util.BalanceNotification.clear(context)
         prefs.edit()
             .remove(Constants.PREF_USER_ID)
             .remove(Constants.PREF_USER_NAME)
@@ -124,7 +129,11 @@ class AuthRepositoryImpl @Inject constructor(
                     fcmToken = snapshot.getString("fcmToken") ?: "",
                     photoBase64 = snapshot.getString("photoBase64") ?: "",
                     rating = snapshot.getDouble("rating") ?: 0.0,
-                    ratingCount = (snapshot.getLong("ratingCount") ?: 0L).toInt()
+                    ratingCount = (snapshot.getLong("ratingCount") ?: 0L).toInt(),
+                    lowBalanceNotificationActive = snapshot.getBoolean("lowBalanceNotificationActive") ?: false,
+                    lowBalanceNotificationId = snapshot.getString("lowBalanceNotificationId") ?: "",
+                    pendingTopUpRequestId = snapshot.getString("pendingTopUpRequestId") ?: "",
+                    pendingTopUpAmount = snapshot.getDouble("pendingTopUpAmount") ?: 0.0
                 )
                 // Keep the shift-flag mirror in sync (covers admin-side changes).
                 prefs.edit().putBoolean(Constants.PREF_IS_ON_SHIFT, user.isOnShift).apply()

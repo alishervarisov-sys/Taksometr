@@ -7,6 +7,8 @@ import {distanceMeters, toH3Cell} from "./dispatch/h3-service";
 import {validLocation} from "./dispatch/hard-constraints";
 import {applyGoogleRoadMetrics} from "./dispatch/routes-api-service";
 import {CourierCandidate, GeoPoint} from "./dispatch/contracts";
+import {createBalanceService} from "./balance-service";
+import {createAdminPushService} from "./admin-push";
 
 admin.initializeApp();
 
@@ -2622,6 +2624,26 @@ export const updateCommission = functions.https.onCall(async (data, context) => 
   return {success: true};
 });
 
+const balanceService = createBalanceService(db, verifyAdmin);
+const adminPushService = createAdminPushService(db, verifyAdmin);
+export const getAdminWebPushConfig = functions.https.onCall(data => adminPushService.getConfig(data));
+export const setAdminWebPushConfig = functions.https.onCall(data => adminPushService.saveConfig(data));
+export const registerAdminWebPush = functions.https.onCall(data => adminPushService.register(data));
+export const getBalanceTopUpRequests = functions.https.onCall(data => adminPushService.listRequests(data));
+export const notifyAdminsOfTopUpRequest = functions.runWith({failurePolicy: true}).firestore
+  .document("balanceTopUpRequests/{requestId}").onCreate((_snap, context) => adminPushService.notifyRequest(context.params.requestId));
+export const requestBalanceTopUp = functions.https.onCall(data => balanceService.requestTopUp(data));
+export const reviewBalanceTopUp = functions.https.onCall(data => balanceService.reviewTopUp(data));
+export const notifyCourierLowBalance = functions.runWith({failurePolicy: true}).firestore.document("users/{courierId}")
+  .onWrite(async (change, context) => {
+    if (!change.after.exists || change.after.get("role") !== "COURIER") return;
+    await balanceService.handleBalanceChange(
+      context.params.courierId,
+      change.before.exists ? Number(change.before.get("balance") || 0) : undefined,
+      Number(change.after.get("balance") || 0), context.eventId, change.after.updateTime!.toMillis()
+    );
+  });
+
 // ============ ADMIN: ADJUST COURIER BALANCE ============
 export const topUpBalance = functions.https.onCall(async (data, context) => {
   const {adminId, courierId, amount: rawAmount, note, paymentStatus} = data;
@@ -2675,7 +2697,7 @@ export const topUpBalance = functions.https.onCall(async (data, context) => {
       ...(initialPaymentStatus === "PAID" ? {paidAt: createdAt} : {}),
     } : {};
 
-    transaction.update(courierRef, {balance: newBalance});
+    transaction.update(courierRef, {balance: newBalance, ...(signedAmount > 0 ? {lowBalanceNotificationActive: false} : {})});
     transaction.set(txRef, {
       courierId,
       courierName: courierData.name || "",
@@ -2701,10 +2723,11 @@ export const topUpBalance = functions.https.onCall(async (data, context) => {
     body: `${isDeduction ? "-" : "+"}${formatCostForSms(normalizedAmount)} сомони. Новый баланс: ${formatCostForSms(adjustment.newBalance)} сомони`,
     data: {
       type: isDeduction ? "BALANCE_DEDUCTION" : "BALANCE_TOP_UP",
+      courierId,
       amount: String(normalizedAmount),
       newBalance: String(adjustment.newBalance),
     },
-  }, {withSystemNotification: true});
+  }, {withSystemNotification: isDeduction});
 
   return {
     success: true,
@@ -3051,8 +3074,12 @@ export const getCourierNotifications = functions.https.onCall(async (data) => {
     query = query.startAfter(cursor);
   }
   const snapshot = await query.get();
+  const courier = await db.collection("users").doc(courierId).get();
   return {
-    notifications: snapshot.docs.map(doc => {
+    notifications: snapshot.docs.filter(doc =>
+      doc.get("type") !== "BALANCE_RECOVERED" && (doc.get("type") !== "LOW_BALANCE" ||
+      (courier.get("lowBalanceNotificationActive") === true && courier.get("lowBalanceNotificationId") === doc.id))
+    ).map(doc => {
       const type = doc.get("type") || "";
       return {
         id: doc.id,
@@ -3296,6 +3323,9 @@ async function deliverOutboxNotification(
   const courierDoc = await db.collection("users").doc(data.courierId).get();
   const courierData = courierDoc.exists ? courierDoc.data()! : {};
 
+  if (data.type === "LOW_BALANCE" && (courierData.lowBalanceNotificationActive !== true ||
+      courierData.lowBalanceNotificationId !== docSnap.id)) return true;
+
   const payloadData: {[key: string]: string} = {type: data.type || ""};
   if (data.payload && typeof data.payload === "object") {
     Object.keys(data.payload).forEach(k => {
@@ -3306,7 +3336,7 @@ async function deliverOutboxNotification(
   return sendPushToCourier(
     courierData,
     {title: data.title, body: data.body, data: payloadData},
-    {withSystemNotification: true}
+    {withSystemNotification: !["LOW_BALANCE", "BALANCE_RECOVERED", "BALANCE_TOP_UP"].includes(data.type)}
   );
 }
 

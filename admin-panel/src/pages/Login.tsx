@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   Box, Card, CardContent, TextField, Button, Typography, Alert, CircularProgress
 } from '@mui/material';
@@ -13,6 +14,13 @@ const SUPER_ADMIN_EMAIL = 'alishervarisov@gmail.com';
 const SUPER_ADMIN_PASSWORD = 'abubakr1986';
 
 const Login: React.FC<LoginProps> = ({ onLogin }) => {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const finishLogin = (id: string, role: 'ADMIN' | 'SUPER_ADMIN') => {
+    const returnTo = location.state?.returnTo;
+    onLogin(id, role);
+    navigate(typeof returnTo === 'string' && /^\/commission(?:\?|$)/.test(returnTo) ? returnTo : '/', { replace: true });
+  };
   const [login, setLogin] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -27,7 +35,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
       // Check for super admin first (email-based)
       if (login === SUPER_ADMIN_EMAIL && password === SUPER_ADMIN_PASSWORD) {
         // Super admin login
-        onLogin('SUPER_ADMIN', 'SUPER_ADMIN');
+        finishLogin('SUPER_ADMIN', 'SUPER_ADMIN');
         setLoading(false);
         return;
       }
@@ -55,7 +63,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
       }
 
       const adminDoc = snapshot.docs[0];
-      onLogin(adminDoc.id, 'ADMIN');
+      finishLogin(adminDoc.id, 'ADMIN');
     } catch (err: any) {
       setError('Ошибка входа: ' + err.message);
     } finally {

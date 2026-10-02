@@ -120,6 +120,22 @@ fun NavGraph(
             DailyStatsScreen(onBack = { navController.popBackStack() })
         }
 
+        composable(Screen.BalanceTopUp.route) {
+            ProfileScreen(
+                onBack = { navController.popBackStack() },
+                onLogout = {
+                    navController.navigate(Screen.Auth.route) {
+                        popUpTo(Screen.Home.route) { inclusive = true }
+                    }
+                },
+                onHistoryClick = { navController.navigate(Screen.History.route) },
+                onDaysClick = { navController.navigate(Screen.DailyStats.route) },
+                onTransactionsClick = { navController.navigate(Screen.Operations.route) },
+                onNotificationsClick = { navController.navigate(Screen.CourierNotifications.route) },
+                openTopUpInitially = true
+            )
+        }
+
         composable(Screen.Operations.route) {
             OperationsScreen(
                 onBack = { navController.popBackStack() },
@@ -132,6 +148,7 @@ fun NavGraph(
         composable(Screen.CourierNotifications.route) {
             CourierNotificationsScreen(
                 onBack = { navController.popBackStack() },
+                onTopUpClick = { navController.navigate(Screen.BalanceTopUp.route) },
                 onDeliveryClick = { deliveryId ->
                     navController.navigate(Screen.DeliveryDetail.createRoute(deliveryId))
                 }

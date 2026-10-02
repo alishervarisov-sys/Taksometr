@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
+import { AdminBalanceAlerts } from './BalanceRequests';
 import {
   Box, Drawer, AppBar, Toolbar, Typography, List, ListItem,
   ListItemButton, ListItemIcon, ListItemText, IconButton, Divider
@@ -134,6 +135,8 @@ const Layout: React.FC<LayoutProps> = ({ onLogout, isSuperAdmin, children }) => 
           <Typography variant="h6" noWrap sx={{ fontWeight: 600 }}>
             {menuItems.find(i => i.path === location.pathname)?.text || 'ZaKi Admin'}
           </Typography>
+          <Box sx={{ flexGrow: 1 }} />
+          <AdminBalanceAlerts />
         </Toolbar>
       </AppBar>
 
@@ -159,8 +162,9 @@ const Layout: React.FC<LayoutProps> = ({ onLogout, isSuperAdmin, children }) => 
         component="main"
         sx={{
           flexGrow: 1,
+          minWidth: 0,
           p: 3,
-          width: { sm: `calc(100% - ${drawerWidth}px)` },
+          width: { xs: '100%', sm: `calc(100% - ${drawerWidth}px)` },
           mt: 8,
           minHeight: '100vh',
         }}

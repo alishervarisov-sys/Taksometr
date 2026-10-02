@@ -10,6 +10,7 @@ sealed class Screen(val route: String) {
         fun createRoute(deliveryId: String) = "delivery_complete/$deliveryId"
     }
     data object Profile : Screen("profile")
+    data object BalanceTopUp : Screen("profile/top-up")
     data object DailyStats : Screen("daily_stats")
     data object Operations : Screen("operations")
     data object CourierNotifications : Screen("courier_notifications")

@@ -21,6 +21,8 @@ import TaxiDrivers from './pages/TaxiDrivers';
 import AppVersions from './pages/AppVersions';
 import SmartDispatch from './pages/SmartDispatch';
 import Login from './pages/Login';
+import { BalanceRequestsProvider } from './components/BalanceRequests';
+import { disableAdminWebPush } from './adminPush';
 
 const theme = createTheme({
   palette: {
@@ -118,6 +120,7 @@ const CachedAdminShell: React.FC<CachedAdminShellProps> = ({ adminId, isSuperAdm
     : new Set(visitedPaths).add(activePage.path);
 
   return (
+    <BalanceRequestsProvider key={adminId} adminId={adminId}>
     <Layout onLogout={onLogout} isSuperAdmin={isSuperAdmin}>
       {Array.from(pagesToRender).map(path => {
         const page = allowedPages.find(item => item.path === path);
@@ -129,23 +132,22 @@ const CachedAdminShell: React.FC<CachedAdminShellProps> = ({ adminId, isSuperAdm
         );
       })}
     </Layout>
+    </BalanceRequestsProvider>
   );
 };
 
 function App() {
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [adminId, setAdminId] = useState<string | null>(null);
-  const [adminRole, setAdminRole] = useState<'ADMIN' | 'SUPER_ADMIN' | null>(null);
-
-  useEffect(() => {
-    const savedAdminId = localStorage.getItem('adminId');
-    const savedRole = localStorage.getItem('adminRole') as 'ADMIN' | 'SUPER_ADMIN' | null;
-    if (savedAdminId && savedRole) {
-      setIsAuthenticated(true);
-      setAdminId(savedAdminId);
-      setAdminRole(savedRole);
-    }
-  }, []);
+  // Restore synchronously so a push deep link is not redirected to /login
+  // before the cached session has been loaded.
+  const [initialSession] = useState<{ id: string | null; role: 'ADMIN' | 'SUPER_ADMIN' | null }>(() => {
+    const id = localStorage.getItem('adminId');
+    const savedRole = localStorage.getItem('adminRole');
+    const role = savedRole === 'ADMIN' || savedRole === 'SUPER_ADMIN' ? savedRole : null;
+    return { id, role };
+  });
+  const [isAuthenticated, setIsAuthenticated] = useState(!!initialSession.id && !!initialSession.role);
+  const [adminId, setAdminId] = useState<string | null>(initialSession.id);
+  const [adminRole, setAdminRole] = useState<'ADMIN' | 'SUPER_ADMIN' | null>(initialSession.role);
 
   const handleLogin = (id: string, role: 'ADMIN' | 'SUPER_ADMIN') => {
     setIsAuthenticated(true);
@@ -155,7 +157,8 @@ function App() {
     localStorage.setItem('adminRole', role);
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    if (adminId) await disableAdminWebPush(adminId).catch(() => {});
     setIsAuthenticated(false);
     setAdminId(null);
     setAdminRole(null);
@@ -171,7 +174,7 @@ function App() {
           {!isAuthenticated ? (
             <>
               <Route path="/login" element={<Login onLogin={handleLogin} />} />
-              <Route path="*" element={<Navigate to="/login" />} />
+              <Route path="*" element={<Navigate to="/login" replace state={{ returnTo: window.location.pathname + window.location.search }} />} />
             </>
           ) : (
             <Route path="*" element={

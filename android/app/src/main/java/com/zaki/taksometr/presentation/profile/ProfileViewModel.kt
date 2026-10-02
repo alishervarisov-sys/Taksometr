@@ -13,6 +13,7 @@ import com.zaki.taksometr.domain.repository.DeliveryRepository
 import com.zaki.taksometr.util.Constants
 import com.zaki.taksometr.util.ImageUtils
 import com.zaki.taksometr.util.Resource
+import com.zaki.taksometr.util.BalanceNotification
 import com.google.firebase.functions.FirebaseFunctions
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -56,7 +57,10 @@ data class ProfileState(
     val isLoadingTransferRecipients: Boolean = false,
     val isTransferring: Boolean = false,
     val transferError: String? = null,
-    val transferSuccess: String? = null
+    val transferSuccess: String? = null,
+    val isRequestingTopUp: Boolean = false,
+    val topUpError: String? = null,
+    val topUpSuccess: String? = null
 )
 
 @HiltViewModel
@@ -90,6 +94,7 @@ class ProfileViewModel @Inject constructor(
         viewModelScope.launch {
             authRepository.getCurrentUser().collect { user ->
                 _state.value = _state.value.copy(user = user)
+                if (user?.lowBalanceNotificationActive != true) BalanceNotification.clear(context)
             }
         }
     }
@@ -287,6 +292,46 @@ class ProfileViewModel @Inject constructor(
 
     fun clearTransferMessage() {
         _state.value = _state.value.copy(transferError = null, transferSuccess = null)
+    }
+
+    fun requestTopUp(amountText: String) {
+        if (_state.value.isRequestingTopUp || userId.isBlank()) return
+        val amount = amountText.trim().replace(',', '.').toDoubleOrNull()
+        if (amount == null || !amount.isFinite() || amount <= 0 || amount > 100000 ||
+            kotlin.math.abs(amount * 100 - kotlin.math.round(amount * 100)) > 0.000001) {
+            _state.value = _state.value.copy(topUpError = "Укажите сумму от 0.01 до 100000 сомони, не более двух знаков после запятой")
+            return
+        }
+        // Keep the id across process restarts and lost server replies.
+        val key = "top_up_request_$userId"
+        val requestId = if (prefs.getString("${key}_amount", null) == amount.toString()) prefs.getString(key, null) else null
+        val id = requestId ?: UUID.randomUUID().toString().also {
+            prefs.edit().putString(key, it).putString("${key}_amount", amount.toString()).apply()
+        }
+        viewModelScope.launch {
+            _state.value = _state.value.copy(isRequestingTopUp = true, topUpError = null, topUpSuccess = null)
+            try {
+                val result = functions.getHttpsCallable("requestBalanceTopUp").call(
+                    mapOf("courierId" to userId, "requestId" to id, "amount" to amount)
+                ).await().data as? Map<*, *> ?: error("Не удалось получить подтверждение заявки")
+                val status = result["status"] as? String
+                val actualAmount = (result["amount"] as? Number)?.toDouble() ?: amount
+                prefs.edit().remove(key).remove("${key}_amount").apply()
+                _state.value = _state.value.copy(topUpSuccess = when (status) {
+                    "APPROVED" -> "Пополнение уже одобрено"
+                    "REJECTED" -> "Предыдущая заявка отклонена. Можно отправить новую заявку."
+                    else -> "Заявка на ${formatTransferAmount(actualAmount)} сомони отправлена администратору. Ожидайте одобрения."
+                })
+            } catch (e: Exception) {
+                _state.value = _state.value.copy(topUpError = e.localizedMessage ?: "Не удалось отправить заявку. Проверьте интернет и повторите.")
+            } finally {
+                _state.value = _state.value.copy(isRequestingTopUp = false)
+            }
+        }
+    }
+
+    fun clearTopUpMessage() {
+        _state.value = _state.value.copy(topUpError = null, topUpSuccess = null)
     }
 
     fun logout() {

@@ -27,7 +27,11 @@ data class User(
     /** Average client rating (1..5). 0 when the courier has no ratings yet. */
     val rating: Double = 0.0,
     /** Number of client ratings the courier has received. */
-    val ratingCount: Int = 0
+    val ratingCount: Int = 0,
+    val lowBalanceNotificationActive: Boolean = false,
+    val lowBalanceNotificationId: String = "",
+    val pendingTopUpRequestId: String = "",
+    val pendingTopUpAmount: Double = 0.0
 )
 
 enum class UserRole {

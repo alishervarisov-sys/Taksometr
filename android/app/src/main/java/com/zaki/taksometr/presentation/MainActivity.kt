@@ -1,6 +1,7 @@
 package com.zaki.taksometr.presentation
 
 import android.content.Context
+import android.content.Intent
 import android.content.res.Configuration
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -14,6 +15,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.compose.currentBackStackEntryAsState
 import com.zaki.taksometr.domain.repository.AuthRepository
 import com.zaki.taksometr.domain.model.UserRole
 import com.zaki.taksometr.presentation.navigation.NavGraph
@@ -22,6 +24,7 @@ import com.zaki.taksometr.presentation.theme.ZaKiTaksometrTheme
 import com.zaki.taksometr.presentation.version.AppVersionViewModel
 import com.zaki.taksometr.presentation.version.UpdateRequiredScreen
 import com.zaki.taksometr.util.Constants
+import com.zaki.taksometr.util.BalanceNotification
 import com.zaki.taksometr.util.LocalizationManager
 import dagger.hilt.android.AndroidEntryPoint
 import java.util.Locale
@@ -33,6 +36,22 @@ class MainActivity : ComponentActivity() {
     @Inject lateinit var authRepository: AuthRepository
 
     private val appVersionViewModel: AppVersionViewModel by viewModels()
+    private val topUpRequested = mutableStateOf(false)
+
+    private fun handleBalanceIntent(intent: Intent?) {
+        if (intent?.action == BalanceNotification.ACTION_TOP_UP &&
+            intent.getStringExtra(BalanceNotification.EXTRA_COURIER_ID) == authRepository.getSavedUserId()) {
+            topUpRequested.value = true
+            intent.action = null
+            intent.removeExtra(BalanceNotification.EXTRA_COURIER_ID)
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleBalanceIntent(intent)
+    }
 
     override fun attachBaseContext(newBase: Context) {
         val prefs = newBase.getSharedPreferences(Constants.PREFS_NAME, MODE_PRIVATE)
@@ -52,8 +71,14 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
         super.onCreate(savedInstanceState)
+        handleBalanceIntent(intent)
 
         setContent {
+            LaunchedEffect(Unit) {
+                authRepository.getCurrentUser().collect { user ->
+                    if (user?.lowBalanceNotificationActive != true) BalanceNotification.clear(this@MainActivity)
+                }
+            }
             val prefs = getSharedPreferences(Constants.PREFS_NAME, MODE_PRIVATE)
             val currentLanguageCode = remember {
                 mutableStateOf(LocalizationManager.getCurrentLanguage(prefs).code)
@@ -87,6 +112,19 @@ class MainActivity : ComponentActivity() {
                                 navController = navController,
                                 startDestination = startDestination
                             )
+                            val backStackEntry by navController.currentBackStackEntryAsState()
+                            LaunchedEffect(topUpRequested.value, backStackEntry?.destination?.route) {
+                                if (topUpRequested.value && backStackEntry != null && authRepository.isLoggedIn() &&
+                                    authRepository.getSavedUserRole() == UserRole.COURIER &&
+                                    backStackEntry?.destination?.route != Screen.Auth.route) {
+                                    navController.navigate(Screen.BalanceTopUp.route) {
+                                        if (backStackEntry?.destination?.route == Screen.BalanceTopUp.route) {
+                                            popUpTo(Screen.BalanceTopUp.route) { inclusive = true }
+                                        }
+                                    }
+                                    topUpRequested.value = false
+                                }
+                            }
                         }
                     }
                 }

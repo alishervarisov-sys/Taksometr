@@ -22,6 +22,7 @@ import com.zaki.taksometr.ZaKiApp
 import com.zaki.taksometr.domain.repository.AuthRepository
 import com.zaki.taksometr.domain.repository.DeliveryRepository
 import com.zaki.taksometr.util.Constants
+import com.zaki.taksometr.util.BalanceNotification
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -52,6 +53,43 @@ class ZaKiFirebaseMessagingService : FirebaseMessagingService() {
         val type = message.data["type"]
 
         when (type) {
+            "LOW_BALANCE", "BALANCE_RECOVERED", "BALANCE_TOP_UP" -> {
+                CoroutineScope(Dispatchers.IO).launch {
+                    val userId = prefs.getString(Constants.PREF_USER_ID, "").orEmpty()
+                    if (userId.isBlank() || (message.data["courierId"] != null && message.data["courierId"] != userId)) return@launch
+                    if (type == "BALANCE_TOP_UP") {
+                        showNotification(message.data["title"] ?: "Баланс пополнен", message.data["body"] ?: "")
+                    } else {
+                        val eventAt = message.data["balanceEventAt"]?.toDoubleOrNull() ?: return@launch
+                        if (!BalanceNotification.acceptEvent(prefs, userId, eventAt)) return@launch
+                        if (type == "BALANCE_RECOVERED") {
+                            BalanceNotification.clear(this@ZaKiFirebaseMessagingService)
+                            return@launch
+                        }
+                        // Display even if Firestore is temporarily unavailable.
+                        // Versioned recovery events remove it without a network read.
+                        BalanceNotification.show(this@ZaKiFirebaseMessagingService, userId,
+                            message.data["title"] ?: "Баланс заканчивается",
+                            message.data["body"] ?: "Пополните баланс")
+                    }
+                    try {
+                        val user = firestore.collection(Constants.COLLECTION_USERS).document(userId)
+                            .get(com.google.firebase.firestore.Source.SERVER).await()
+                        val active = user.getBoolean("lowBalanceNotificationActive") == true
+                        if (type == "LOW_BALANCE") {
+                            val eventAt = message.data["balanceEventAt"]?.toDoubleOrNull() ?: return@launch
+                            if ((!active || user.getString("lowBalanceNotificationId") != message.data["notificationId"]) &&
+                                BalanceNotification.isCurrentEvent(prefs, userId, eventAt)) {
+                                BalanceNotification.clear(this@ZaKiFirebaseMessagingService)
+                            }
+                        } else {
+                            if (!active) BalanceNotification.clear(this@ZaKiFirebaseMessagingService)
+                        }
+                    } catch (e: Exception) {
+                        android.util.Log.w("BalancePush", "Could not verify current balance", e)
+                    }
+                }
+            }
             "REQUEST_LOCATION" -> handleLocationRequest()
             "ADMIN_MARKETPLACE_ORDER", "SMART_DISPATCH_OFFER" -> {
                 message.data["deliveryId"]?.let { deliveryId ->

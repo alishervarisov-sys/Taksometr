@@ -16,6 +16,7 @@ import {
 import { httpsCallable } from 'firebase/functions';
 import { useSearchParams } from 'react-router-dom';
 import { db, functions } from '../firebase';
+import { BalanceTopUpRequests } from '../components/BalanceRequests';
 
 interface CommissionProps {
   adminId: string;
@@ -784,6 +785,7 @@ const Commission: React.FC<CommissionProps> = ({ adminId }) => {
   return (
     <Box>
       <Typography variant="h5" sx={{ fontWeight: 700, mb: 3 }}>Комиссия и баланс</Typography>
+      <BalanceTopUpRequests onReviewed={() => { void loadCouriers(); void loadFirstPage(applied); }} />
 
       {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>{error}</Alert>}
       {success && <Alert severity="success" sx={{ mb: 2 }} onClose={() => setSuccess('')}>{success}</Alert>}

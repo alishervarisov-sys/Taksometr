@@ -57,6 +57,8 @@ Firebase project referenced by current configuration: `auva-70253`.
 | Embedded admin in Windows | `Services/EmbeddedWebAdmin.cs` | `Assets/webadmin.zip`; source remains `admin-panel/src/` |
 | Version enforcement | `presentation/version/AppVersionViewModel.kt` | `settings/appVersion`, backend `setMinAppVersion`, admin `AppVersions.tsx` |
 | Commission/balance | Android `profile/OperationsScreen.kt` | admin `Commission.tsx`, backend functions containing `Commission`, `Balance`, or `Transaction` |
+| Courier top-up requests / low balance | Android `profile/ProfileViewModel.kt`, `ProfileScreen.kt` | `util/BalanceNotification.kt`, `service/ZaKiFirebaseMessagingService.kt`, backend `balance-service.ts`, admin `components/BalanceRequests.tsx` |
+| Admin browser push | `admin-panel/src/adminPush.ts` | `admin-panel/public/firebase-messaging-sw.js`, backend `admin-push.ts`, `settings/webPush` |
 | Release/deployment | `DEPLOY_INSTRUCTIONS.md` | current Gradle/package/csproj config; never deploy implicitly |
 
 All Android paths in this table are relative to:
@@ -94,6 +96,8 @@ repository when tracing a feature.
 `active_delivery`, `delivery_complete/{deliveryId}`, `profile`, `daily_stats`,
 `operations`, `courier_notifications`, `history`,
 `delivery_detail/{deliveryId}`, and `delivery_chain`.
+The `profile/top-up` route opens the profile's top-up form directly from a
+system notification action or the courier inbox.
 
 Note: a `delivery_chain` route and backend/domain code exist, but the current
 source tree has no `presentation/deliverychain/` screen. Verify current behavior
@@ -178,6 +182,34 @@ courier/admin management, tariff/statistics, commission/balance/transactions,
 notifications/location requests, delivery chains, Telegram reports, monthly
 winner, Motorol integration, app-version enforcement, and admin sync triggers.
 
+Balance workflow (`balance-service.ts`): `requestBalanceTopUp` creates at most
+one pending request per courier. `reviewBalanceTopUp` approves/rejects it;
+approval atomically credits the balance once and records a `TOP_UP` ledger row
+with `PAID` or `DEBT`. `notifyCourierLowBalance` emits a single actionable alert
+at balance <= 10; any credit clears it, and a later debit can start a new alert.
+Courier user documents mirror `pendingTopUpRequestId`, `pendingTopUpAmount`,
+`lowBalanceNotificationActive`, `lowBalanceNotificationId`, and
+`lowBalanceHandledAt`. Resolved warnings are hidden from the courier inbox.
+
+Admin Web Push (`admin-push.ts`): `getBalanceTopUpRequests` reads pending requests
+through a callable (clients have no direct collection access). Browser token
+registration uses `registerAdminWebPush`. `notifyAdminsOfTopUpRequest` sends FCM
+data messages handled by the web service worker even when the panel tab is
+closed. Each browser must grant notification permission. Configure the PUBLIC
+Firebase Web Push key using the header notification dialog as SUPER_ADMIN
+(`setAdminWebPushConfig`, `settings/webPush.vapidKey`) or the backend environment
+variable `FIREBASE_WEB_PUSH_VAPID_KEY`. Existing custom login/verifyAdmin identity
+semantics are unchanged; hardening authentication remains a separate task.
+The project Web Push certificate was generated and its public key saved in
+`settings/webPush.vapidKey` on 2026-10-02. The messaging client uses the registered
+`zakitaksometr` web app (`1:286896671827:web:e3a11735f9298bf3dc0aa6`).
+Published on 2026-10-02: the balance workflow's 12 new/updated Functions,
+Firestore rules, the `balanceTopUpRequests` index (READY), and the admin panel
+at `https://zakitaksometr.web.app`. Production read-only checks confirmed the
+public Web Push configuration and pending-request callable. Each administrator
+still needs to grant browser notification permission; delivery to a real device
+has not been verified. Couriers need the updated Android build for the action.
+
 Taxi exports are re-exported from `index.ts`. `taxi.ts` owns order creation and
 the Telegram poller; `taxiDrivers.ts` owns approve/reject/block/broadcast/create.
 
@@ -190,6 +222,8 @@ Search all clients plus rules before changing a field. Important collections:
 - `tariffs`: pricing configuration
 - `settings`: commission, app version, Telegram/taxi state
 - `transactions`: courier commission/balance operations
+- `balanceTopUpRequests`: server-only pending/approved/rejected courier top-ups
+- `adminPushTokens`: server-only browser FCM token registrations
 - `courier_tracks/{courierId}/points`: on-shift breadcrumbs
 - `courierNotifications`: durable notification queue/status
 - `winner_announcements`: monthly winner announcements
@@ -258,6 +292,10 @@ local check.
 cd firebase/functions
 npm run build
 ```
+
+Balance workflow verification (same Cloud Functions directory):
+`npm run test:balance` covers competing approvals, duplicate retries, no credit
+on submission/rejection, paid/debt records, and low-balance event ordering.
 
 ### Windows
 

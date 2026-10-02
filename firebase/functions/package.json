@@ -5,6 +5,7 @@
   "scripts": {
     "build": "tsc",
     "test:dispatch": "npm run build && node lib/dispatch/dispatch-self-test.js",
+    "test:balance": "npm run build && node lib/balance-service-self-test.js",
     "serve": "npm run build && firebase emulators:start --only functions",
     "shell": "npm run build && firebase functions:shell",
     "start": "npm run shell",

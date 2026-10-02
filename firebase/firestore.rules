@@ -59,6 +59,15 @@ service cloud.firestore {
     }
 
     // Transactions collection
+    // Top-up requests and browser tokens are accessed through callable Functions.
+    // Clients cannot approve requests or insert ledger entries directly.
+    match /balanceTopUpRequests/{requestId} {
+      allow read, write: if false;
+    }
+    match /adminPushTokens/{tokenId} {
+      allow read, write: if false;
+    }
+
     match /transactions/{transactionId} {
       allow read: if true;
       allow create: if false; // Only via Cloud Functions

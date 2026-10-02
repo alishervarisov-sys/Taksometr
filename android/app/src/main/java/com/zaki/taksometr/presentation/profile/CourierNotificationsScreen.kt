@@ -24,6 +24,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.firebase.functions.FirebaseFunctions
+import com.zaki.taksometr.domain.model.User
+import com.zaki.taksometr.domain.repository.AuthRepository
 import com.zaki.taksometr.util.Constants
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -59,12 +61,28 @@ internal fun visibleDeliveryId(type: String, deliveryId: String): String =
 @HiltViewModel
 class CourierNotificationsViewModel @Inject constructor(
     private val functions: FirebaseFunctions,
+    private val authRepository: AuthRepository,
     private val prefs: SharedPreferences
 ) : ViewModel() {
     private val _state = MutableStateFlow(CourierInboxState())
     val state = _state.asStateFlow()
 
-    init { refresh() }
+    private var currentUser: User? = null
+    init {
+        refresh()
+        viewModelScope.launch {
+            authRepository.getCurrentUser().collect { user ->
+                currentUser = user
+                val items = filterActiveWarnings(_state.value.items)
+                _state.value = _state.value.copy(items = items, hasUnread = items.any { it.createdAt > prefs.getLong(readKey, 0L) })
+            }
+        }
+    }
+
+    private fun filterActiveWarnings(items: List<CourierInboxItem>): List<CourierInboxItem> =
+        items.filter { item -> item.type != "LOW_BALANCE" || currentUser?.let {
+            it.lowBalanceNotificationActive && it.lowBalanceNotificationId == item.id
+        } != false }
 
     private val courierId: String
         get() = prefs.getString(Constants.PREF_USER_ID, "").orEmpty()
@@ -107,7 +125,7 @@ class CourierNotificationsViewModel @Inject constructor(
                         deliveryId = visibleDeliveryId(type, row["deliveryId"] as? String ?: "")
                     )
                 }
-                val allItems = (_state.value.items + page).distinctBy { it.id }
+                val allItems = filterActiveWarnings((_state.value.items + page).distinctBy { it.id })
                 val readAt = prefs.getLong(readKey, 0L)
                 _state.value = _state.value.copy(
                     items = allItems,
@@ -137,6 +155,7 @@ class CourierNotificationsViewModel @Inject constructor(
 fun CourierNotificationsScreen(
     onBack: () -> Unit,
     onDeliveryClick: (String) -> Unit,
+    onTopUpClick: () -> Unit,
     viewModel: CourierNotificationsViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsState()
@@ -192,6 +211,9 @@ fun CourierNotificationsScreen(
                         Column {
                             Text(item.title, fontWeight = FontWeight.SemiBold)
                             if (item.body.isNotBlank()) Text(item.body)
+                            if (item.type == "LOW_BALANCE") {
+                                Button(onClick = onTopUpClick, modifier = Modifier.fillMaxWidth()) { Text("Пополнить баланс") }
+                            }
                             if (canOpenDelivery) {
                                 Text("Открыть заказ", color = MaterialTheme.colorScheme.primary,
                                     style = MaterialTheme.typography.bodySmall)
