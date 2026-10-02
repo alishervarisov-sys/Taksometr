@@ -1,4 +1,5 @@
 using System.IO;
+using System.ComponentModel;
 using System.Text.Json;
 using System.Windows;
 using Microsoft.Web.WebView2.Core;
@@ -32,6 +33,13 @@ public partial class FullAdminWindow : Window
         Loaded += FullAdminWindow_Loaded;
         _sync.StateChanged += Sync_StateChanged;
         Closed += FullAdminWindow_Closed;
+        Closing += (_, args) =>
+        {
+            if (((App)Application.Current).IsExiting) return;
+            args.Cancel = true;
+            Hide();
+            _nativeOrdersWindow?.Hide();
+        };
     }
 
     private async void FullAdminWindow_Loaded(object sender, RoutedEventArgs e)
@@ -57,6 +65,7 @@ public partial class FullAdminWindow : Window
 
             var webAdminId = _session.Role == "SUPER_ADMIN" ? "SUPER_ADMIN" : _session.AdminId;
             var bootstrap =
+                "window.zakiDesktopNotifications = true;\n" +
                 "localStorage.setItem('adminId', " + JsonSerializer.Serialize(webAdminId) + ");\n" +
                 "localStorage.setItem('adminRole', " + JsonSerializer.Serialize(_session.Role) + ");\n" +
                 "const zakiRestorePath = sessionStorage.getItem('zakiReloadPath');\n" +
@@ -65,6 +74,18 @@ public partial class FullAdminWindow : Window
                 "  history.replaceState({}, '', zakiRestorePath);\n" +
                 "}\n";
             await AdminWebView.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(bootstrap);
+            AdminWebView.CoreWebView2.WebMessageReceived += (_, args) =>
+            {
+                if (!Uri.TryCreate(args.Source, UriKind.Absolute, out var source) ||
+                    source.Scheme != "https" || source.Host != "zakitaksometr.web.app") return;
+                try
+                {
+                    using var message = JsonDocument.Parse(args.WebMessageAsJson);
+                    if (message.RootElement.TryGetProperty("type", out var type) && type.GetString() == "ZAKI_LOGOUT")
+                        ((App)Application.Current).SignOut();
+                }
+                catch (JsonException) { }
+            };
 
             AdminWebView.NavigationStarting += AdminWebView_NavigationStarting;
             AdminWebView.NavigationCompleted += AdminWebView_NavigationCompleted;
@@ -83,6 +104,16 @@ public partial class FullAdminWindow : Window
                 MessageBoxImage.Error);
         }
     }
+
+    public void OpenTopUpRequest(string requestId)
+    {
+        _routeToRestore = string.IsNullOrWhiteSpace(requestId) ? "/commission"
+            : "/commission?requestId=" + Uri.EscapeDataString(requestId);
+        if (AdminWebView.CoreWebView2 is not null)
+            AdminWebView.CoreWebView2.Navigate("https://zakitaksometr.web.app/index.html");
+    }
+
+    private void TestNotifications_Click(object sender, RoutedEventArgs e) => ((App)Application.Current).TestNotifications();
 
     private void AdminWebView_NavigationStarting(object? sender, CoreWebView2NavigationStartingEventArgs e)
     {
@@ -183,16 +214,15 @@ public partial class FullAdminWindow : Window
                 MessageBoxButton.OKCancel,
                 MessageBoxImage.Question) != MessageBoxResult.OK) return;
 
-        _sessionStore.Clear();
-        Application.Current.Shutdown();
+        ((App)Application.Current).SignOut();
     }
 
-    private void Sync_StateChanged(object? sender, EventArgs e) => Dispatcher.Invoke(UpdateStateText);
+    private void Sync_StateChanged(object? sender, EventArgs e) => Dispatcher.BeginInvoke(UpdateStateText);
 
     private void UpdateStateText()
     {
         StateText.Text = _sync.IsOnline
-            ? $"● Онлайн • SQLite синхронизирован {_sync.LastSuccessfulSync:HH:mm:ss}"
+            ? $"● Онлайн • обновлено {_sync.LastSuccessfulSync:HH:mm:ss}"
             : "● Офлайн • доступны ранее загруженные данные";
     }
 
@@ -200,6 +230,5 @@ public partial class FullAdminWindow : Window
     {
         _sync.StateChanged -= Sync_StateChanged;
         _nativeOrdersWindow?.Close();
-        Application.Current.Shutdown();
     }
 }

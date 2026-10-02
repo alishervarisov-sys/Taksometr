@@ -12,6 +12,11 @@ const config = {
 };
 const pushApp = initializeApp(config, 'admin-web-push');
 const SESSION_CACHE = 'zaki-admin-push-session';
+type DesktopWindow = Window & { zakiDesktopNotifications?: boolean; chrome?: { webview?: { postMessage: (message: unknown) => void } } };
+export const usesWindowsNotifications = () => (window as DesktopWindow).zakiDesktopNotifications === true;
+export function notifyWindowsLogout() {
+  if (usesWindowsNotifications()) (window as DesktopWindow).chrome?.webview?.postMessage({ type: 'ZAKI_LOGOUT' });
+}
 
 async function setPushSession(adminId: string | null) {
   if (!('caches' in window)) return;
@@ -25,8 +30,8 @@ export async function enableAdminWebPush(adminId: string, vapidKey: string, requ
   const permission = requestPermission ? await Notification.requestPermission() : Notification.permission;
   if (permission !== 'granted') throw new Error('Разрешите уведомления для этого сайта в настройках браузера.');
   const registration = await navigator.serviceWorker.register(
-    `/firebase-messaging-sw.js?config=${encodeURIComponent(JSON.stringify(config))}`,
-    { scope: '/firebase-cloud-messaging-push-scope' },
+    '/firebase-messaging-sw.js?v=2',
+    { scope: '/firebase-cloud-messaging-push-scope', updateViaCache: 'none' },
   );
   if (!registration.active) {
     const worker = registration.installing || registration.waiting;
@@ -51,6 +56,7 @@ export async function enableAdminWebPush(adminId: string, vapidKey: string, requ
 }
 
 export async function disableAdminWebPush(adminId: string) {
+  if (usesWindowsNotifications()) return;
   // Suppress background notifications locally even if logout is offline.
   await setPushSession(null);
   const token = localStorage.getItem('adminPushToken');
@@ -63,16 +69,10 @@ export async function disableAdminWebPush(adminId: string) {
 }
 
 export async function listenToAdminPush(adminId: string, refresh: () => void) {
+  if (usesWindowsNotifications()) return () => {};
   if (!await isSupported()) return () => {};
   return onMessage(getMessaging(pushApp), async payload => {
     if (payload.data?.adminId !== adminId || payload.data?.type !== 'BALANCE_TOP_UP_REQUEST') return;
     refresh();
-    const registration = await navigator.serviceWorker.getRegistration('/firebase-cloud-messaging-push-scope');
-    if (registration && Notification.permission === 'granted') {
-      await registration.showNotification(payload.data.title, {
-        body: payload.data.body, tag: `topup-${payload.data.requestId}`,
-        data: { url: `/commission?requestId=${encodeURIComponent(payload.data.requestId)}` },
-      });
-    }
   });
 }

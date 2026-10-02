@@ -194,8 +194,12 @@ Courier user documents mirror `pendingTopUpRequestId`, `pendingTopUpAmount`,
 Admin Web Push (`admin-push.ts`): `getBalanceTopUpRequests` reads pending requests
 through a callable (clients have no direct collection access). Browser token
 registration uses `registerAdminWebPush`. `notifyAdminsOfTopUpRequest` sends FCM
-data messages handled by the web service worker even when the panel tab is
-closed. Each browser must grant notification permission. Configure the PUBLIC
+data messages handled by a native `push` event with `event.waitUntil`, even when
+the panel tab is closed. The worker displays notifications before forwarding
+the Firebase window message for live refresh, so visible login/tracking pages
+cannot consume notifications. It reads the stored admin session after each
+worker restart and suppresses messages after logout or account changes.
+Each browser must grant notification permission. Configure the PUBLIC
 Firebase Web Push key using the header notification dialog as SUPER_ADMIN
 (`setAdminWebPushConfig`, `settings/webPush.vapidKey`) or the backend environment
 variable `FIREBASE_WEB_PUSH_VAPID_KEY`. Existing custom login/verifyAdmin identity
@@ -209,6 +213,9 @@ at `https://zakitaksometr.web.app`. Production read-only checks confirmed the
 public Web Push configuration and pending-request callable. Each administrator
 still needs to grant browser notification permission; delivery to a real device
 has not been verified. Couriers need the updated Android build for the action.
+The native push handler was published on 2026-10-02 after Chrome checks with
+all site tabs closed and its worker stopped/restarted. CDP simulated transport;
+actual FCM-to-device display still requires confirmation on the admin device.
 
 Taxi exports are re-exported from `index.ts`. `taxi.ts` owns order creation and
 the Telegram poller; `taxiDrivers.ts` owns approve/reject/block/broadcast/create.
@@ -248,10 +255,25 @@ Windows source is `windows/ZaKi.Dispatcher/`:
 - `Services/FirebaseRestClient.cs`: Firebase REST access
 - `Services/SyncService.cs`: sync logic
 - `Services/EmbeddedWebAdmin.cs`: extracts/serves embedded web admin
+- `Services/WindowsBalanceNotifications.cs`: native Windows toasts and 15-second
+  polling of `getBalanceTopUpRequests`, independent of WebView2's unsupported Push API
+- `Services/TopUpNotificationTracker.cs`: per-admin persisted deduplication and
+  removal of notifications after requests are reviewed
+- `Services/SingleInstance.cs`: per-Windows-user mutex and local named pipe;
+  prevents duplicate monitoring and opens an existing hidden window
 - `Data/LocalDatabase.cs`: local SQLite state
 - `ZaKi.Dispatcher.csproj`: .NET 9 WPF packaging
 - `installer/ZaKi-Admin-Windows.iss`: Windows installer definition
 - `build-installer.ps1`: publishes the app and produces the installer
+
+Version 1.3.0 keeps running in the tray when its main window is closed. Tray
+actions open the panel/requests, test Windows notifications, or exit fully.
+The installer offers background startup (`--background`) at Windows login.
+WebView2 receives `window.zakiDesktopNotifications`; native notification clicks
+open `/commission?requestId=...`. Web/native logout stops monitoring and clears
+that administrator's notification history. Delivery uses native polling, not
+FCM Web Push, and requires the background process and an internet connection.
+The release script builds current web sources before embedding `webadmin.zip`.
 
 Ignore `bin/`, `obj/`, `publish-onefile/`, `release/`, packaged EXEs/ZIPs, and
 `Assets/webadmin.zip` unless the user is specifically building a release.
@@ -283,8 +305,9 @@ cd admin-panel
 npm run build
 ```
 
-There is no configured web test script; TypeScript plus Vite build is the main
-local check.
+TypeScript plus Vite build is the main local web compilation check.
+`npm run test:push-worker` checks worker restart with no tabs, unrelated visible
+pages, logout/account isolation, malformed payloads, and notification navigation.
 
 ### Cloud Functions
 
@@ -302,6 +325,11 @@ on submission/rejection, paid/debt records, and low-balance event ordering.
 ```powershell
 dotnet build windows/ZaKi.Dispatcher/ZaKi.Dispatcher.csproj
 ```
+Run notification-state checks with
+`dotnet run --project windows/ZaKi.Dispatcher.Tests -c Release`.
+Release packaging: `./windows/build-installer.ps1 -Version 1.3.0`.
+`--verify-package` checks the bundled panel/SQLite; `--verify-notifications
+--output=<path>` verifies the Windows toast API without creating financial data.
 
 ## 8. Documentation reliability
 

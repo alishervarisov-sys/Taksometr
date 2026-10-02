@@ -109,6 +109,22 @@ public sealed class FirebaseRestClient
         string payloadJson,
         CancellationToken cancellationToken)
     {
+        await CallFunctionForResultAsync(functionName, payloadJson, cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<BalanceTopUpRequest>> GetBalanceTopUpRequestsAsync(
+        string adminId, CancellationToken cancellationToken)
+    {
+        var result = await CallFunctionForResultAsync("getBalanceTopUpRequests",
+            JsonSerializer.Serialize(new { adminId }), cancellationToken);
+        return JsonSerializer.Deserialize<List<BalanceTopUpRequest>>(
+            result.GetProperty("requests"), new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+            ?? [];
+    }
+
+    private async Task<JsonElement> CallFunctionForResultAsync(
+        string functionName, string payloadJson, CancellationToken cancellationToken)
+    {
         var endpoint = new Uri($"https://{Region}-{ProjectId}.cloudfunctions.net/{functionName}");
         using var payload = JsonDocument.Parse(payloadJson);
         using var response = await _http.PostAsJsonAsync(
@@ -127,6 +143,7 @@ public sealed class FirebaseRestClient
                 : "Cloud Function вернула ошибку";
             throw new InvalidOperationException(message);
         }
+        return json.RootElement.TryGetProperty("result", out var result) ? result.Clone() : default;
     }
 
     public async Task<bool> CheckConnectionAsync(CancellationToken cancellationToken)

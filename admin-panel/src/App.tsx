@@ -22,7 +22,7 @@ import AppVersions from './pages/AppVersions';
 import SmartDispatch from './pages/SmartDispatch';
 import Login from './pages/Login';
 import { BalanceRequestsProvider } from './components/BalanceRequests';
-import { disableAdminWebPush } from './adminPush';
+import { disableAdminWebPush, notifyWindowsLogout } from './adminPush';
 
 const theme = createTheme({
   palette: {
@@ -164,6 +164,7 @@ function App() {
     setAdminRole(null);
     localStorage.removeItem('adminId');
     localStorage.removeItem('adminRole');
+    notifyWindowsLogout();
   };
 
   return (

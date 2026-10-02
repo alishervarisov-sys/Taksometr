@@ -4,7 +4,7 @@ import { Notifications } from '@mui/icons-material';
 import { httpsCallable } from 'firebase/functions';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { functions } from '../firebase';
-import { enableAdminWebPush, listenToAdminPush } from '../adminPush';
+import { enableAdminWebPush, listenToAdminPush, usesWindowsNotifications } from '../adminPush';
 
 interface TopUpRequest { id: string; courierName: string; courierPhone: string; amount: number; createdAt: number; }
 const RequestsContext = createContext({ adminId: '', requests: [] as TopUpRequest[], error: '', refresh: async () => {} });
@@ -48,6 +48,7 @@ export function BalanceRequestsProvider({ adminId, children }: { adminId: string
 }
 
 export function AdminBalanceAlerts() {
+  const desktopNotifications = usesWindowsNotifications();
   const { adminId, requests } = useContext(RequestsContext);
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
@@ -58,6 +59,7 @@ export function AdminBalanceAlerts() {
   const { refresh } = useContext(RequestsContext);
   useEffect(() => {
     let active = true;
+    if (desktopNotifications) return;
     httpsCallable(functions, 'getAdminWebPushConfig')({ adminId }).then(async result => {
       const key = (result.data as { vapidKey: string }).vapidKey;
       if (!active) return;
@@ -68,7 +70,7 @@ export function AdminBalanceAlerts() {
       }
     }).catch(err => { if (active) setError(err.message); });
     return () => { active = false; };
-  }, [adminId]);
+  }, [adminId, desktopNotifications]);
   const enable = async () => {
     setBusy(true); setError('');
     try {
@@ -90,7 +92,7 @@ export function AdminBalanceAlerts() {
         <Typography sx={{ mb: 2 }}>{requests.length ? `Ожидают решения: ${requests.length}` : 'Нет ожидающих заявок'}</Typography>
         {requests.map(row => <Box key={row.id} sx={{ mb: 1 }}><Button onClick={() => { setOpen(false); navigate(`/commission?requestId=${row.id}`); }}>{row.courierName}: {row.amount} сомони</Button></Box>)}
         {error && <Alert severity="error" sx={{ my: 2 }}>{error}</Alert>}
-        {enabled ? <Alert severity="success">Push включён: заявки приходят и при закрытой панели.</Alert> : <>
+        {desktopNotifications ? <Alert severity="info">Заявки показываются в уведомлениях Windows. При закрытии окна ZaKi продолжает работать рядом с часами. Проверить уведомления можно кнопкой в верхней панели приложения.</Alert> : enabled ? <Alert severity="success">Push включён: заявки приходят и при закрытой панели.</Alert> : <>
           <Typography variant="body2" sx={{ mb: 2 }}>Включите push на этом устройстве, чтобы получать заявки при закрытой панели.</Typography>
           {adminId === 'SUPER_ADMIN' && <TextField fullWidth label="Публичный ключ Web Push" value={vapidKey} onChange={event => setVapidKey(event.target.value)} helperText="Firebase → Настройки проекта → Cloud Messaging → Web Push certificates" sx={{ mb: 2 }} />}
           {!vapidKey && adminId !== 'SUPER_ADMIN' && <Alert severity="info">Суперадминистратор должен подключить ключ Web Push.</Alert>}

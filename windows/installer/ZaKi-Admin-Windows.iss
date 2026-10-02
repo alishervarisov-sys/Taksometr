@@ -1,9 +1,9 @@
 #ifndef MyAppVersion
-  #define MyAppVersion "1.2.0"
+  #define MyAppVersion "1.3.0"
 #endif
 
 #ifndef MyAppSource
-  #define MyAppSource "..\release\ZaKi-Admin-Windows-1.2.0"
+  #define MyAppSource "..\release\ZaKi-Admin-Windows-1.3.0"
 #endif
 
 [Setup]
@@ -33,9 +33,11 @@ Source: "{#MyAppSource}\ZaKi-Admin-Windows.exe"; DestDir: "{app}"; Flags: ignore
 [Icons]
 Name: "{autoprograms}\ZaKi Admin Windows"; Filename: "{app}\ZaKi-Admin-Windows.exe"
 Name: "{autodesktop}\ZaKi Admin Windows"; Filename: "{app}\ZaKi-Admin-Windows.exe"; Tasks: desktopicon
+Name: "{autostartup}\ZaKi Admin Windows"; Filename: "{app}\ZaKi-Admin-Windows.exe"; Parameters: "--background"; Tasks: autostart
 
 [Tasks]
 Name: "desktopicon"; Description: "Создать ярлык на рабочем столе"; GroupDescription: "Дополнительные значки:"; Flags: unchecked
+Name: "autostart"; Description: "Запускать ZaKi в фоне при входе в Windows для уведомлений"; GroupDescription: "Уведомления:"
 
 [Run]
 Filename: "{app}\ZaKi-Admin-Windows.exe"; Description: "Открыть ZaKi Admin Windows"; Flags: nowait postinstall skipifsilent
