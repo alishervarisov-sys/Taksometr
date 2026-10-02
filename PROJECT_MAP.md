@@ -115,6 +115,11 @@ before relying on the older delivery-chain documentation.
   `RouteSyncWorker.kt`
 - Push messages: `ZaKiFirebaseMessagingService.kt`
 - Device restart recovery: `BootReceiver.kt`
+- Tracking startup/recovery: `service/TrackingController.kt`, `TrackingStartPolicy.kt`;
+  checks visible Activity/background access, handles Android foreground-service
+  refusals, and resumes deferred starts on Activity resume. Push refreshes only
+  an existing delivery tracker. `presentation/components/TrackingRecoveryNotice.kt`
+  explains optional background location access for reboot recovery.
 - Home-screen widget: `widget/TaksometrWidgetProvider.kt`
 
 Important values in `Constants.kt`: delivery location every 3 seconds, shift
@@ -274,6 +279,13 @@ open `/commission?requestId=...`. Web/native logout stops monitoring and clears
 that administrator's notification history. Delivery uses native polling, not
 FCM Web Push, and requires the background process and an internet connection.
 The release script builds current web sources before embedding `webadmin.zip`.
+Windows 1.3.0 installer output is
+`windows/release/installer/ZaKi-Admin-Windows-Setup-1.3.0.exe`; the published copy
+is `firebase/hosting/downloads/ZaKi-Admin-Windows-Setup-1.3.0.exe`, served at
+`https://zakitaksometr.web.app/downloads/ZaKi-Admin-Windows-Setup-1.3.0.exe`.
+Web staging output stays in `windows/release/webadmin-<version>/`, keeping the
+installer download out of the embedded archive. A web rebuild empties Hosting;
+copy release downloads back into Hosting before deploying a later web version.
 
 Ignore `bin/`, `obj/`, `publish-onefile/`, `release/`, packaged EXEs/ZIPs, and
 `Assets/webadmin.zip` unless the user is specifically building a release.
@@ -295,8 +307,12 @@ cd android
 ```
 
 Unit coverage is currently small (`GreetingTest.kt` and
-`CourierNotificationsSecurityTest.kt`), so also compile the affected Android
-variant for non-trivial changes.
+`CourierNotificationsSecurityTest.kt`, plus `service/TrackingStartPolicyTest.kt`
+and `TrackingRouteRecoveryTest.kt` for tracking startup/gap recovery), so also
+compile the affected Android variant for non-trivial changes.
+For tracking changes, run `lintDebug` and the device scenarios in
+`android/TRACKING_RECOVERY_CHECKLIST.md`; JVM tests cannot verify OS foreground
+service exemptions or real GPS delivery.
 
 ### Admin panel
 

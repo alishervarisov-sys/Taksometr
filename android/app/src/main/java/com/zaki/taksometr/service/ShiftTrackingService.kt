@@ -20,6 +20,7 @@ import com.zaki.taksometr.util.Constants
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.*
 import javax.inject.Inject
+import java.lang.ref.WeakReference
 
 /**
  * Continuous, always-on-while-on-shift location tracker.
@@ -65,24 +66,44 @@ class ShiftTrackingService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        acquireWakeLock()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            ACTION_START -> startTracking()
-            ACTION_STOP -> stopTracking()
-            else -> startTracking()
+        if (intent?.action == ACTION_STOP) {
+            TrackingController.clearPending(this, TrackingKind.SHIFT)
+            stopTracking()
+            return START_NOT_STICKY
         }
-        return START_STICKY
+        if (intent != null && intent.action != ACTION_START) {
+            stopTracking()
+            return START_NOT_STICKY
+        }
+        val source = TrackingController.source(intent)
+        if (locationCallback != null && TrackingController.isNeeded(this, TrackingKind.SHIFT) &&
+            TrackingController.hasLocation(this)) return START_STICKY
+        return try {
+            if (startTracking(source)) START_STICKY else START_NOT_STICKY
+        } catch (e: SecurityException) {
+            failTracking(source, e)
+            START_NOT_STICKY
+        } catch (e: IllegalStateException) {
+            failTracking(source, e)
+            START_NOT_STICKY
+        }
     }
 
     @SuppressLint("MissingPermission")
-    private fun startTracking() {
-        startForeground(Constants.SHIFT_TRACKING_NOTIFICATION_ID, createNotification())
+    private fun startTracking(source: TrackingStartSource): Boolean {
+        if (!TrackingController.promote(this, TrackingKind.SHIFT, source,
+                Constants.SHIFT_TRACKING_NOTIFICATION_ID, createNotification())) {
+            stopTracking()
+            return false
+        }
+        runningService = WeakReference(this)
+        if (wakeLock == null) acquireWakeLock()
 
         // Idempotent (re)start: drop any previous callback first.
-        locationCallback?.let { fusedLocationClient.removeLocationUpdates(it) }
+        locationCallback?.let { runCatching { fusedLocationClient.removeLocationUpdates(it) } }
 
         val locationRequest = LocationRequest.Builder(
             Priority.PRIORITY_BALANCED_POWER_ACCURACY,
@@ -94,6 +115,7 @@ class ShiftTrackingService : Service() {
 
         locationCallback = object : LocationCallback() {
             override fun onLocationResult(result: LocationResult) {
+                if (locationCallback !== this) return
                 result.lastLocation?.let { location ->
                     recordBreadcrumb(
                         latitude = location.latitude,
@@ -105,15 +127,27 @@ class ShiftTrackingService : Service() {
             }
 
             override fun onLocationAvailability(availability: LocationAvailability) {
+                if (locationCallback !== this) return
                 updateLocationStatus(availability.isLocationAvailable)
             }
         }
 
+        val callback = locationCallback!!
         fusedLocationClient.requestLocationUpdates(
             locationRequest,
-            locationCallback!!,
+            callback,
             Looper.getMainLooper()
-        )
+        ).addOnSuccessListener {
+            if (locationCallback === callback) TrackingController.clearPending(this, TrackingKind.SHIFT)
+        }.addOnFailureListener { error ->
+            if (locationCallback === callback) failTracking(source, error)
+        }
+        return true
+    }
+
+    private fun failTracking(source: TrackingStartSource, error: Exception) {
+        TrackingController.defer(this, TrackingKind.SHIFT, source, "location_updates_failed", error)
+        stopTracking()
     }
 
     private fun recordBreadcrumb(latitude: Double, longitude: Double, accuracy: Float, speedKmh: Float) {
@@ -197,7 +231,8 @@ class ShiftTrackingService : Service() {
     }
 
     private fun stopTracking() {
-        locationCallback?.let { fusedLocationClient.removeLocationUpdates(it) }
+        if (runningService?.get() === this) runningService = null
+        locationCallback?.let { runCatching { fusedLocationClient.removeLocationUpdates(it) } }
         locationCallback = null
         lastLocationAvailable = null
         lastWriteAt = 0L
@@ -241,27 +276,34 @@ class ShiftTrackingService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        if (runningService?.get() === this) runningService = null
         serviceScope.cancel()
         releaseWakeLock()
-        locationCallback?.let { fusedLocationClient.removeLocationUpdates(it) }
+        locationCallback?.let { runCatching { fusedLocationClient.removeLocationUpdates(it) } }
+        locationCallback = null
     }
 
     companion object {
+        @Volatile private var runningService: WeakReference<ShiftTrackingService>? = null
         const val ACTION_START = "ACTION_START_SHIFT_TRACKING"
         const val ACTION_STOP = "ACTION_STOP_SHIFT_TRACKING"
 
-        fun start(context: Context) {
-            val intent = Intent(context, ShiftTrackingService::class.java).apply {
-                action = ACTION_START
+        fun start(context: Context, source: TrackingStartSource = TrackingStartSource.VISIBLE_APP) {
+            TrackingController.onMain {
+                val service = runningService?.get()
+                if (service != null && TrackingController.isNeeded(context, TrackingKind.SHIFT) &&
+                    TrackingController.hasLocation(context)) return@onMain
+                service?.stopTracking()
+                TrackingController.launch(context, TrackingKind.SHIFT, ACTION_START, source)
             }
-            context.startForegroundService(intent)
         }
 
         fun stop(context: Context) {
-            val intent = Intent(context, ShiftTrackingService::class.java).apply {
-                action = ACTION_STOP
+            TrackingController.onMain {
+                TrackingController.clearPending(context, TrackingKind.SHIFT)
+                runningService?.get()?.stopTracking()
+                context.stopService(Intent(context, ShiftTrackingService::class.java))
             }
-            context.startService(intent)
         }
     }
 }

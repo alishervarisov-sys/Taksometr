@@ -85,6 +85,7 @@ class AuthRepositoryImpl @Inject constructor(
         // Stop the continuous shift tracker so it doesn't keep running for a
         // logged-out session.
         ShiftTrackingService.stop(context)
+        com.zaki.taksometr.service.LocationTrackingService.stopService(context)
         com.zaki.taksometr.util.BalanceNotification.clear(context)
         prefs.edit()
             .remove(Constants.PREF_USER_ID)

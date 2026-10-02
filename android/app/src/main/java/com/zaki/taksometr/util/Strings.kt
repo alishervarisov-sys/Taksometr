@@ -1,6 +1,26 @@
 package com.zaki.taksometr.util
 
 object Strings {
+    val backgroundTrackingTitle = mapOf("tg" to "Барқароркунии пайгирӣ", "ru" to "Восстановление отслеживания", "en" to "Tracking recovery")
+    val backgroundTrackingMessage = mapOf(
+        "tg" to "Барои барқарор кардани пайгирӣ пас аз бозоғозии телефон, дар танзимоти барнома дастрасӣ ба ҷойгиршавиро «Ҳамеша» иҷозат диҳед. Бе ин иҷозат, баъд аз бозоғозӣ барномаро кушоед.",
+        "ru" to "Чтобы отслеживание могло восстановиться после перезагрузки телефона, разрешите доступ к местоположению «Всегда» в настройках приложения. Без этого разрешения после перезагрузки откройте приложение.",
+        "en" to "To allow tracking to recover after a phone restart, allow location access all the time in app settings. Without this permission, open the app after restarting your phone."
+    )
+    val trackingRecoveryMessage = mapOf(
+        "tg" to "Пайгирӣ барқарор нашуд. ZaKi-ро кушоед ва иҷозати ҷойгиршавӣ ва GPS-ро санҷед.",
+        "ru" to "Отслеживание не восстановилось. Откройте ZaKi и проверьте доступ к местоположению и GPS.",
+        "en" to "Tracking could not resume. Open ZaKi and check location access and GPS."
+    )
+    val trackingSettings = mapOf("tg" to "Танзимот", "ru" to "Настройки", "en" to "Settings")
+    val trackingRecoveryInAppMessage = mapOf(
+        "tg" to "Пайгирӣ боздошта шуд. GPS ва иҷозати ҷойгиршавиро санҷед ва бори дигар кӯшиш кунед.",
+        "ru" to "Отслеживание приостановлено. Проверьте GPS и доступ к местоположению, затем повторите запуск.",
+        "en" to "Tracking is paused. Check GPS and location access, then retry."
+    )
+    val trackingRetry = mapOf("tg" to "Бори дигар", "ru" to "Повторить запуск", "en" to "Retry tracking")
+    val trackingLater = mapOf("tg" to "Баъдтар", "ru" to "Позже", "en" to "Later")
+
     // App name
     val appName = mapOf(
         "tg" to "ZaKi",

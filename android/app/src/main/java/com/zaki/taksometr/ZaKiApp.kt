@@ -15,6 +15,7 @@ class ZaKiApp : Application() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannels()
+        com.zaki.taksometr.service.TrackingController.install(this)
         // Flush any deliveries that were completed offline in a previous session
         // once the network is available again.
         com.zaki.taksometr.service.CompletionSyncWorker.schedule(this)

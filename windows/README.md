@@ -36,6 +36,9 @@ Windows с кнопкой «Открыть заявку». Кнопка откр
 Если Windows отключила уведомления ZaKi, включите их в системных настройках.
 Кнопка «Проверить уведомления» в приложении показывает проверочное уведомление.
 
+[Скачать установщик Windows 1.3.0](https://zakitaksometr.web.app/downloads/ZaKi-Admin-Windows-Setup-1.3.0.exe).
+Для обновления запустите установщик на компьютере администратора.
+
 ## Сборка
 
 ```powershell
@@ -54,7 +57,7 @@ dotnet build .\windows\ZaKi.Dispatcher\ZaKi.Dispatcher.csproj -c Release
 ```
 
 Для создания установщика на компьютере разработчика должен быть установлен
-Inno Setup 6. Готовый `ZaKi-Admin-Windows-Setup-*.exe` появится в
+Inno Setup 6 или 7. Готовый `ZaKi-Admin-Windows-Setup-*.exe` появится в
 `windows\release\installer\`.
 
 Для первого входа и операций Cloud Functions нужен интернет. Ранее загруженные

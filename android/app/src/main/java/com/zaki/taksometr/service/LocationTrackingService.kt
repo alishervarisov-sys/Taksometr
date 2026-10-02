@@ -32,6 +32,7 @@ import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.*
 import kotlinx.coroutines.tasks.await
 import javax.inject.Inject
+import java.lang.ref.WeakReference
 
 @AndroidEntryPoint
 class LocationTrackingService : Service() {
@@ -50,6 +51,9 @@ class LocationTrackingService : Service() {
     private var locationCallback: LocationCallback? = null
     private var lastValidPoint: GeoPoint? = null
     private var lastValidTimestamp: Long? = null
+    private var loadedDeliveryId: String? = null
+    private var deliveryStateJob: Job? = null
+    private var stateReady = false
     private var totalDistance: Double = 0.0
     private var isMarketplaceOrder: Boolean = false
     // When true, the next recorded point re-anchors the meter after a switch/resume
@@ -77,29 +81,57 @@ class LocationTrackingService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        acquireWakeLock()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            ACTION_START -> startTracking()
-            ACTION_STOP -> stopTracking()
-            ACTION_SWITCH -> switchTracking()
+        if (intent?.action == ACTION_STOP) {
+            TrackingController.clearPending(this, TrackingKind.DELIVERY)
+            stopTracking()
+            return START_NOT_STICKY
         }
-        return START_STICKY
+        if (intent != null && intent.action !in listOf(ACTION_START, ACTION_SWITCH)) {
+            stopTracking()
+            return START_NOT_STICKY
+        }
+        val source = TrackingController.source(intent)
+        if (!TrackingController.isNeeded(this, TrackingKind.DELIVERY)) {
+            TrackingController.clearPending(this, TrackingKind.DELIVERY)
+            stopTracking()
+            return START_NOT_STICKY
+        }
+        return try {
+            // A null intent is an OS sticky restart and must restore GPS too.
+            val started = if (locationCallback != null && TrackingController.hasLocation(this)) {
+                if (intent?.action == ACTION_SWITCH || loadedDeliveryId != deliveryId) switchTracking()
+                true
+            } else startTracking(source)
+            if (started) START_STICKY else START_NOT_STICKY
+        } catch (e: SecurityException) {
+            failTracking(source, e)
+            START_NOT_STICKY
+        } catch (e: IllegalStateException) {
+            failTracking(source, e)
+            START_NOT_STICKY
+        }
     }
 
     @SuppressLint("MissingPermission")
-    private fun startTracking() {
+    private fun startTracking(source: TrackingStartSource = TrackingStartSource.VISIBLE_APP): Boolean {
         val notification = createNotification("Отслеживание маршрута...")
-        startForeground(Constants.TRACKING_NOTIFICATION_ID, notification)
+        if (!TrackingController.promote(this, TrackingKind.DELIVERY, source,
+                Constants.TRACKING_NOTIFICATION_ID, notification)) {
+            stopTracking()
+            return false
+        }
+        runningService = WeakReference(this)
+        if (wakeLock == null) acquireWakeLock()
 
         // Load the state of whichever delivery is currently active (gap-aware).
-        loadCurrentDeliveryState()
+        loadCurrentDeliveryState(source)
 
         // Make (re)starting idempotent: drop any previous callback before
         // registering a new one so we never accumulate duplicate location streams.
-        locationCallback?.let { fusedLocationClient.removeLocationUpdates(it) }
+        locationCallback?.let { runCatching { fusedLocationClient.removeLocationUpdates(it) } }
 
         val locationRequest = LocationRequest.Builder(
             Priority.PRIORITY_HIGH_ACCURACY,
@@ -111,6 +143,7 @@ class LocationTrackingService : Service() {
 
         locationCallback = object : LocationCallback() {
             override fun onLocationResult(result: LocationResult) {
+                if (locationCallback !== this || !stateReady) return
                 result.lastLocation?.let { location ->
                     if (location.hasSpeed() && location.speed >= 0f) {
                         val speedKmh = location.speed * 3.6f
@@ -128,11 +161,22 @@ class LocationTrackingService : Service() {
             }
         }
 
+        val callback = locationCallback!!
         fusedLocationClient.requestLocationUpdates(
             locationRequest,
-            locationCallback!!,
+            callback,
             Looper.getMainLooper()
-        )
+        ).addOnSuccessListener {
+            if (locationCallback === callback) TrackingController.clearPending(this, TrackingKind.DELIVERY)
+        }.addOnFailureListener { error ->
+            if (locationCallback === callback) failTracking(source, error)
+        }
+        return true
+    }
+
+    private fun failTracking(source: TrackingStartSource, error: Exception) {
+        TrackingController.defer(this, TrackingKind.DELIVERY, source, "location_updates_failed", error)
+        stopTracking()
     }
 
     @SuppressLint("MissingPermission")
@@ -160,7 +204,7 @@ class LocationTrackingService : Service() {
      * for it, and the next point for the resumed delivery is anchored as a gap so
      * the travel done while it was paused isn't counted.
      */
-    private fun switchTracking() {
+    private fun switchTracking(source: TrackingStartSource = TrackingStartSource.VISIBLE_APP) {
         if (deliveryId.isEmpty()) {
             stopTracking()
             return
@@ -168,9 +212,9 @@ class LocationTrackingService : Service() {
         // Location updates are already running; just re-anchor to the new current
         // delivery. If they are not running (edge case), fall back to a full start.
         if (locationCallback == null) {
-            startTracking()
+            startTracking(source)
         } else {
-            loadCurrentDeliveryState()
+            loadCurrentDeliveryState(source)
         }
     }
 
@@ -181,40 +225,71 @@ class LocationTrackingService : Service() {
      * delivery that already has recorded points is marked as a gap so the jump
      * from the pause/interruption location isn't counted.
      */
-    private fun loadCurrentDeliveryState() {
-        serviceScope.launch {
-            lastValidPoint = null
-            lastValidTimestamp = null
-            currentSpeedKmh = 0f
-            maxSpeedKmh = 0f
-            totalDistance = 0.0
-            pendingGapAnchor = false
+    private fun loadCurrentDeliveryState(source: TrackingStartSource) {
+        val currentDeliveryId = deliveryId
+        loadedDeliveryId = currentDeliveryId
+        stateReady = false
+        deliveryStateJob?.cancel()
+        widgetTimerJob?.cancel()
+        // GPS callbacks and restored meter state are committed on the same thread.
+        // Do not accept fixes before the gap anchor and stored distance are ready.
+        deliveryStateJob = serviceScope.launch(Dispatchers.Main.immediate) {
+            try {
+                lastValidPoint = null
+                lastValidTimestamp = null
+                currentSpeedKmh = 0f
+                maxSpeedKmh = 0f
+                totalDistance = 0.0
+                pendingGapAnchor = false
 
-            val currentDeliveryId = deliveryId
-            if (currentDeliveryId.isNotEmpty()) {
-                deliveryDao.getById(currentDeliveryId)?.let { entity ->
-                    startTime = entity.startTime
-                    clientPhone = entity.clientPhone
-                    isMarketplaceOrder = entity.orderKind == "MARKETPLACE"
-                    currentDeliveryType = entity.deliveryType
-                    // Restore the explicit pause state so it survives app/service restarts.
-                    paused = entity.isPaused
+                if (currentDeliveryId.isNotEmpty()) {
+                    val entity = deliveryDao.getById(currentDeliveryId)
+                    if (entity == null) {
+                        TrackingController.defer(this@LocationTrackingService, TrackingKind.DELIVERY,
+                            source, "waiting_for_delivery_state")
+                        stopTracking()
+                        return@launch
+                    }
+                    if (entity.status != "IN_PROGRESS") {
+                        TrackingController.clearPending(this@LocationTrackingService, TrackingKind.DELIVERY)
+                        stopTracking()
+                        return@launch
+                    }
+                    entity.let {
+                        startTime = entity.startTime
+                        clientPhone = entity.clientPhone
+                        isMarketplaceOrder = entity.orderKind == "MARKETPLACE"
+                        currentDeliveryType = entity.deliveryType
+                        // Restore the explicit pause state so it survives app/service restarts.
+                        paused = entity.isPaused
+                    }
+                    val points = routePointDao.getPointsByDeliveryIdSync(currentDeliveryId)
+                    val distancePoints = if (isMarketplaceOrder) {
+                        val onTheWayAt = prefs.getLong(Constants.PREF_ON_THE_WAY_STARTED_AT, 0L)
+                        if (onTheWayAt > 0) points.filter { it.timestamp >= onTheWayAt } else emptyList()
+                    } else {
+                        points
+                    }
+                    totalDistance = withContext(Dispatchers.IO) {
+                        LocationUtils.calculateTotalDistance(distancePoints.map { it.toGeoPoint() })
+                    }
+                    // Continue an existing route with a gap anchor so interrupted travel
+                    // (app restart, pause/switch) isn't wrongly added to this delivery.
+                    pendingGapAnchor = points.isNotEmpty()
                 }
-                val points = routePointDao.getPointsByDeliveryIdSync(currentDeliveryId)
-                val distancePoints = if (isMarketplaceOrder) {
-                    val onTheWayAt = prefs.getLong(Constants.PREF_ON_THE_WAY_STARTED_AT, 0L)
-                    if (onTheWayAt > 0) points.filter { it.timestamp >= onTheWayAt } else emptyList()
-                } else {
-                    points
-                }
-                totalDistance = LocationUtils.calculateTotalDistance(distancePoints.map { it.toGeoPoint() })
-                // Continue an existing route with a gap anchor so interrupted travel
-                // (app restart, pause/switch) isn't wrongly added to this delivery.
-                pendingGapAnchor = points.isNotEmpty()
+
+                ensureActive()
+                if (currentDeliveryId != deliveryId) return@launch
+                stateReady = true
+                startWidgetTimer()
+                sendImmediateLocationUpdateIfAvailable()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                TrackingController.defer(this@LocationTrackingService, TrackingKind.DELIVERY,
+                    source, "state_restore_failed", e)
+                stopTracking()
             }
-
-            startWidgetTimer()
-            sendImmediateLocationUpdateIfAvailable()
         }
     }
 
@@ -461,10 +536,13 @@ class LocationTrackingService : Service() {
     }
 
     private fun stopTracking() {
+        if (runningService?.get() === this) runningService = null
+        stateReady = false
+        deliveryStateJob?.cancel()
         widgetTimerJob?.cancel()
         clearWidget()
         locationCallback?.let {
-            fusedLocationClient.removeLocationUpdates(it)
+            runCatching { fusedLocationClient.removeLocationUpdates(it) }
         }
         locationCallback = null
         lastValidPoint = null
@@ -524,30 +602,42 @@ class LocationTrackingService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        if (runningService?.get() === this) runningService = null
+        stateReady = false
+        widgetTimerJob?.cancel()
         serviceScope.cancel()
         releaseWakeLock()
         locationCallback?.let {
-            fusedLocationClient.removeLocationUpdates(it)
+            runCatching { fusedLocationClient.removeLocationUpdates(it) }
         }
+        locationCallback = null
     }
 
     companion object {
+        @Volatile private var runningService: WeakReference<LocationTrackingService>? = null
         const val ACTION_START = "ACTION_START_TRACKING"
         const val ACTION_STOP = "ACTION_STOP_TRACKING"
         const val ACTION_SWITCH = "ACTION_SWITCH_TRACKING"
 
-        fun startService(context: Context) {
-            val intent = Intent(context, LocationTrackingService::class.java).apply {
-                action = ACTION_START
+        fun startService(context: Context, source: TrackingStartSource = TrackingStartSource.VISIBLE_APP) {
+            TrackingController.onMain {
+                val service = runningService?.get()
+                if (service != null && TrackingController.isNeeded(context, TrackingKind.DELIVERY) &&
+                    TrackingController.hasLocation(context)) {
+                    if (service.loadedDeliveryId != service.deliveryId) service.switchTracking()
+                    return@onMain
+                }
+                service?.stopTracking()
+                TrackingController.launch(context, TrackingKind.DELIVERY, ACTION_START, source)
             }
-            context.startForegroundService(intent)
         }
 
         fun stopService(context: Context) {
-            val intent = Intent(context, LocationTrackingService::class.java).apply {
-                action = ACTION_STOP
+            TrackingController.onMain {
+                TrackingController.clearPending(context, TrackingKind.DELIVERY)
+                runningService?.get()?.stopTracking()
+                context.stopService(Intent(context, LocationTrackingService::class.java))
             }
-            context.startService(intent)
         }
 
         /**
@@ -555,10 +645,20 @@ class LocationTrackingService : Service() {
          * PREF_ACTIVE_DELIVERY_ID. Call after switching/resuming between orders.
          */
         fun switchService(context: Context) {
-            val intent = Intent(context, LocationTrackingService::class.java).apply {
-                action = ACTION_SWITCH
+            TrackingController.onMain {
+                val service = runningService?.get()
+                if (service != null) service.switchTracking()
+                else TrackingController.launch(context, TrackingKind.DELIVERY, ACTION_SWITCH, TrackingStartSource.VISIBLE_APP)
             }
-            context.startForegroundService(intent)
+        }
+
+        /** Push messages may refresh an existing tracker, never create one from the background. */
+        fun refreshFromPush(context: Context) {
+            TrackingController.onMain {
+                val service = runningService?.get()
+                if (service != null) service.switchTracking(TrackingStartSource.PUSH)
+                else TrackingController.defer(context, TrackingKind.DELIVERY, TrackingStartSource.PUSH, "push_waiting_for_app")
+            }
         }
     }
 }

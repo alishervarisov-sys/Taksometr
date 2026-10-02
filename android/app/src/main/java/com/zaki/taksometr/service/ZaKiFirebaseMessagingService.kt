@@ -112,7 +112,7 @@ class ZaKiFirebaseMessagingService : FirebaseMessagingService() {
                     // Reload the tracking service's in-memory route/type state.
                     // In particular, a changed pickup resets the old distance
                     // anchor before GPS points for the new pickup are counted.
-                    LocationTrackingService.switchService(this@ZaKiFirebaseMessagingService)
+                    LocationTrackingService.refreshFromPush(this@ZaKiFirebaseMessagingService)
                 }
                 val title = message.data["title"] ?: message.notification?.title ?: "Заказ изменён"
                 val body = message.data["body"] ?: message.notification?.body ?: "Диспетчер обновил данные заказа"

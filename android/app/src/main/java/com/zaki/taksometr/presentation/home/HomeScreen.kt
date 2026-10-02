@@ -339,6 +339,9 @@ fun HomeScreen(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
             // Combined courier info + stats card
+             com.zaki.taksometr.presentation.components.TrackingRecoveryNotice(
+                 trackingNeeded = state.user?.isOnShift == true || state.activeDelivery != null
+             )
             Text(
                 text = "${str(Greeting.forHour(greetingHour))}, ${state.user?.name?.substringBefore(' ')?.takeIf { it.isNotBlank() } ?: str(Strings.courier)}!",
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
