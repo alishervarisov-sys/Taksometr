@@ -1,6 +1,7 @@
 package com.zaki.taksometr.presentation.delivery
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -53,7 +54,7 @@ fun ActiveDeliveryScreen(
     val state by viewModel.state.collectAsState()
     val context = LocalContext.current
     BackHandler(onBack = onBack)
-    var showCompleteDialog by remember { mutableStateOf(false) }
+    var showCompleteDialog by rememberSaveable { mutableStateOf(false) }
     // Whether the delivery info panel is expanded. Collapsing it gives the
     // courier a much larger map view while keeping the call button reachable.
     var infoPanelExpanded by remember { mutableStateOf(true) }
@@ -631,7 +632,8 @@ fun ActiveDeliveryScreen(
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Text(
-                                        text = "Подъедьте к точке забора в радиусе ${Constants.PICKUP_ARRIVAL_RADIUS_METERS.toInt()} м — статус изменится автоматически$distanceHint",
+                                        text = state.pickupLocationIssue
+                                            ?: "Подъедьте к точке забора в радиусе ${Constants.PICKUP_ARRIVAL_RADIUS_METERS.toInt()} м — статус изменится автоматически$distanceHint",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = AccentOrange
                                     )
@@ -850,33 +852,17 @@ fun ActiveDeliveryScreen(
         }
     }
 
-    // Complete dialog
-    if (showCompleteDialog) {
-        AlertDialog(
-            onDismissRequest = { showCompleteDialog = false },
-            title = { Text("${str(Strings.complete)}?") },
-            text = {
-                Text(
-                    "${str(Strings.distance)}: ${LocationUtils.formatDistance(state.distanceMeters)}\n" +
-                    "${str(Strings.cost)}: ${LocationUtils.formatCost(state.currentCost)}"
-                )
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        showCompleteDialog = false
-                        LocationTrackingService.stopService(context)
-                        viewModel.completeDelivery { deliveryId ->
-                            onDeliveryComplete(deliveryId)
-                        }
-                    }
-                ) {
-                    Text(str(Strings.complete))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showCompleteDialog = false }) {
-                    Text(str(Strings.no))
+    if (showCompleteDialog && state.delivery != null) {
+        DeliveryCompletionDialog(
+            delivery = state.delivery!!,
+            summary = "${str(Strings.distance)}: ${LocationUtils.formatDistance(state.distanceMeters)}\n${str(Strings.cost)}: ${LocationUtils.formatCost(state.currentCost)}",
+            isCompleting = state.isCompleting,
+            error = state.error,
+            onDismiss = { showCompleteDialog = false },
+            onConfirm = { code, photo ->
+                viewModel.completeDelivery(code, photo) { deliveryId ->
+                    showCompleteDialog = false
+                    onDeliveryComplete(deliveryId)
                 }
             }
         )

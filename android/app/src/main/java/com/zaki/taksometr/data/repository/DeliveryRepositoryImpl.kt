@@ -208,7 +208,8 @@ class DeliveryRepositoryImpl @Inject constructor(
         }
     }
 
-        override suspend fun completeDelivery(deliveryId: String, waitingMinutes: Double): Resource<Delivery> {
+    override suspend fun completeDelivery(deliveryId: String, waitingMinutes: Double, recipientCode: String, confirmationPhotoBase64: String): Resource<Delivery> {
+        var confirmationRequired = deliveryDao.getById(deliveryId)?.let { it.requiresRecipientCode || it.requiresDeliveryPhoto } == true
         android.util.Log.d("DeliveryRepo", "=== COMPLETE DELIVERY START ===")
         android.util.Log.d("DeliveryRepo", "deliveryId=$deliveryId")
         android.util.Log.d("DeliveryRepo", "waitingMinutes=$waitingMinutes")
@@ -218,6 +219,7 @@ class DeliveryRepositoryImpl @Inject constructor(
         // best-effort cost estimate and finalize it on the server later via
         // CompletionSyncWorker as soon as the network is back.
         if (!isNetworkAvailable()) {
+            if (confirmationRequired) return Resource.Error("Для подтверждения вручения нужен интернет. Повторите после подключения")
             android.util.Log.w("DeliveryRepo", "No network — queueing completion offline")
             return enqueueOfflineCompletion(deliveryId, waitingMinutes)
         }
@@ -226,6 +228,7 @@ class DeliveryRepositoryImpl @Inject constructor(
             // First check Firestore for the actual status of this delivery
             val firestoreDoc = firestore.collection(Constants.COLLECTION_DELIVERIES).document(deliveryId).get().await()
             if (firestoreDoc.exists()) {
+                confirmationRequired = firestoreDoc.getBoolean("requiresRecipientCode") == true || firestoreDoc.getBoolean("requiresDeliveryPhoto") == true
                 val firestoreStatus = firestoreDoc.getString("status") ?: "unknown"
                 android.util.Log.d("DeliveryRepo", "Firestore delivery status: $firestoreStatus")
                 
@@ -245,6 +248,9 @@ class DeliveryRepositoryImpl @Inject constructor(
                                 cost = cost,
                                 distanceMeters = distance,
                                 endTime = firestoreDoc.getLong("endTime") ?: System.currentTimeMillis(),
+                                recipientCodeVerified = firestoreDoc.getBoolean("recipientCodeVerified") == true,
+                                deliveryPhotoSubmitted = firestoreDoc.getBoolean("deliveryPhotoSubmitted") == true,
+                                deliveryConfirmedAt = firestoreDoc.getLong("deliveryConfirmedAt"),
                                 isSynced = true
                             ))
                         }
@@ -252,17 +258,7 @@ class DeliveryRepositoryImpl @Inject constructor(
                         // Switch to remaining active (paused) delivery if any, else clear.
                         switchToRemainingActiveOrClear(deliveryId)
                         
-                        val delivery = Delivery(
-                            id = deliveryId,
-                            courierId = userId,
-                            clientPhone = firestoreDoc.getString("clientPhone") ?: "",
-                            courierName = firestoreDoc.getString("courierName") ?: "",
-                            status = DeliveryStatus.COMPLETED,
-                            startTime = firestoreDoc.getLong("startTime") ?: System.currentTimeMillis(),
-                            endTime = firestoreDoc.getLong("endTime") ?: System.currentTimeMillis(),
-                            distanceMeters = distance,
-                            cost = cost
-                        )
+                        val delivery = firestoreDoc.toDeliveryModel()
                         
                         android.util.Log.d("DeliveryRepo", "Delivery already completed on server. Synced locally.")
                         return Resource.Success(delivery)
@@ -313,11 +309,13 @@ class DeliveryRepositoryImpl @Inject constructor(
                 "courierId" to userId,
                 "route" to routeData,
                 "endTime" to System.currentTimeMillis(),
-                "waitingMinutes" to waitingMinutes
+                "waitingMinutes" to waitingMinutes,
+                "recipientCode" to recipientCode.trim(),
+                "confirmationPhotoBase64" to confirmationPhotoBase64
             )
 
             android.util.Log.d("DeliveryRepo", "Calling completeDelivery cloud function...")
-            android.util.Log.d("DeliveryRepo", "Request data: $data")
+            // Recipient code and photo must never be logged.
 
             val result = functions
                 .getHttpsCallable("completeDelivery")
@@ -331,16 +329,14 @@ class DeliveryRepositoryImpl @Inject constructor(
             val cost = (responseData["cost"] as? Number)?.toDouble() ?: 0.0
             val distance = (responseData["distanceMeters"] as? Number)?.toDouble() ?: 0.0
 
-            val delivery = Delivery(
-                id = deliveryId,
-                courierId = userId,
-                clientPhone = responseData["clientPhone"] as? String ?: "",
-                courierName = responseData["courierName"] as? String ?: "",
+            val delivery = firestoreDoc.toDeliveryModel().copy(
                 status = DeliveryStatus.COMPLETED,
-                startTime = (responseData["startTime"] as? Number)?.toLong() ?: 0L,
-                endTime = System.currentTimeMillis(),
+                endTime = (responseData["endTime"] as? Number)?.toLong() ?: System.currentTimeMillis(),
                 distanceMeters = distance,
                 cost = cost,
+                recipientCodeVerified = firestoreDoc.getBoolean("requiresRecipientCode") == true,
+                deliveryPhotoSubmitted = firestoreDoc.getBoolean("requiresDeliveryPhoto") == true,
+                deliveryConfirmedAt = (responseData["deliveryConfirmedAt"] as? Number)?.toLong(),
                 route = points.map { it.toGeoPoint() }
             )
 
@@ -360,6 +356,7 @@ class DeliveryRepositoryImpl @Inject constructor(
             // If the failure was caused by connectivity dropping mid-call, don't
             // block the courier: queue the completion and finalize it later.
             if (!isNetworkAvailable()) {
+                if (confirmationRequired) return Resource.Error("Для подтверждения вручения нужен интернет. Повторите после подключения")
                 android.util.Log.w("DeliveryRepo", "Network lost during completion — queueing offline")
                 return enqueueOfflineCompletion(deliveryId, waitingMinutes)
             }
@@ -385,6 +382,9 @@ class DeliveryRepositoryImpl @Inject constructor(
         val entity = deliveryDao.getById(deliveryId)
             ?: return Resource.Error("Доставка не найдена локально")
 
+        if (entity.requiresRecipientCode || entity.requiresDeliveryPhoto) {
+            return Resource.Error("Для подтверждения вручения нужен интернет")
+        }
         val endTime = System.currentTimeMillis()
 
         // Estimate distance/cost locally the same way the active screen does, so
@@ -1391,7 +1391,12 @@ class DeliveryRepositoryImpl @Inject constructor(
             waitingAccumulatedMs = ((getDouble("waitingMinutes") ?: 0.0) * 60000.0).toLong(),
             onTheWayStartedAt = getLong("onTheWayStartedAt"),
             acceptanceLimitMinutes = (getLong("acceptanceLimitMinutes") ?: 10L).toInt(),
-            acceptanceDurationMs = getLong("acceptanceDurationMs")
+            acceptanceDurationMs = getLong("acceptanceDurationMs"),
+            requiresRecipientCode = getBoolean("requiresRecipientCode") == true,
+            requiresDeliveryPhoto = getBoolean("requiresDeliveryPhoto") == true,
+            recipientCodeVerified = getBoolean("recipientCodeVerified") == true,
+            deliveryPhotoSubmitted = getBoolean("deliveryPhotoSubmitted") == true,
+            deliveryConfirmedAt = getLong("deliveryConfirmedAt")
         )
     }
 }

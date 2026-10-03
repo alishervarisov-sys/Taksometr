@@ -44,7 +44,12 @@ data class DeliveryEntity(
     val onTheWayStartedAt: Long? = null,
     val isPaused: Boolean = false,
     val acceptanceLimitMinutes: Int = 10,
-    val acceptanceDurationMs: Long? = null
+    val acceptanceDurationMs: Long? = null,
+    @androidx.room.ColumnInfo(defaultValue = "0") val requiresRecipientCode: Boolean = false,
+    @androidx.room.ColumnInfo(defaultValue = "0") val requiresDeliveryPhoto: Boolean = false,
+    @androidx.room.ColumnInfo(defaultValue = "0") val recipientCodeVerified: Boolean = false,
+    @androidx.room.ColumnInfo(defaultValue = "0") val deliveryPhotoSubmitted: Boolean = false,
+    val deliveryConfirmedAt: Long? = null
 ) {
     fun toDelivery(): Delivery = Delivery(
         id = id,
@@ -79,7 +84,12 @@ data class DeliveryEntity(
         onTheWayStartedAt = onTheWayStartedAt,
         isPaused = isPaused,
         acceptanceLimitMinutes = acceptanceLimitMinutes,
-        acceptanceDurationMs = acceptanceDurationMs
+        acceptanceDurationMs = acceptanceDurationMs,
+        requiresRecipientCode = requiresRecipientCode,
+        requiresDeliveryPhoto = requiresDeliveryPhoto,
+        recipientCodeVerified = recipientCodeVerified,
+        deliveryPhotoSubmitted = deliveryPhotoSubmitted,
+        deliveryConfirmedAt = deliveryConfirmedAt
     )
 
     companion object {
@@ -116,7 +126,12 @@ data class DeliveryEntity(
             onTheWayStartedAt = delivery.onTheWayStartedAt,
             isPaused = delivery.isPaused,
             acceptanceLimitMinutes = delivery.acceptanceLimitMinutes,
-            acceptanceDurationMs = delivery.acceptanceDurationMs
+            acceptanceDurationMs = delivery.acceptanceDurationMs,
+            requiresRecipientCode = delivery.requiresRecipientCode,
+            requiresDeliveryPhoto = delivery.requiresDeliveryPhoto,
+            recipientCodeVerified = delivery.recipientCodeVerified,
+            deliveryPhotoSubmitted = delivery.deliveryPhotoSubmitted,
+            deliveryConfirmedAt = delivery.deliveryConfirmedAt
         )
     }
 }

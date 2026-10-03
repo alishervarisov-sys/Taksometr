@@ -27,7 +27,7 @@ import com.zaki.taksometr.data.local.entity.TariffCacheEntity
         PendingOperationEntity::class,
         TariffCacheEntity::class
     ],
-    version = 9,
+    version = 10,
     exportSchema = false
 )
 abstract class ZaKiDatabase : RoomDatabase() {

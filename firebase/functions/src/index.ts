@@ -9,6 +9,7 @@ import {applyGoogleRoadMetrics} from "./dispatch/routes-api-service";
 import {CourierCandidate, GeoPoint} from "./dispatch/contracts";
 import {createBalanceService} from "./balance-service";
 import {createAdminPushService} from "./admin-push";
+import {confirmationOptions, createDeliveryWithConfirmation, confirmationSmsSuffix, verifyDeliveryConfirmation, requireConfirmedDelivery} from "./delivery-confirmation";
 
 admin.initializeApp();
 
@@ -92,17 +93,17 @@ function normalizePhone(raw: string | undefined | null): string | null {
  * Send an SMS via the Payom.tj REST API.
  * Never throws: failures are logged so they cannot break the delivery flow.
  */
-async function sendSms(telephoneRaw: string, text: string): Promise<void> {
+async function sendSms(telephoneRaw: string, text: string): Promise<boolean> {
   const telephone = normalizePhone(telephoneRaw);
 
   if (!telephone) {
     console.warn(`SMS skipped: invalid phone number "${telephoneRaw}"`);
-    return;
+    return false;
   }
 
   if (!PAYOM_API_TOKEN) {
     console.warn("SMS skipped: PAYOM_API_TOKEN is not configured");
-    return;
+    return false;
   }
 
   try {
@@ -126,13 +127,15 @@ async function sendSms(telephoneRaw: string, text: string): Promise<void> {
       console.error(
         `Payom.tj SMS failed (${response.status}) for ${telephone}: ${errBody}`
       );
-      return;
+      return false;
     }
 
     const result = await response.json().catch(() => ({}));
     console.log(`SMS sent to ${telephone}, id=${(result as {id?: string}).id ?? "?"}`);
+    return true;
   } catch (e) {
     console.error("Payom.tj SMS request error:", e);
+    return false;
   }
 }
 
@@ -852,12 +855,16 @@ export const completeDelivery = functions.https.onCall(async (data, context) => 
     );
   }
 
+  if (deliveryData.status === "COMPLETED") return {deliveryId, ...deliveryData};
+
   if (deliveryData.status !== "IN_PROGRESS") {
     throw new functions.https.HttpsError(
       "failed-precondition",
       "Delivery is not in progress"
     );
   }
+
+  const confirmationFields = await verifyDeliveryConfirmation(db, deliveryId, deliveryData, data);
 
   // Check if this is a fixed-price delivery
   const deliveryType = deliveryData.deliveryType || "default";
@@ -934,46 +941,37 @@ export const completeDelivery = functions.https.onCall(async (data, context) => 
   // Exact commission — no rounding, preserve dirams for transparency
   const commissionAmount = Math.round((totalCost * commissionPercent / 100) * 100) / 100;
 
-  // Deduct commission from courier balance (ladder counter saved together)
-  const currentBalance = courierData2.balance || 0;
-  const newBalance = currentBalance - commissionAmount;
-
-  await courierRef.update({balance: newBalance, ...ladder.courierUpdates});
-
-  // Congratulate the courier when a ladder tier is reached today
-  await notifyTierReached(courierId, ladder);
-
-  // Record commission transaction
-  if (commissionAmount > 0) {
-    await db.collection("transactions").add({
-      courierId: courierId,
-      courierName: deliveryData.courierName || "",
-      type: "COMMISSION",
-      amount: -commissionAmount,
-      deliveryId: deliveryId,
-      balanceAfter: newBalance,
-      description: `Комиссия ${commissionPercent}% за доставку`,
-      createdAt: Date.now(),
-    });
-  }
-
-  // Rating token — lets the client rate this delivery exactly once via SMS link.
   const ratingToken = generateRatingToken();
-
-  // Update delivery
-  await deliveryRef.update({
-    status: "COMPLETED",
-    endTime: endTime || Date.now(),
-    distanceMeters: distanceMeters,
-    cost: totalCost,
-    waitingMinutes: waitingMinutes || 0,
-    waitingCost: waitingCost,
-    commission: commissionAmount,
-    route: routePoints,
-    ratingToken: ratingToken,
-    ratingRequestedAt: Date.now(),
-    rating: null,
+  const completedAt = endTime || Date.now();
+  const committed = await db.runTransaction(async tx => {
+    const freshDelivery = await tx.get(deliveryRef);
+    const freshCourier = await tx.get(courierRef);
+    const current = freshDelivery.data()!;
+    if (current.status === "COMPLETED") return false;
+    if (current.status !== "IN_PROGRESS" || current.courierId !== courierId ||
+        current.requiresRecipientCode !== deliveryData.requiresRecipientCode ||
+        current.requiresDeliveryPhoto !== deliveryData.requiresDeliveryPhoto || current.clientPhone !== deliveryData.clientPhone) {
+      throw new functions.https.HttpsError("failed-precondition", "Заказ изменён. Обновите экран");
+    }
+    const newBalance = Number(freshCourier.data()?.balance || 0) - commissionAmount;
+    tx.update(courierRef, {balance: newBalance, ...ladder.courierUpdates});
+    if (commissionAmount > 0) {
+      tx.set(db.collection("transactions").doc(), {
+        courierId, courierName: deliveryData.courierName || "", type: "COMMISSION", amount: -commissionAmount,
+        deliveryId, balanceAfter: newBalance, description: `Комиссия ${commissionPercent}% за доставку`, createdAt: Date.now(),
+      });
+    }
+    tx.update(deliveryRef, {
+      status: "COMPLETED", endTime: completedAt, distanceMeters, cost: totalCost,
+      waitingMinutes: waitingMinutes || 0, waitingCost, commission: commissionAmount,
+      commissionCharged: commissionAmount > 0, route: routePoints, ratingToken,
+      ratingRequestedAt: Date.now(), rating: null, ...confirmationFields,
+      ...(deliveryData.orderKind === "MARKETPLACE" ? {adminOrderStage: "COMPLETED"} : {}),
+    });
+    return true;
   });
+  if (!committed) return {deliveryId, ...(await deliveryRef.get()).data()};
+  await notifyTierReached(courierId, ladder);
 
     // ---- Sync courier status after completing this delivery ----
   await syncCourierStatus(courierId, "completeDelivery: delivery status changed to COMPLETED");
@@ -1052,6 +1050,7 @@ export const completeDelivery = functions.https.onCall(async (data, context) => 
     `Барномаи ZaKi-ро боргирӣ кунед: https://clck.ru/3TuGb6 ` +
     `Ташаккур!`;
 
+  completeSmsText += await confirmationSmsSuffix(db, deliveryId, deliveryData, true);
   await sendSms(deliveryData.clientPhone, completeSmsText);
 
   return {
@@ -1065,7 +1064,42 @@ export const completeDelivery = functions.https.onCall(async (data, context) => 
     waitingMinutes: waitingMinutes || 0,
     waitingCost: waitingCost,
     commission: commissionAmount,
+    ...confirmationFields,
   };
+});
+
+export const resendDeliveryConfirmationCode = functions.https.onCall(async (data) => {
+  await verifyAdmin(data?.adminId);
+  if (typeof data?.deliveryId !== "string" || !data.deliveryId || data.deliveryId.includes("/")) {
+    throw new functions.https.HttpsError("invalid-argument", "deliveryId is required");
+  }
+  const delivery = (await db.collection("deliveries").doc(data.deliveryId).get()).data();
+  if (!delivery?.requiresRecipientCode || delivery.status !== "IN_PROGRESS") {
+    throw new functions.https.HttpsError("failed-precondition", "Код можно отправить только для активного заказа с подтверждением");
+  }
+  const ref = db.collection("deliveryConfirmations").doc(data.deliveryId);
+  await db.runTransaction(async tx => {
+    const secret = (await tx.get(ref)).data();
+    if (!secret?.recipientCode) throw new functions.https.HttpsError("failed-precondition", "Код отсутствует");
+    if (Number(secret.codeSmsLastAttemptAt || 0) > Date.now() - 60000) {
+      throw new functions.https.HttpsError("resource-exhausted", "Повторную SMS можно отправить через минуту");
+    }
+    tx.update(ref, {codeSmsLastAttemptAt: Date.now()});
+  });
+  const sent = await sendSms(delivery.clientPhone, "ZaKi." + await confirmationSmsSuffix(db, data.deliveryId, delivery));
+  if (!sent) throw new functions.https.HttpsError("unavailable", "Сервис SMS недоступен. Повторите позже");
+  return {success: true};
+});
+
+export const getDeliveryConfirmationPhoto = functions.https.onCall(async (data) => {
+  await verifyAdmin(data?.adminId);
+  if (typeof data?.deliveryId !== "string" || !data.deliveryId || data.deliveryId.includes("/")) {
+    throw new functions.https.HttpsError("invalid-argument", "deliveryId is required");
+  }
+  const delivery = (await db.collection("deliveries").doc(data.deliveryId).get()).data();
+  if (!delivery?.deliveryPhotoSubmitted) return {photoDataUrl: null};
+  const confirmation = (await db.collection("deliveryConfirmations").doc(data.deliveryId).get()).data();
+  return {photoDataUrl: confirmation?.photoBase64 ? `data:image/jpeg;base64,${confirmation.photoBase64}` : null};
 });
 
 // ============ CLIENT RATING PAGE (public HTTP) ============
@@ -1301,6 +1335,10 @@ export const adminCreateMarketplaceDelivery = functions.https.onCall(async (data
   };
 
   await verifyAdmin(adminId);
+  const confirmation = confirmationOptions(data);
+  if (confirmation.requiresRecipientCode && !normalizePhone(clientPhone)) {
+    throw new functions.https.HttpsError("invalid-argument", "Для кода подтверждения нужен действительный телефон получателя");
+  }
 
   if (!clientPhone || !pickup) {
     throw new functions.https.HttpsError(
@@ -1386,7 +1424,8 @@ export const adminCreateMarketplaceDelivery = functions.https.onCall(async (data
     const deliveryRef = db.collection("deliveries").doc();
     const now = Date.now();
 
-    await deliveryRef.set({
+    await createDeliveryWithConfirmation(db, deliveryRef, {
+      ...confirmation,
       courierId: "",
       courierName: "",
       courierPhone: "",
@@ -1468,7 +1507,8 @@ export const adminCreateMarketplaceDelivery = functions.https.onCall(async (data
   const deliveryRef = db.collection("deliveries").doc();
   const now = Date.now();
 
-  await deliveryRef.set({
+  await createDeliveryWithConfirmation(db, deliveryRef, {
+      ...confirmation,
     courierId: "",
     courierName: "",
     clientPhone: clientPhone,
@@ -1668,6 +1708,9 @@ export const adminUpdateMarketplaceDelivery = functions.https.onCall(async (data
     latitude: Number(point.latitude),
     longitude: Number(point.longitude),
   });
+  if (previous.requiresRecipientCode && !normalizePhone(clientPhone)) {
+    throw new functions.https.HttpsError("invalid-argument", "Неверный телефон получателя");
+  }
   const nextPickup = normalizePoint(pickup)!;
   const nextDestination = normalizePoint(destination);
   const oldPickup = normalizePoint(previous.pickup);
@@ -1801,6 +1844,9 @@ export const adminUpdateMarketplaceDelivery = functions.https.onCall(async (data
     }
   }
 
+  if (previous.requiresRecipientCode && previous.status === "IN_PROGRESS" && String(previous.clientPhone) !== String(clientPhone).trim()) {
+    await sendSms(String(clientPhone).trim(), "ZaKi." + await confirmationSmsSuffix(db, deliveryId, previous));
+  }
   return {
     success: true,
     deliveryId,
@@ -1957,6 +2003,7 @@ export const acceptMarketplaceDelivery = functions.https.onCall(async (data, con
     }
   }
 
+  smsText += await confirmationSmsSuffix(db, deliveryId, acceptanceResult.deliveryData);
   await sendSms(acceptanceResult.deliveryData.clientPhone, smsText);
 
   return {
@@ -2094,6 +2141,7 @@ export const adminAssignOrderToCourier = functions.https.onCall(async (data, con
   let smsText = `Салом! Курьери ZaKi фармоиши шуморо қабул кард. ${courierName}`;
   if (courierPhone) smsText += `, тел: ${courierPhone}`;
   smsText += `.`;
+  smsText += await confirmationSmsSuffix(db, deliveryId, result.deliveryData);
   await sendSms(result.deliveryData.clientPhone, smsText);
 
   return {success: true, deliveryId, courierId, courierName};
@@ -4088,6 +4136,7 @@ export const adminCompleteDelivery = functions.https.onCall(async (data, context
   }
 
   const deliveryData = deliveryDoc.data()!;
+  requireConfirmedDelivery(deliveryData);
 
   const isMarketplacePending = deliveryData.orderKind === "MARKETPLACE" && deliveryData.status === "PENDING";
   if (deliveryData.status !== "IN_PROGRESS" && !isMarketplacePending) {
@@ -4181,6 +4230,7 @@ export const adminCompleteDelivery = functions.https.onCall(async (data, context
   }
 
     completeSmsText += `Маблағи умумӣ: ${formatCostForSms(totalCost)} сомонӣ. Ташаккур!`;
+  completeSmsText += await confirmationSmsSuffix(db, deliveryId, deliveryData, true);
   await sendSms(deliveryData.clientPhone, completeSmsText);
 
   // ---- Sync courier status after admin completes the delivery ----
@@ -4240,6 +4290,7 @@ export const adminSetDeliveryStatus = functions.https.onCall(async (data, contex
       (deliveryData.commission || 0) > 0);
 
   if (newStatus === "COMPLETED") {
+    requireConfirmedDelivery(deliveryData);
     // ---- Determine cost ----
     let totalCost: number;
     let distanceMeters: number = deliveryData.distanceMeters || 0;
@@ -4343,6 +4394,7 @@ export const adminSetDeliveryStatus = functions.https.onCall(async (data, contex
         smsText += `Масофа: ${(distanceMeters / 1000).toFixed(1)} км. `;
       }
       smsText += `Маблағи умумӣ: ${formatCostForSms(totalCost)} сомонӣ. Ташаккур!`;
+      smsText += await confirmationSmsSuffix(db, deliveryId, deliveryData, true);
       await sendSms(deliveryData.clientPhone, smsText);
     }
 

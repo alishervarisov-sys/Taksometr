@@ -19,9 +19,31 @@ service cloud.firestore {
 
     // Deliveries collection
     match /deliveries/{deliveryId} {
+      // Confirmation requirements and results are set only by Functions.
+      // Legacy orders may omit these optional fields. Secret codes and JPEGs
+      // live in deliveryConfirmations, which has no client access.
+      function validConfirmationFields() {
+        return request.resource.data.get('requiresRecipientCode', false) is bool
+          && request.resource.data.get('requiresDeliveryPhoto', false) is bool
+          && request.resource.data.get('recipientCodeVerified', false) is bool
+          && request.resource.data.get('deliveryPhotoSubmitted', false) is bool
+          && !request.resource.data.keys().hasAny(['recipientCode', 'confirmationPhotoBase64', 'photoBase64']);
+      }
+      function hasConfirmation() {
+        return resource.data.get('requiresRecipientCode', false)
+          || resource.data.get('requiresDeliveryPhoto', false);
+      }
       allow read: if true;
-      allow create: if true; // Created via Cloud Functions
-      allow update: if true; // Validated in Cloud Functions
+      allow create: if validConfirmationFields()
+        && !request.resource.data.keys().hasAny(['requiresRecipientCode', 'requiresDeliveryPhoto',
+          'recipientCodeVerified', 'deliveryPhotoSubmitted', 'deliveryConfirmedAt']);
+      allow update: if validConfirmationFields()
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          'requiresRecipientCode', 'requiresDeliveryPhoto', 'recipientCodeVerified',
+          'deliveryPhotoSubmitted', 'deliveryConfirmedAt'])
+        && (!hasConfirmation() || !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          'status', 'courierId', 'clientPhone']))
+        && (!hasConfirmation() || request.resource.data.get('adminOrderStage', '') != 'COMPLETED');
       allow delete: if false; // Never delete completed deliveries from client
 
       // Smart Dispatch adds this audit trail server-side. The admin panel uses
@@ -30,6 +52,10 @@ service cloud.firestore {
         allow read: if true;
         allow write: if false;
       }
+    }
+
+    match /deliveryConfirmations/{deliveryId} {
+      allow read, write: if false; // Server-only codes, failed attempts and JPEG evidence.
     }
 
     // Tariffs collection

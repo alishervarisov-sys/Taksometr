@@ -46,7 +46,12 @@ data class Delivery(
     // written by the server when a courier accepts the order, so it remains a
     // trustworthy part of both parties' history.
     val acceptanceLimitMinutes: Int = 10,
-    val acceptanceDurationMs: Long? = null
+    val acceptanceDurationMs: Long? = null,
+    val requiresRecipientCode: Boolean = false,
+    val requiresDeliveryPhoto: Boolean = false,
+    val recipientCodeVerified: Boolean = false,
+    val deliveryPhotoSubmitted: Boolean = false,
+    val deliveryConfirmedAt: Long? = null
 )
 
 /** A purchased dish as supplied by Motorol for a marketplace food order. */

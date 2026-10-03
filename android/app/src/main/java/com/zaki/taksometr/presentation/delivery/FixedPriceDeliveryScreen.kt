@@ -1,6 +1,7 @@
 package com.zaki.taksometr.presentation.delivery
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -30,7 +31,7 @@ fun FixedPriceDeliveryScreen(
 ) {
     val state by viewModel.state.collectAsState()
     val context = LocalContext.current
-    var showCompleteDialog by remember { mutableStateOf(false) }
+    var showCompleteDialog by rememberSaveable { mutableStateOf(false) }
     BackHandler(onBack = onBack)
 
     val delivery = state.delivery
@@ -256,32 +257,17 @@ fun FixedPriceDeliveryScreen(
         }
     }
 
-    // Complete dialog
-    if (showCompleteDialog) {
-        AlertDialog(
-            onDismissRequest = { showCompleteDialog = false },
-            title = { Text("${str(Strings.complete)}?") },
-            text = {
-                Text(
-                    "${str(Strings.delivery)}: $deliveryTypeName\n" +
-                    "Стоимость: ${LocationUtils.formatCost(delivery?.fixedPrice ?: 0.0)}"
-                )
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        showCompleteDialog = false
-                        viewModel.completeDelivery { deliveryId ->
-                            onDeliveryComplete(deliveryId)
-                        }
-                    }
-                ) {
-                    Text(str(Strings.complete))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showCompleteDialog = false }) {
-                    Text(str(Strings.no))
+    if (showCompleteDialog && state.delivery != null) {
+        DeliveryCompletionDialog(
+            delivery = state.delivery!!,
+            summary = "${str(Strings.delivery)}: $deliveryTypeName\nСтоимость: ${LocationUtils.formatCost(delivery?.fixedPrice ?: 0.0)}",
+            isCompleting = state.isCompleting,
+            error = state.error,
+            onDismiss = { showCompleteDialog = false },
+            onConfirm = { code, photo ->
+                viewModel.completeDelivery(code, photo) { deliveryId ->
+                    showCompleteDialog = false
+                    onDeliveryComplete(deliveryId)
                 }
             }
         )

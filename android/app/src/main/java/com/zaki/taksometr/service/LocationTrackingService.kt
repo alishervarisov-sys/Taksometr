@@ -10,6 +10,7 @@ import android.content.SharedPreferences
 import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
+import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import com.google.android.gms.location.*
 import com.google.firebase.firestore.FirebaseFirestore
@@ -26,10 +27,13 @@ import com.zaki.taksometr.domain.repository.TariffRepository
 import com.zaki.taksometr.presentation.MainActivity
 import com.zaki.taksometr.util.Constants
 import com.zaki.taksometr.util.LocationUtils
+import com.zaki.taksometr.util.PickupArrivalPolicy
 import com.zaki.taksometr.util.Resource
 import com.zaki.taksometr.widget.TaksometrWidgetProvider
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.tasks.await
 import javax.inject.Inject
 import java.lang.ref.WeakReference
@@ -138,7 +142,8 @@ class LocationTrackingService : Service() {
             Constants.LOCATION_UPDATE_INTERVAL
         ).apply {
             setMinUpdateIntervalMillis(Constants.LOCATION_FASTEST_INTERVAL)
-            setWaitForAccurateLocation(true)
+            // A fix can prove arrival within 200 m before it is precise enough for the meter.
+            setWaitForAccurateLocation(false)
         }.build()
 
         locationCallback = object : LocationCallback() {
@@ -150,13 +155,7 @@ class LocationTrackingService : Service() {
                         currentSpeedKmh = speedKmh
                         if (speedKmh > maxSpeedKmh) maxSpeedKmh = speedKmh
                     }
-                    val newPoint = GeoPoint(
-                        latitude = location.latitude,
-                        longitude = location.longitude,
-                        timestamp = System.currentTimeMillis(),
-                        accuracy = location.accuracy
-                    )
-                    processLocationUpdate(newPoint)
+                    processLocationUpdate(location.toTrackingPoint())
                 }
             }
         }
@@ -179,20 +178,22 @@ class LocationTrackingService : Service() {
         stopTracking()
     }
 
+    private fun android.location.Location.toTrackingPoint(): GeoPoint {
+        // Preserve the actual age of cached/batched fixes instead of making them look new.
+        val ageMs = ((SystemClock.elapsedRealtimeNanos() - elapsedRealtimeNanos) / 1_000_000L)
+            .coerceAtLeast(0L)
+        return GeoPoint(latitude, longitude, System.currentTimeMillis() - ageMs,
+            if (hasAccuracy()) accuracy else Float.POSITIVE_INFINITY)
+    }
+
     @SuppressLint("MissingPermission")
     private suspend fun sendImmediateLocationUpdateIfAvailable() {
         if (courierId.isEmpty()) return
 
         try {
             val location = fusedLocationClient.lastLocation.await() ?: return
-            updateCourierLocationInFirestore(
-                GeoPoint(
-                    latitude = location.latitude,
-                    longitude = location.longitude,
-                    timestamp = System.currentTimeMillis(),
-                    accuracy = location.accuracy
-                )
-            )
+            // An already stationary courier must not have to move to trigger arrival.
+            if (stateReady) processLocationUpdate(location.toTrackingPoint())
         } catch (_: Exception) {}
     }
 
@@ -294,6 +295,10 @@ class LocationTrackingService : Service() {
     }
 
     private fun processLocationUpdate(newPoint: GeoPoint) {
+        if (!PickupArrivalPolicy.isFresh(newPoint)) return
+        // The startup cache request can finish after a newer streaming fix.
+        if (liveLocation.value?.let { newPoint.timestamp < it.timestamp } == true) return
+        liveLocation.value = newPoint
         // While explicitly paused, keep the courier visible on the admin map but
         // freeze the meter: don't record route points or accumulate distance.
         if (paused) {
@@ -350,13 +355,7 @@ class LocationTrackingService : Service() {
     }
 
     private fun maybeStartMarketplaceTrip(currentDeliveryId: String, point: GeoPoint) {
-        val isStationaryFix = lastValidPoint?.let {
-            LocationUtils.haversineDistance(it, point) < 5.0
-        } ?: false
-        if (point.accuracy > 20f ||
-            (!isStationaryFix && !LocationUtils.isValidPoint(point, lastValidPoint, lastValidTimestamp)) ||
-            autoPickupInFlightForId == currentDeliveryId
-        ) return
+        if (autoPickupInFlightForId == currentDeliveryId) return
         autoPickupInFlightForId = currentDeliveryId
         serviceScope.launch {
             try {
@@ -369,10 +368,8 @@ class LocationTrackingService : Service() {
                     pickupLat == null || pickupLng == null
                 ) return@launch
 
-                val distance = LocationUtils.haversineDistance(
-                    point, GeoPoint(pickupLat, pickupLng)
-                )
-                if (currentDeliveryId == deliveryId && distance <= Constants.PICKUP_ARRIVAL_RADIUS_METERS) {
+                if (currentDeliveryId == deliveryId &&
+                    PickupArrivalPolicy.isWithinRadius(point, GeoPoint(pickupLat, pickupLng))) {
                     when (val result = deliveryRepository.updateMarketplaceDeliveryStage(
                         currentDeliveryId, "ON_THE_WAY", null
                     )) {
@@ -536,6 +533,7 @@ class LocationTrackingService : Service() {
     }
 
     private fun stopTracking() {
+        liveLocation.value = null
         if (runningService?.get() === this) runningService = null
         stateReady = false
         deliveryStateJob?.cancel()
@@ -602,6 +600,7 @@ class LocationTrackingService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        liveLocation.value = null
         if (runningService?.get() === this) runningService = null
         stateReady = false
         widgetTimerJob?.cancel()
@@ -614,6 +613,9 @@ class LocationTrackingService : Service() {
     }
 
     companion object {
+        private val liveLocation = MutableStateFlow<GeoPoint?>(null)
+        // Both the screen and the arrival check use fixes before route filtering.
+        val currentLocation = liveLocation.asStateFlow()
         @Volatile private var runningService: WeakReference<LocationTrackingService>? = null
         const val ACTION_START = "ACTION_START_TRACKING"
         const val ACTION_STOP = "ACTION_STOP_TRACKING"

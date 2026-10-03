@@ -3,7 +3,7 @@ import {
   Box, Typography, Card, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, Chip, TextField, InputAdornment, Dialog,
   DialogTitle, DialogContent, DialogActions, Button, Grid, Divider,
-  MenuItem, ToggleButtonGroup, ToggleButton, Stack, Alert, CircularProgress
+  MenuItem, ToggleButtonGroup, ToggleButton, Stack, Alert, CircularProgress, FormControlLabel, Switch
 } from '@mui/material';
 import {
   ClientPhoneAutocomplete, AddressAutocomplete, fetchClientRecentAddresses,
@@ -43,6 +43,11 @@ interface Delivery {
   maxSpeedKmh?: number;
   acceptanceLimitMinutes?: number;
   acceptanceDurationMs?: number | null;
+  requiresRecipientCode?: boolean;
+  requiresDeliveryPhoto?: boolean;
+  recipientCodeVerified?: boolean;
+  deliveryPhotoSubmitted?: boolean;
+  deliveryConfirmedAt?: number;
 }
 
 interface CourierOption {
@@ -158,6 +163,24 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedDelivery, setSelectedDelivery] = useState<Delivery | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
+  const [confirmationPhoto, setConfirmationPhoto] = useState<string | null>(null);
+  const [confirmationPhotoError, setConfirmationPhotoError] = useState('');
+  const [loadingConfirmationPhoto, setLoadingConfirmationPhoto] = useState(false);
+  const [resendingCode, setResendingCode] = useState(false);
+  useEffect(() => {
+    let active = true;
+    setConfirmationPhoto(null);
+    setConfirmationPhotoError('');
+    setLoadingConfirmationPhoto(false);
+    if (detailOpen && selectedDelivery?.deliveryPhotoSubmitted) {
+      setLoadingConfirmationPhoto(true);
+      httpsCallable(functions, 'getDeliveryConfirmationPhoto')({ adminId, deliveryId: selectedDelivery.id })
+        .then(result => { if (active) setConfirmationPhoto((result.data as { photoDataUrl: string | null }).photoDataUrl); })
+        .catch(() => { if (active) setConfirmationPhotoError('Не удалось загрузить фото. Закройте и откройте карточку повторно.'); })
+        .finally(() => { if (active) setLoadingConfirmationPhoto(false); });
+    }
+    return () => { active = false; };
+  }, [adminId, detailOpen, selectedDelivery?.id, selectedDelivery?.deliveryPhotoSubmitted]);
   const [liveCourierLocation, setLiveCourierLocation] = useState<CourierLocation | null>(null);
   const [couriers, setCouriers] = useState<CourierOption[]>([]);
   const [selectedCourier, setSelectedCourier] = useState('all');
@@ -217,6 +240,8 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
     destinationLat: '',
     destinationLng: '',
     acceptanceLimitMinutes: '10',
+    requiresRecipientCode: false,
+    requiresDeliveryPhoto: false,
   });
   // Saved addresses of the client picked from autocomplete (phone → addresses).
   const [clientAddresses, setClientAddresses] = useState<AddressSuggestion[]>([]);
@@ -481,6 +506,10 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
   // Unified status switch: works for any current status and can toggle
   // COMPLETED <-> CANCELLED at any time. Commission is handled server-side.
   const handleChangeStatus = async (delivery: Delivery, newStatus: 'COMPLETED' | 'CANCELLED') => {
+    if (newStatus === 'COMPLETED' && ((delivery.requiresRecipientCode && !delivery.recipientCodeVerified) || (delivery.requiresDeliveryPhoto && !delivery.deliveryPhotoSubmitted))) {
+      alert('Курьер должен подтвердить вручение кодом и/или фото в приложении');
+      return;
+    }
     const actionWord = newStatus === 'COMPLETED' ? 'Завершить' : 'Отменить';
     const confirmMessage = `${actionWord} доставку?\n\nКурьер: ${delivery.courierName || '—'}\nКлиент: ${delivery.clientPhone || '—'}`;
     if (!window.confirm(confirmMessage)) return;
@@ -687,7 +716,7 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
   };
 
   const resetCreateForm = () => {
-    setCreateForm({ clientPhone: '', comment: '', courierId: '', deliveryType: 'default', pickupAddress: '', pickupLat: '', pickupLng: '', destinationAddress: '', destinationLat: '', destinationLng: '', acceptanceLimitMinutes: '10' });
+    setCreateForm({ clientPhone: '', comment: '', courierId: '', deliveryType: 'default', pickupAddress: '', pickupLat: '', pickupLng: '', destinationAddress: '', destinationLat: '', destinationLng: '', acceptanceLimitMinutes: '10', requiresRecipientCode: false, requiresDeliveryPhoto: false });
     setClientAddresses([]);
     coordSourceRef.current = { pickup: null, destination: null };
     selectedAddressRef.current = { pickup: null, destination: null };
@@ -723,6 +752,8 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
         // Delivery type the courier would pick when starting the meter.
         deliveryType: createForm.deliveryType || 'default',
         acceptanceLimitMinutes,
+        requiresRecipientCode: createForm.requiresRecipientCode,
+        requiresDeliveryPhoto: createForm.requiresDeliveryPhoto,
         pickup: {
           address: createForm.pickupAddress,
           latitude: Number(createForm.pickupLat),
@@ -1231,6 +1262,14 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
               />
             </Grid>
             <Grid item xs={12}>
+              <Typography fontWeight={600}>Подтверждение вручения</Typography>
+              <Stack>
+                <FormControlLabel label="Код от получателя" control={<Switch checked={createForm.requiresRecipientCode} onChange={e => setCreateForm(prev => ({ ...prev, requiresRecipientCode: e.target.checked }))} />} />
+                <FormControlLabel label="Фото вручения" control={<Switch checked={createForm.requiresDeliveryPhoto} onChange={e => setCreateForm(prev => ({ ...prev, requiresDeliveryPhoto: e.target.checked }))} />} />
+              </Stack>
+              <Typography variant="body2" color="text.secondary">Код придёт получателю в SMS после принятия заказа. Курьер выполнит выбранные подтверждения перед завершением. Можно включить оба.</Typography>
+            </Grid>
+            <Grid item xs={12}>
               {isLoaded && (
                 <Box sx={{ height: 300, borderRadius: 2, overflow: 'hidden', border: '1px solid #ddd' }}>
                   <GoogleMap mapContainerStyle={{ width: '100%', height: '100%' }} center={mapCenter} zoom={13} options={{ streetViewControl: false, mapTypeControl: false }} onClick={(e) => { const lat = e.latLng?.lat(); const lng = e.latLng?.lng(); if (lat != null && lng != null) handleMapPick(lat, lng); }}>
@@ -1460,6 +1499,28 @@ const Deliveries: React.FC<DeliveriesProps> = ({ adminId }) => {
                 </Box>
               ) : (
                 <Box sx={{ height: 80, display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: '#f5f5f5', borderRadius: 2, mb: 2 }}><Typography color="text.secondary">Маршрут не доступен</Typography></Box>
+              )}
+              {(selectedDelivery.requiresRecipientCode || selectedDelivery.requiresDeliveryPhoto) && (
+                <Box sx={{ mb: 2 }}>
+                  <Typography fontWeight={600}>Подтверждение вручения</Typography>
+                  {selectedDelivery.requiresRecipientCode && <Typography>Код получателя: {selectedDelivery.recipientCodeVerified ? 'Подтверждён' : 'Ожидается'}</Typography>}
+                  {selectedDelivery.requiresRecipientCode && selectedDelivery.status === 'IN_PROGRESS' && (
+                    <Button size="small" disabled={resendingCode} onClick={async () => {
+                      setResendingCode(true);
+                      try {
+                        await httpsCallable(functions, 'resendDeliveryConfirmationCode')({ adminId, deliveryId: selectedDelivery.id });
+                        alert('SMS с кодом отправлена получателю');
+                      } catch (e: any) {
+                        alert(e.message || 'Не удалось отправить SMS');
+                      } finally { setResendingCode(false); }
+                    }}>{resendingCode ? 'Отправка…' : 'Повторно отправить код получателю'}</Button>
+                  )}
+                  {selectedDelivery.requiresDeliveryPhoto && <Typography>Фото вручения: {selectedDelivery.deliveryPhotoSubmitted ? 'Получено' : 'Ожидается'}</Typography>}
+                  {selectedDelivery.deliveryConfirmedAt && <Typography variant="body2" color="text.secondary">{formatDate(selectedDelivery.deliveryConfirmedAt)}</Typography>}
+                  {loadingConfirmationPhoto && <CircularProgress size={24} />}
+                  {confirmationPhotoError && <Alert severity="warning">{confirmationPhotoError}</Alert>}
+                  {confirmationPhoto && <Box component="img" src={confirmationPhoto} alt="Фото вручения заказа" sx={{ maxWidth: '100%', maxHeight: 400, mt: 1, borderRadius: 2 }} />}
+                </Box>
               )}
               {selectedDelivery.status === 'IN_PROGRESS' && (
                 <Alert severity={liveCourierLocation ? 'success' : 'info'} sx={{ mb: 2 }}>

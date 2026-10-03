@@ -6,6 +6,8 @@
     "build": "tsc",
     "test:dispatch": "npm run build && node lib/dispatch/dispatch-self-test.js",
     "test:balance": "npm run build && node lib/balance-service-self-test.js",
+    "test:confirmation": "npm run build && node lib/delivery-confirmation-self-test.js",
+    "test:confirmation:emulator": "npm run build && firebase emulators:exec --only firestore --project demo-zaki-confirmation --config ../confirmation-test.firebase.json \"node lib/delivery-confirmation-emulator-test.js\"",
     "serve": "npm run build && firebase emulators:start --only functions",
     "shell": "npm run build && firebase functions:shell",
     "start": "npm run shell",

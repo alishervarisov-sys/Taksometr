@@ -31,6 +31,7 @@ Thumbs.db
 
 # Secrets
 *.keystore
+android/keystore.properties
 serviceAccountKey.json
 auva-70253-firebase-adminsdk-fbsvc-ab3de45e52.json
 

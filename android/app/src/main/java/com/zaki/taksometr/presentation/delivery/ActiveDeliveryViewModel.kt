@@ -16,6 +16,7 @@ import com.zaki.taksometr.domain.repository.TariffRepository
 import com.zaki.taksometr.service.LocationTrackingService
 import com.zaki.taksometr.util.Constants
 import com.zaki.taksometr.util.LocationUtils
+import com.zaki.taksometr.util.PickupArrivalPolicy
 import com.zaki.taksometr.util.Resource
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -64,6 +65,7 @@ data class ActiveDeliveryState(
     // True when the courier is within PICKUP_ARRIVAL_RADIUS_METERS of the pickup
     // point (or the order has no pickup point to gate against).
     val isWithinPickupRadius: Boolean = false,
+    val pickupLocationIssue: String? = null,
     val error: String? = null
 ) {
     val canAcceptMore: Boolean
@@ -99,6 +101,7 @@ class ActiveDeliveryViewModel @Inject constructor(
     init {
         observeDeliveries()
         observeRoute()
+        observeLiveLocation()
         startTimer()
         observePendingOrders()
     }
@@ -140,7 +143,7 @@ class ActiveDeliveryViewModel @Inject constructor(
     private fun evaluatePickupGeofence(current: Delivery?, location: GeoPoint?) {
         // Only marketplace (admin) orders have a gated pickup point.
         if (current == null || current.orderKind != "MARKETPLACE") {
-            _state.value = _state.value.copy(isWithinPickupRadius = true, distanceToPickupMeters = null)
+            _state.value = _state.value.copy(isWithinPickupRadius = true, distanceToPickupMeters = null, pickupLocationIssue = null)
             return
         }
         val lat = current.pickupLat
@@ -148,20 +151,39 @@ class ActiveDeliveryViewModel @Inject constructor(
         // No pickup coordinates were set by the admin — nothing to gate against,
         // so don't block the courier.
         if (lat == null || lng == null) {
-            _state.value = _state.value.copy(isWithinPickupRadius = true, distanceToPickupMeters = null)
+            _state.value = _state.value.copy(isWithinPickupRadius = true, distanceToPickupMeters = null, pickupLocationIssue = null)
             return
         }
-        if (location == null) {
-            _state.value = _state.value.copy(isWithinPickupRadius = false, distanceToPickupMeters = null)
+        val locationIssue = when {
+            location == null || !PickupArrivalPolicy.isFresh(location) ->
+                "Ожидаем свежие координаты GPS. Проверьте геолокацию и разрешение для приложения."
+            !PickupArrivalPolicy.hasUsableAccuracy(location) ->
+                "Низкая точность GPS — ожидаем уточнения координат для проверки прибытия."
+            else -> null
+        }
+        if (locationIssue != null || location == null) {
+            _state.value = _state.value.copy(isWithinPickupRadius = false, distanceToPickupMeters = null,
+                pickupLocationIssue = locationIssue)
             return
         }
 
         val distance = LocationUtils.haversineDistance(location, GeoPoint(lat, lng))
-        val within = distance <= Constants.PICKUP_ARRIVAL_RADIUS_METERS
+        val within = PickupArrivalPolicy.isWithinRadius(location, GeoPoint(lat, lng))
         _state.value = _state.value.copy(
             distanceToPickupMeters = distance,
-            isWithinPickupRadius = within
+            isWithinPickupRadius = within,
+            pickupLocationIssue = if (!within && distance <= Constants.PICKUP_ARRIVAL_RADIUS_METERS)
+                "Вы рядом с точкой забора. Ожидаем уточнения GPS для подтверждения прибытия." else null
         )
+    }
+
+    private fun observeLiveLocation() {
+        viewModelScope.launch {
+            LocationTrackingService.currentLocation.collect { location ->
+                _state.value = _state.value.copy(currentLocation = location)
+                evaluatePickupGeofence(_state.value.delivery, location)
+            }
+        }
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -185,15 +207,11 @@ class ActiveDeliveryViewModel @Inject constructor(
                 val distance = LocationUtils.calculateTotalDistance(distancePoints)
                 val cost = tariffRepository.calculateCost(distance, current?.deliveryType ?: "default")
 
-                val newLocation = points.lastOrNull()
                 _state.value = _state.value.copy(
                     routePoints = points,
-                    currentLocation = newLocation,
                     distanceMeters = distance,
                     currentCost = cost
                 )
-                // Keep the proximity hint current with each recorded GPS point.
-                evaluatePickupGeofence(_state.value.delivery, newLocation)
             }
         }
     }
@@ -201,6 +219,8 @@ class ActiveDeliveryViewModel @Inject constructor(
     private fun startTimer() {
         viewModelScope.launch {
             while (true) {
+                // Expire a fix even if the GPS stream has stopped emitting.
+                evaluatePickupGeofence(_state.value.delivery, _state.value.currentLocation)
                 val delivery = _state.value.delivery
                 if (delivery != null) {
                     val elapsed = System.currentTimeMillis() - delivery.startTime
@@ -338,7 +358,8 @@ class ActiveDeliveryViewModel @Inject constructor(
         }
     }
 
-    fun completeDelivery(onComplete: (String) -> Unit) {
+    fun completeDelivery(recipientCode: String = "", confirmationPhotoBase64: String = "", onComplete: (String) -> Unit) {
+        if (_state.value.isCompleting) return
         val currentDeliveryId = activeDeliveryId
         if (currentDeliveryId.isEmpty()) {
             _state.value = _state.value.copy(error = "Ошибка: ID доставки не найден. Перезапустите приложение.")
@@ -360,7 +381,7 @@ class ActiveDeliveryViewModel @Inject constructor(
 
         viewModelScope.launch {
             _state.value = _state.value.copy(isCompleting = true, error = null)
-            when (val result = deliveryRepository.completeDelivery(currentDeliveryId, waitingMinutes)) {
+            when (val result = deliveryRepository.completeDelivery(currentDeliveryId, waitingMinutes, recipientCode, confirmationPhotoBase64)) {
                 is Resource.Success -> {
                     _state.value = _state.value.copy(isCompleting = false)
                     // If another (paused) order was promoted to current, re-anchor tracking.
@@ -368,6 +389,8 @@ class ActiveDeliveryViewModel @Inject constructor(
                     if (remainingId.isNotEmpty()) {
                         currentIdFlow.value = remainingId
                         LocationTrackingService.switchService(context)
+                    } else {
+                        LocationTrackingService.stopService(context)
                     }
                     onComplete(currentDeliveryId)
                 }
