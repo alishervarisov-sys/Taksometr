@@ -147,9 +147,19 @@ Active routes/pages:
 
 - `/` → `Dashboard.tsx`
 - `/couriers` → `Couriers.tsx`
+  Clicking a courier row opens `components/CourierDetailsDialog.tsx`: live profile,
+  photos/documents, lifetime delivery totals by status and recent orders.
+  Published to `https://zakitaksometr.web.app` on 2026-10-07 (Hosting only).
 - `/winner` → `Winner.tsx`
 - `/tariffs` → `Tariffs.tsx`
 - `/deliveries` → `Deliveries.tsx`
+  Order creation lives in `components/CreateOrderDialog.tsx`: draft input state
+  is isolated from the deliveries table, and its memoized map updates only when
+  map inputs change. Shared saved address corrections are in
+  `utils/orderAddressPoints.ts`; phone/address suggestions use `OrderAutocomplete.tsx`.
+  Published to `https://zakitaksometr.web.app` on 2026-10-09 (Hosting only).
+  The published HTML and new bundle returned HTTP 200; the Windows installer
+  download remains available. Browser timing verification is still outstanding.
 - `/smart-dispatch` → `SmartDispatch.tsx` (live offer/response audit and configuration)
 - `/clients` → `Clients.tsx`
 - `/map` → `MapView.tsx`

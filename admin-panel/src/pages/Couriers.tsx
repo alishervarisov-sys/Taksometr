@@ -10,6 +10,7 @@ import { collection, getDocs, doc, updateDoc, deleteDoc, query, where, orderBy }
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions, storage } from '../firebase';
+import CourierDetailsDialog from '../components/CourierDetailsDialog';
 
 interface CouriersProps {
   adminId: string;
@@ -134,6 +135,7 @@ const TAJIKISTAN_CITIES = [
 
 const Couriers: React.FC<CouriersProps> = ({ adminId }) => {
   const [couriers, setCouriers] = useState<Courier[]>([]);
+  const [detailsCourier, setDetailsCourier] = useState<Courier | null>(null);
   const [openDialog, setOpenDialog] = useState(false);
   const [newCourier, setNewCourier] = useState({
     name: '', surname: '', birthYear: '', city: '', phone: '', login: '', password: ''
@@ -484,8 +486,16 @@ const Couriers: React.FC<CouriersProps> = ({ adminId }) => {
             </TableHead>
             <TableBody>
               {couriers.map((courier) => (
-                <TableRow key={courier.id}>
-                  <TableCell>{courier.name} {courier.surname}</TableCell>
+                <TableRow key={courier.id} hover onClick={() => setDetailsCourier(courier)} sx={{ cursor: 'pointer' }}>
+                  <TableCell>
+                    <Button variant="text" onClick={(event) => {
+                      event.stopPropagation();
+                      setDetailsCourier(courier);
+                    }} aria-label={`Открыть карточку курьера ${courier.name} ${courier.surname || ''}`}
+                      sx={{ p: 0, minWidth: 0, textAlign: 'left', justifyContent: 'flex-start', color: 'text.primary' }}>
+                      {courier.name} {courier.surname}
+                    </Button>
+                  </TableCell>
                   <TableCell>{courier.login}</TableCell>
                   <TableCell>{courier.phone}</TableCell>
                   <TableCell>
@@ -504,7 +514,7 @@ const Couriers: React.FC<CouriersProps> = ({ adminId }) => {
                       <Chip label="Оффлайн" size="small" />
                     )}
                   </TableCell>
-                  <TableCell>
+                  <TableCell onClick={(event) => event.stopPropagation()}>
                     <IconButton onClick={() => handleOpenEdit(courier)} color="primary" title="Редактировать">
                       <Edit />
                     </IconButton>
@@ -527,6 +537,12 @@ const Couriers: React.FC<CouriersProps> = ({ adminId }) => {
           </Table>
         </TableContainer>
       </Card>
+
+      {detailsCourier && <CourierDetailsDialog key={detailsCourier.id} courier={detailsCourier}
+        onClose={() => setDetailsCourier(null)} onHistory={(courier) => {
+          setDetailsCourier(null);
+          handleShowHistory(courier);
+        }} />}
 
       {/* Create courier dialog */}
       <Dialog open={openDialog} onClose={() => setOpenDialog(false)} maxWidth="sm" fullWidth>
