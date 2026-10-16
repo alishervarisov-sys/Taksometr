@@ -15,14 +15,26 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: macos/package-lock.json
+          cache-dependency-path: |
+            macos/package-lock.json
+            admin-panel/package-lock.json
+      - run: npm ci
+        working-directory: admin-panel
+      - run: npm run build
+        working-directory: admin-panel
       - run: npm ci
       - run: npm run check
       - run: npm run dist:mac
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      - name: Smoke test bundled app
+        run: './release/mac-universal/"ZaKi Admin.app"/Contents/MacOS/"ZaKi Admin" --smoke-test --disable-gpu'
+        timeout-minutes: 2
+      - run: shasum -a256 release/*.dmg > release/SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
           name: ZaKi-Admin-macOS-universal
-          path: macos/release/*.dmg
+          path: |
+            macos/release/*.dmg
+            macos/release/SHA256SUMS
           if-no-files-found: error
